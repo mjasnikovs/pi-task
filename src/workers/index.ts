@@ -5,6 +5,7 @@ import {registerPiWorkerFetch} from './pi-worker-fetch.js'
 import {registerPiWorkerDocs} from './pi-worker-docs.js'
 import {registerBraveKeyWarning} from './brave-warning.js'
 import {registerReasoningWarning} from './reasoning-warning.js'
+import {registerModelWarning} from './model-warning.js'
 
 export function registerWorkers(pi: ExtensionAPI): void {
     registerPiWorker(pi)
@@ -13,4 +14,5 @@ export function registerWorkers(pi: ExtensionAPI): void {
     registerPiWorkerDocs(pi)
     registerBraveKeyWarning(pi)
     registerReasoningWarning(pi)
+    registerModelWarning(pi)
 }

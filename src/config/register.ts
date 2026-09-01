@@ -1,6 +1,14 @@
 import type {ExtensionAPI, ExtensionCommandContext} from '@earendil-works/pi-coding-agent'
 import {getKeybindings, SettingsList, visibleWidth, wrapTextWithAnsi} from '@earendil-works/pi-tui'
-import type {Component, SettingsListTheme} from '@earendil-works/pi-tui'
+import type {Component, SelectItem, SettingItem, SettingsListTheme} from '@earendil-works/pi-tui'
+import {
+    clampToModel,
+    supportedThinkingLevels,
+    type LadderLevel,
+    type ReasoningModelFacts
+} from '../shared/reasoning-capability.js'
+import {isModelSpec, MODEL_INHERIT, splitSpec} from './group-models.js'
+import {OptionPicker} from './option-picker.js'
 import {registerBridgeCommand} from '../remote/bridge.js'
 import {readPkgVersion} from '../shared/pkg-version.js'
 import {
@@ -20,15 +28,16 @@ import {
 import {listInstalledExtensions, type InstalledExtension} from './extension-list.js'
 import {listGuardableTools, type GuardableTool} from './tool-list.js'
 import {
-    REASONING_GROUPS,
+    CHILD_GROUPS,
     REASONING_MODES,
     sanitizeReasoningMode,
     REASONING_GROUP_HELP,
+    MODEL_GROUP_HELP,
     REASONING_SETTINGS,
     effectiveReasoning,
     resolveReasoning,
     type GroupSetting,
-    type ReasoningGroup
+    type ChildGroup
 } from './reasoning.js'
 
 type Theme = ExtensionCommandContext['ui']['theme']
@@ -131,6 +140,17 @@ export interface ConfigItem {
     description: string
     /** Offered values. Omitted for a boolean, which is always on/off. */
     values?: string[]
+    /**
+     * Rows whose choice is a LIST, not a cycle. Present ⇒ Enter opens a picker
+     * instead of stepping `values`.
+     *
+     * A FUNCTION of the draft config, evaluated at Enter-time, because what a row
+     * may offer can depend on another row the user changed while the panel was
+     * open: a group's thinking options narrow to what its chosen model declares.
+     * `values` stays the STATIC complete vocabulary, because that is what the
+     * round-trip property in config-items.test.ts quantifies over.
+     */
+    submenu?: (cfg: PiTaskConfig) => SelectItem[]
     /** What the panel shows for the current value. */
     format: (cfg: PiTaskConfig) => string
     /** Write the chosen label back. A value it does not recognise is ignored. */
@@ -155,6 +175,7 @@ export type Section =
     | 'session'
     | 'checks'
     | 'research'
+    | 'models'
     | 'reasoning'
     | 'timeouts'
     | 'unattended'
@@ -166,6 +187,11 @@ export const SECTIONS: ReadonlyArray<{key: Section; title: string}> = [
     {key: 'session', title: 'session'},
     {key: 'checks', title: 'after each task'},
     {key: 'research', title: 'research'},
+    // Immediately before `reasoning`, and a BLOCK of its own rather than a
+    // second column on the think: rows. Interleaving would double one block to
+    // 22 rows and print the `├─ files` tree branches twice, meaning two
+    // different things a line apart.
+    {key: 'models', title: 'models'},
     {key: 'reasoning', title: 'reasoning'},
     {key: 'unattended', title: 'unattended'},
     {key: 'logging', title: 'logging'},
@@ -177,6 +203,17 @@ export const SECTIONS: ReadonlyArray<{key: Section; title: string}> = [
 
 /** Marks a header row, so onChange can ignore one and tests can find them. */
 export const SECTION_ID_PREFIX = 'section:'
+
+/**
+ * Is this row scenery rather than a setting?
+ *
+ * Reads the ID, not `values`. Those two agreed only while every real row cycled
+ * a list: a picker row has a `submenu` and may carry `values` purely for the
+ * round-trip contract, so "no values" stopped meaning "not a row". Both
+ * `sectionHeader` and `sectionGap` already stamp the prefix, so this is exact
+ * rather than a heuristic, and all three consumers ask the same question.
+ */
+export const isSectionRow = (item: {id: string}): boolean => item.id.startsWith(SECTION_ID_PREFIX)
 
 /**
  * An inert titled row. No `values` ⇒ SettingsList's Enter handler no-ops on it,
@@ -505,29 +542,138 @@ const REASON_ID_PREFIX = 'reason:'
  * So a child is drawn as a tree branch under its parent and loses the repeated
  * `think: research:` prefix, the same text at the head of four consecutive
  * lines. `└─` on the last child, `├─` on the rest, decided from the group's
- * position in {@link REASONING_GROUPS} rather than a hand-kept list — adding a
+ * position in {@link CHILD_GROUPS} rather than a hand-kept list — adding a
  * fifth worker moves the corner on its own.
  *
  * Leading spaces survive: SettingsList pads the label right, never trims it.
  */
-export function reasoningRowLabel(group: ReasoningGroup): string {
+export function reasoningRowLabel(group: ChildGroup): string {
     const colon = group.indexOf(':')
     if (colon < 0) return `think: ${group}`
     const parent = group.slice(0, colon)
-    const nextIsSibling = REASONING_GROUPS[REASONING_GROUPS.indexOf(group) + 1]?.startsWith(
-        `${parent}:`
-    )
+    const nextIsSibling = CHILD_GROUPS[CHILD_GROUPS.indexOf(group) + 1]?.startsWith(`${parent}:`)
     return `   ${nextIsSibling ? '├─' : '└─'} ${group.slice(colon + 1)}`
 }
 
-export function reasoningItems(): ConfigItem[] {
-    return REASONING_GROUPS.map(group => ({
+const MODEL_ID_PREFIX = 'model:'
+
+/**
+ * What this machine can offer a model row, and what each offer can DO.
+ *
+ * `facts` is what lets the thinking rows narrow: a group pinned to a
+ * `reasoning: false` model may only be offered `off`. It answers `undefined` for
+ * a spec it cannot resolve — a vanished model, or `inherit` before a session
+ * exists — and every consumer reads that as "offer everything", which is exactly
+ * today's behaviour.
+ */
+export interface ModelCatalog {
+    /** Offerable `provider/id` specs, without `inherit`. */
+    specs: readonly string[]
+    /** Human note per spec, e.g. an extension-provided provider's warning. */
+    note?: (spec: string) => string | undefined
+    facts: (spec: string) => ReasoningModelFacts | undefined
+}
+
+/** No registry reachable. Every row still renders; nothing narrows. */
+export const EMPTY_CATALOG: ModelCatalog = {specs: [], facts: () => undefined}
+
+export function modelItems(catalog: ModelCatalog): ConfigItem[] {
+    return CHILD_GROUPS.map(group => ({
+        id: MODEL_ID_PREFIX + group,
+        section: 'models' as Section,
+        label: reasoningRowLabel(group).replace('think: ', 'model: '),
+        headlessLabel: `model: ${group}`,
+        description: MODEL_GROUP_HELP[group],
+        // The COMPLETE accepted vocabulary, which is what the round-trip
+        // property quantifies over. With nothing discovered it is `['inherit']`:
+        // length 1, still selectable, still not a header. No degenerate case.
+        values: [MODEL_INHERIT, ...catalog.specs],
+        submenu: () => [
+            {value: MODEL_INHERIT, label: MODEL_INHERIT, description: "pi's own default"},
+            ...catalog.specs.map(spec => ({
+                value: spec,
+                label: spec,
+                ...(catalog.note?.(spec) === undefined ? {} : {description: catalog.note(spec)!})
+            }))
+        ],
+        // VERBATIM, even when absent from `values` — the vanished-model case,
+        // where the row must still say what the config holds so the hint that
+        // names it has something to point at.
+        format: cfg => cfg.groupModels[group],
+        apply: (cfg, chosen) => applyGroupModel(cfg, group, chosen, catalog)
+    }))
+}
+
+/**
+ * Write a group's model, and RE-CLAMP its thinking cell in the same write.
+ *
+ * Narrowing the picker does nothing about a level already stored from before the
+ * model was chosen: on its own it would freeze a lie into a cell it has just
+ * made unconfigurable. `syncRows` re-renders every row, so the user sees the
+ * level move.
+ *
+ * The clamp reads `resolveReasoning`, NOT `cfg.reasoningLevels[group]`. In mode
+ * `on` or `off` the stored table is ignored entirely, so a user in `on` who
+ * picks a non-reasoning model has a stored cell that says nothing and an
+ * effective `medium` the model will erase — and comparing the stored cell would
+ * see no clamp and stay silent about a real lie.
+ *
+ * Guarded on the clamp actually MOVING something, because `applyReasoningLevel`
+ * flips the whole table to `custom`, and picking a fully-capable model must not
+ * do that as a side effect.
+ */
+export function applyGroupModel(
+    cfg: PiTaskConfig,
+    group: ChildGroup,
+    chosen: string,
+    catalog: ModelCatalog
+): void {
+    // MEMBERSHIP, not just shape. A stored spec naming a vanished model must
+    // survive — that is the sanitizer's job, and `format` still renders it — but
+    // it may only ever ARRIVE here from the picker, which offers exactly these.
+    // Without this, the panel could write a spec this machine cannot resolve.
+    if (!isModelSpec(chosen)) return
+    if (chosen !== MODEL_INHERIT && !catalog.specs.includes(chosen)) return
+    cfg.groupModels = {...cfg.groupModels, [group]: chosen}
+    const facts = catalog.facts(chosen)
+    if (facts === undefined) return
+    const wanted = resolveReasoning(group, cfg)
+    if (wanted === 'inherit') return
+    const clamped = clampToModel(facts, wanted)
+    if (clamped !== wanted) applyReasoningLevel(cfg, group, clamped)
+}
+
+/**
+ * The levels a row may offer, given the model that row's group will run on.
+ *
+ * The INTERSECTION with `REASONING_SETTINGS`, not `supportedThinkingLevels`
+ * directly: that returns the whole ladder including `xhigh` and `max`, which
+ * this menu excludes on purpose (see reasoning.ts) because pi's own UI may not
+ * offer them. A model declaring `xhigh` must not smuggle it in here.
+ */
+export function offeredLevels(facts: ReasoningModelFacts | undefined): GroupSetting[] {
+    if (facts === undefined) return [...REASONING_SETTINGS]
+    const supported = supportedThinkingLevels(facts)
+    return REASONING_SETTINGS.filter(s => s === 'inherit' || supported.includes(s as LadderLevel))
+}
+
+export function reasoningItems(catalog: ModelCatalog = EMPTY_CATALOG): ConfigItem[] {
+    return CHILD_GROUPS.map(group => ({
         id: REASON_ID_PREFIX + group,
         section: 'reasoning' as Section,
         label: reasoningRowLabel(group),
         headlessLabel: `think: ${group}`,
         description: REASONING_GROUP_HELP[group],
         values: [...REASONING_SETTINGS],
+        // A submenu, not a cycle, because what this row may offer depends on the
+        // model row above it — which the user can change while the panel is
+        // open. `values` is static and computed when the rows are built, and
+        // `syncRows` can only re-ask `format`; a factory runs at Enter-time.
+        submenu: (cfg: PiTaskConfig) =>
+            offeredLevels(catalog.facts(cfg.groupModels[group])).map(level => ({
+                value: level,
+                label: level
+            })),
         // The EFFECTIVE level, not cfg.reasoningLevels[group]: in default/on/off
         // the stored table is not what runs, and a row that shows a value the
         // run does not use is worse than no row. As a FUNCTION rather than a
@@ -547,11 +693,7 @@ export function reasoningItems(): ConfigItem[] {
  * it, nudging `research` while in `off` would silently return every other group
  * to whatever the stored table happened to hold.
  */
-export function applyReasoningLevel(
-    cfg: PiTaskConfig,
-    group: ReasoningGroup,
-    chosen: string
-): void {
+export function applyReasoningLevel(cfg: PiTaskConfig, group: ChildGroup, chosen: string): void {
     if (!REASONING_SETTINGS.includes(chosen as GroupSetting)) return
     if (cfg.reasoningMode !== 'custom') {
         // Freeze the table exactly as it runs today, then switch to custom, so
@@ -620,11 +762,26 @@ export type PanelItem = {
     description: string
     currentValue: string
     /**
-     * Omitted ONLY by a section header. SettingsList cycles a row on Enter when
-     * this is a non-empty array, so leaving it off is what makes a header inert
-     * — the header does not need its own branch anywhere.
+     * The values a cycling row steps through. A section header carries none.
+     *
+     * It is NOT what marks a header any more — {@link isSectionRow} reads the id
+     * for that. A model row legitimately has both a `values` list and a
+     * `submenu`, so "no values" and "not a row" stopped being the same fact the
+     * moment pickers existed.
      */
     values?: string[]
+    /**
+     * Enter-time options for a picker row, already closed over the draft config
+     * by {@link renderRows}.
+     *
+     * Deliberately NOT called `submenu`: pi-tui's `SettingItem.submenu` is a
+     * COMPONENT FACTORY, and a PanelItem is handed to `SettingsList` directly by
+     * tests and by the headless path. Two different things under one name would
+     * make PanelItem stop being assignable to SettingItem, for no gain.
+     * {@link createSettingsPanel} is where a theme exists, so it is where these
+     * options become a component.
+     */
+    submenuOptions?: () => SelectItem[]
     /**
      * What the headless one-line rendering calls this row, when `label` reads
      * only in the panel. A tree branch means nothing on a line of `|`-joined
@@ -648,8 +805,10 @@ const DOWN_KEY = '\x1b[B'
  *
  * It drives the list through its own public `handleInput` — pressing the very
  * key the user pressed, N times — rather than reaching for the private
- * `selectedIndex`. The mirror it keeps cannot drift: with search off and no
- * submenus, up and down are the only two things that move that index.
+ * `selectedIndex`. With search off, up and down are the only two things that
+ * move that index — EXCEPT while a submenu is open, when `SettingsList` forwards
+ * everything to the submenu and returns without moving it at all. So a picker
+ * suspends this entirely; see `suspended`.
  */
 class SkipInertRows implements Component {
     private index = 0
@@ -657,7 +816,14 @@ class SkipInertRows implements Component {
     constructor(
         private readonly list: SettingsList,
         /** True where a row can be selected, in the list's own order. */
-        private readonly selectable: boolean[]
+        private readonly selectable: boolean[],
+        /**
+         * True while a picker is open. The list then owns every key, so this
+         * must not intercept — see the flag's own comment in
+         * {@link createSettingsPanel}. Defaulted so the constructor's own
+         * opening walk, and every existing test, are unaffected.
+         */
+        private readonly suspended: () => boolean = () => false
     ) {
         // The first row is a header, so the panel would open on it. Only
         // synthesise the keypress if it is actually bound to "down" — feeding
@@ -680,7 +846,8 @@ class SkipInertRows implements Component {
     handleInput(data: string): void {
         const kb = getKeybindings()
         const step =
-            kb.matches(data, 'tui.select.down') ? 1
+            this.suspended() ? 0
+            : kb.matches(data, 'tui.select.down') ? 1
             : kb.matches(data, 'tui.select.up') ? -1
             : 0
         if (step === 0) {
@@ -721,10 +888,34 @@ export function createSettingsPanel(
     onChange: (id: string, newValue: string, list: SettingsList) => void,
     onCancel: () => void
 ): BorderedBox {
-    // A row with no `values` is a header or the blank line above one.
-    const headerLabels = new Set(items.filter(i => i.values === undefined).map(i => i.label))
+    const headerLabels = new Set(items.filter(isSectionRow).map(i => i.label))
+    /**
+     * True while a picker is open, so SkipInertRows stops intercepting arrows.
+     *
+     * `SettingsList.handleInput` delegates to an open submenu and RETURNS, so
+     * `selectedIndex` never moves while one is up. SkipInertRows keeps its own
+     * mirror of that index and replays the key once per row it skips — so
+     * without this flag, one arrow press inside a picker moves the mirror off
+     * the real cursor AND arrives in the picker two or three times when the walk
+     * crosses a section boundary.
+     */
+    let submenuOpen = false
+    const settingItems: SettingItem[] = items.map(({submenuOptions, ...row}) =>
+        submenuOptions === undefined ? row : (
+            {
+                ...row,
+                submenu: (currentValue, done) => {
+                    submenuOpen = true
+                    return new OptionPicker(submenuOptions(), currentValue, theme, v => {
+                        submenuOpen = false
+                        done(v)
+                    })
+                }
+            }
+        )
+    )
     const list: SettingsList = new SettingsList(
-        items,
+        settingItems,
         MAX_VISIBLE,
         makeTheme(theme, label => headerLabels.has(label.trimEnd())),
         (id, newValue) => onChange(id, newValue, list),
@@ -733,7 +924,12 @@ export function createSettingsPanel(
     return new BorderedBox(
         new SkipInertRows(
             list,
-            items.map(i => (i.values?.length ?? 0) > 0)
+            items.map(
+                i =>
+                    !isSectionRow(i)
+                    && ((i.values?.length ?? 0) > 0 || i.submenuOptions !== undefined)
+            ),
+            () => submenuOpen
         ),
         CONFIG_TITLE,
         s => theme.fg('borderMuted', s),
@@ -759,12 +955,21 @@ export function createSettingsPanel(
  */
 export function configRows(
     installed: InstalledExtension[],
-    tools: readonly GuardableTool[] = []
+    tools: readonly GuardableTool[] = [],
+    // A third positional with a default, exactly like `tools`, so every existing
+    // test stays deterministic and no test has to know a registry exists.
+    catalog: ModelCatalog = EMPTY_CATALOG
 ): ConfigItem[] {
     // The discovered rows carry a section like every other row — the per-tool
     // watchdog exemptions under `timeouts` (they are exemptions FROM that
     // timeout), and the per-extension toggles under their own heading.
-    return [...ITEMS, ...reasoningItems(), ...toolItems(tools), ...extensionItems(installed)]
+    return [
+        ...ITEMS,
+        ...modelItems(catalog),
+        ...reasoningItems(catalog),
+        ...toolItems(tools),
+        ...extensionItems(installed)
+    ]
 }
 
 /** Render `rows` for the current config, grouped under their section headers. */
@@ -779,6 +984,7 @@ export function renderRows(cfg: PiTaskConfig, rows: readonly ConfigItem[]): Pane
                 description: i.description,
                 currentValue: i.format(cfg),
                 values: i.values ?? ['on', 'off'],
+                ...(i.submenu === undefined ? {} : {submenuOptions: () => i.submenu!(cfg)}),
                 ...(i.headlessLabel === undefined ? {} : {headlessLabel: i.headlessLabel})
             }))
         // An empty section prints no header. `extensions` has no fixed rows at
@@ -794,9 +1000,10 @@ export function renderRows(cfg: PiTaskConfig, rows: readonly ConfigItem[]): Pane
 export function panelItems(
     cfg: PiTaskConfig,
     installed: InstalledExtension[],
-    tools: readonly GuardableTool[] = []
+    tools: readonly GuardableTool[] = [],
+    catalog: ModelCatalog = EMPTY_CATALOG
 ): PanelItem[] {
-    return renderRows(cfg, configRows(installed, tools))
+    return renderRows(cfg, configRows(installed, tools, catalog))
 }
 
 /**
@@ -815,6 +1022,58 @@ export function syncRows(cfg: PiTaskConfig, rows: readonly ConfigItem[], list: S
     for (const row of rows) list.updateValue(row.id, row.format(cfg))
 }
 
+/**
+ * The model rows' offer list, read live when the menu opens.
+ *
+ * `getAvailable()`, never `getAll()`: an unauthed model would spawn a child that
+ * exits 1 on every phase of that group, and offering it would be offering a
+ * config that cannot work.
+ *
+ * A provider registered by a host EXTENSION is offered with a note rather than
+ * hidden. Children run `--no-extensions`, which disables discovery only — pi
+ * still loads every explicit `-e` path, and `childBaseArgs` injects one per
+ * whitelisted extension. So such a model works in a child exactly when its
+ * extension is whitelisted, and we cannot tell which extension that is:
+ * `getRegisteredProviderIds()` gives ids, and the `{name, config, extensionPath}`
+ * triples live in the runner's internal state, drained at bind. Choosing it with
+ * the wrong whitelist fails LOUDLY — the child sees no such provider, so pi's
+ * resolver reports "not found" and exits 1 — which is why a note is enough.
+ */
+function liveCatalog(ctx: ExtensionCommandContext): ModelCatalog {
+    // Same contract as the tool enumeration above, for the same reason: the
+    // model runtime is not guaranteed usable at the moment a command runs, and a
+    // registry that cannot answer must cost the model rows, never the menu.
+    // Every row below still renders; `EMPTY_CATALOG` offers only `inherit` and
+    // narrows nothing, which is exactly the pre-feature panel.
+    let registry: ExtensionCommandContext['modelRegistry']
+    let available: ReturnType<ExtensionCommandContext['modelRegistry']['getAvailable']>
+    let fromExtension: Set<string>
+    try {
+        registry = ctx.modelRegistry
+        available = registry.getAvailable()
+        fromExtension = new Set(registry.getRegisteredProviderIds())
+    } catch {
+        return EMPTY_CATALOG
+    }
+    return {
+        specs: available.map(m => `${m.provider}/${m.id}`),
+        note: spec => {
+            const parts = splitSpec(spec)
+            return parts && fromExtension.has(parts.provider) ?
+                    'provider comes from an extension — whitelist it under child extensions, '
+                        + "or this group's children exit 1"
+                :   undefined
+        },
+        facts: spec => {
+            // `inherit` means the session's own model, which is what a child
+            // resolves today. Its facts are what the thinking row must narrow to.
+            if (spec === MODEL_INHERIT) return ctx.model
+            const parts = splitSpec(spec)
+            return parts ? registry.find(parts.provider, parts.id) : undefined
+        }
+    }
+}
+
 async function handleTaskConfig(
     _args: string,
     ctx: ExtensionCommandContext,
@@ -827,7 +1086,8 @@ async function handleTaskConfig(
         // Copied for the same reason as the two arrays above: the panel mutates
         // its own draft, and sharing the live object would apply half-made
         // choices to running children before the user finished choosing.
-        reasoningLevels: {...getConfig().reasoningLevels}
+        reasoningLevels: {...getConfig().reasoningLevels},
+        groupModels: {...getConfig().groupModels}
     }
 
     // Enumerated live at open so an installed extension appears and an
@@ -838,19 +1098,20 @@ async function handleTaskConfig(
     // one: getAllTools() throws until the extension runtime is initialized, so
     // it can only be read here, when the menu opens, never at registration.
     const tools = getTools()
+    const catalog = liveCatalog(ctx)
 
     if (ctx.mode !== 'tui') {
         // Built from panelItems and reading the SAME `format` the panel does,
         // so the two renderings cannot disagree about what a setting says. A
         // second walk of the same tables is the one place nobody would notice
         // them drifting, because a headless run has no panel to compare against.
-        const lines = panelItems(cfg, installed, tools)
+        const lines = panelItems(cfg, installed, tools, catalog)
             // The blank rows between sections are there to give the TUI air.
             // One line of `|`-joined text has none to give, and an empty label
             // would print as a stray `[]`.
             .filter(i => i.label !== '')
             .map(i =>
-                i.values === undefined ?
+                isSectionRow(i) ?
                     `[${i.label.trim()}]`
                 :   `${(i.headlessLabel ?? i.label).padEnd(22)} ${i.currentValue}`
             )
@@ -860,7 +1121,7 @@ async function handleTaskConfig(
 
     // Built ONCE and shared by the renderer, the dispatch and the refresh, so
     // all three necessarily agree about which rows exist.
-    const rows = configRows(installed, tools)
+    const rows = configRows(installed, tools, catalog)
 
     await ctx.ui.custom<void>(
         (_tui, theme, _kb, done) =>

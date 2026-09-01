@@ -28,7 +28,7 @@ import {normalizeQuery} from './research-cache.js'
 import {projectDocsRaw} from './docs-project.js'
 import {projectDocsBudget, projectDocsBudgetExhausted} from '../task/research-fanout-budget.js'
 import {isAbstention} from './abstention.js'
-import {groupThinkingArgs} from '../config/reasoning-args.js'
+import {groupChildArgs} from '../config/group-args.js'
 
 const RENDER_QUERY_MAX = 100
 
@@ -214,7 +214,7 @@ export function registerPiWorkerDocs(
                     cwd: ctx.cwd,
                     signal,
                     spawn,
-                    thinking: groupThinkingArgs('extraction')
+                    groupArgs: groupChildArgs('extraction')
                 })
 
             // ── Project source lookup ───────────────────────────────────────

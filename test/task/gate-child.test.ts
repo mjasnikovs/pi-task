@@ -57,6 +57,7 @@ function harness(over: Partial<GateChildDeps> = {}): {
     const order: string[] = []
     const seenInput: RunWorkerInput[] = []
     const deps: GateChildDeps = {
+        contextWindow: 0,
         ctx: {
             ui: {
                 notify: (m: string) => {
@@ -72,7 +73,7 @@ function harness(over: Partial<GateChildDeps> = {}): {
         streamInactivityMs: 120_000,
         // `[]` is the fragment `groupThinkingArgs` returns for `inherit`: no
         // `--thinking` flag, so the child keeps the session default.
-        thinking: [],
+        groupArgs: [],
         status: status(() => () => order.push('loader-stopped')),
         runWorker: input => {
             order.push('worker')

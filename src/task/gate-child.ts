@@ -94,15 +94,26 @@ export interface GateChildDeps {
     /** Hung-stream bound; the probe-based stall guard cannot supply it. */
     streamInactivityMs: number
     /**
-     * The resolved `['--thinking', level]` fragment for the `gate` reasoning
-     * group, or `[]` to inherit the session default.
+     * The resolved argv fragment for the `gate` group — its model and its
+     * thinking level — or `[]` to inherit both.
      *
      * REQUIRED, like its two neighbours above: gate-child takes resolved config
      * values and gate-deps supplies them. Optional-with-a-default would let a new
-     * gate wiring silently run at a level nobody chose, which is the failure the
+     * gate wiring silently run on a model nobody chose, which is the failure the
      * whole profile feature exists to end.
      */
-    thinking: readonly string[]
+    groupArgs: readonly string[]
+    /**
+     * The context window of the model THESE children run on, for the churn rule.
+     *
+     * Not `status.parentContextWindow`, which is a per-RUN value and a run spans
+     * several groups. The direction matters: a window smaller than the child's
+     * real one makes churn fire early and kill a healthy child, so this follows
+     * the `gate` group's model and falls back to the host's.
+     *
+     * REQUIRED, like its neighbours: gate-child takes resolved config values.
+     */
+    contextWindow: number
     /**
      * The live widget state this child feeds and its loader reads. SHARED with
      * the caller — the verify gate's own loader reads the same status while this
@@ -185,7 +196,7 @@ export function makeGateChild(
                         commandTimeoutMs: deps.commandTimeoutMs,
                         streamInactivityMs: deps.streamInactivityMs
                     },
-                    thinking: deps.thinking,
+                    groupArgs: deps.groupArgs,
                     // A discarded attempt is otherwise invisible: the returned
                     // exitCode/text describe the FINAL attempt, so a child that
                     // burned two attempts reads exactly like one that ran clean.
@@ -219,7 +230,7 @@ export function makeGateChild(
                     // stream — what `--mode json` emits — carries token counts but
                     // no context window; `contextWindow` appears nowhere in
                     // agent-session.d.ts.
-                    contextWindow: deps.status.parentContextWindow
+                    contextWindow: deps.contextWindow
                 })
             } finally {
                 // Restore whatever the child moved BEFORE any verdict or failure is

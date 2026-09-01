@@ -30,14 +30,15 @@ import {formatChildFailure} from './shared.js'
 /**
  * The argv every focused extraction child runs with: the shared child base — any whitelisted
  * extensions, then `--print --no-skills --no-extensions --no-prompt-templates
- * --no-context-files --no-session` — then the caller's thinking fragment, then `--no-tools`.
+ * --no-context-files --no-session` — then the caller's group fragment (its model and its
+ * thinking level), then `--no-tools`.
  *
  * `--no-tools` is the contract, not a default: the child is given all the content it may use
  * inside its prompt, so a tool call could only reach for something unsourced.
  */
-export const focusedChildArgs = (thinking: readonly string[] = []): string[] => [
+export const focusedChildArgs = (groupArgs: readonly string[] = []): string[] => [
     ...childBaseArgs(),
-    ...thinking,
+    ...groupArgs,
     '--no-tools'
 ]
 
@@ -74,7 +75,7 @@ export interface FocusedRequest {
      * `focusedChildArgs` read ambient config, and a function that reads config
      * internally cannot be tested without the developer's own machine state.
      */
-    thinking?: readonly string[]
+    groupArgs?: readonly string[]
 }
 
 /** What every outcome carries, success or failure — the raw child evidence. */
@@ -120,7 +121,7 @@ export type FocusedResult = FocusedFailure | FocusedAnswer
  */
 export async function runFocusedExtraction(req: FocusedRequest): Promise<FocusedResult> {
     const spawn = req.spawn ?? (defaultSpawn as unknown as SpawnFn)
-    const invocation = getPiInvocation(focusedChildArgs(req.thinking), req.prompt)
+    const invocation = getPiInvocation(focusedChildArgs(req.groupArgs), req.prompt)
     const child = await runChild(spawn, invocation, req.cwd, req.signal)
 
     const evidence: FocusedChildEvidence = {

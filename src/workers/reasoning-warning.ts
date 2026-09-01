@@ -20,10 +20,15 @@
  * silences it: an all-`inherit` table yields no mismatches for any model.
  */
 
-import type {ExtensionAPI} from '@earendil-works/pi-coding-agent'
+import type {ExtensionAPI, ExtensionContext} from '@earendil-works/pi-coding-agent'
 import {getConfig} from '../config/config.js'
-import {effectiveReasoning, type GroupSetting, type ReasoningGroup} from '../config/reasoning.js'
-import {reasoningMismatches, type ReasoningMismatch} from '../shared/reasoning-capability.js'
+import {effectiveReasoning, type GroupSetting, type ChildGroup} from '../config/reasoning.js'
+import {
+    reasoningMismatches,
+    type GroupModelFacts,
+    type ReasoningMismatch
+} from '../shared/reasoning-capability.js'
+import {MODEL_INHERIT, splitSpec} from '../config/group-models.js'
 import {probeChatTemplateCaps, type ChatTemplateCaps} from '../shared/model-endpoint.js'
 import {registerSessionHint} from './session-hint.js'
 
@@ -32,24 +37,24 @@ const WIDGET_KEY = 'pi-task-reasoning-warning'
 /**
  * The warning line for a set of mismatches.
  *
- * Names the MODEL it checked, because children carry no `-m` and resolve pi's
- * default model, which need not be the host session's — a warning that does not
- * say what it looked at cannot be acted on. Names at most two groups and appends
- * `(+N more)` only when there are more than two, since a line long enough to list
- * every group is a line nobody reads. Null when nothing mismatched.
+ * Each item names its OWN model — `phase@acme/small medium→off` — because groups
+ * can now run on different ones. A single leading `model "X" will not run …`
+ * would be a lie about what was checked the moment two groups differ, and a
+ * warning that misdescribes its own subject cannot be acted on.
+ *
+ * Names at most two groups and appends `(+N more)` only when there are more than
+ * two, since a line long enough to list every group is a line nobody reads. Null
+ * when nothing mismatched.
  */
-export function formatReasoningWarning(
-    modelName: string,
-    mismatches: readonly ReasoningMismatch[]
-): string | null {
+export function formatReasoningWarning(mismatches: readonly ReasoningMismatch[]): string | null {
     if (mismatches.length === 0) return null
     const shown = mismatches
         .slice(0, 2)
-        .map(m => `${m.group} ${m.wanted}→${m.actual}`)
+        .map(m => `${m.group}@${m.modelName} ${m.wanted}→${m.actual}`)
         .join(', ')
     const rest = mismatches.length > 2 ? ` (+${mismatches.length - 2} more)` : ''
     return (
-        `⚠ pi-task: model "${modelName}" will not run the reasoning levels /task-config asks `
+        '⚠ pi-task: some steps will not run the reasoning levels /task-config asks '
         + `for — ${shown}${rest}. pi clamps to what the model declares. Fix "reasoning" / `
         + '"thinkingLevelMap" for it in ~/.pi/agent/models.json, or set those steps back to '
         + '"inherit" in /task-config'
@@ -90,7 +95,7 @@ export function registerReasoningWarning(
      * `session_start` so a /task-config change since the last session counts.
      * Injected by tests, which must not depend on the developer's saved config.
      */
-    readSettings: () => Readonly<Record<ReasoningGroup, GroupSetting>> = () =>
+    readSettings: () => Readonly<Record<ChildGroup, GroupSetting>> = () =>
         effectiveReasoning(getConfig()),
     /**
      * The server-side chat-template probe. Injected so the REFINE path — the
@@ -98,29 +103,86 @@ export function registerReasoningWarning(
      * the real probe it is reachable only from a model entry carrying a
      * `baseUrl`, which no test model has.
      */
-    probe: (baseUrl: string) => Promise<ChatTemplateCaps | null> = probeChatTemplateCaps
+    probe: (baseUrl: string) => Promise<ChatTemplateCaps | null> = probeChatTemplateCaps,
+    /**
+     * Which model each group runs on. Injected for the same reason `readSettings`
+     * is: a test must not depend on the developer's saved config.
+     */
+    readSpecs: () => Readonly<Record<ChildGroup, string>> = () => getConfig().groupModels
 ): void {
     registerSessionHint(pi, WIDGET_KEY, ctx => {
-        const model = ctx.model
-        const mismatches = reasoningMismatches(model, readSettings())
-        if (mismatches.length === 0) return null
-        const base = formatReasoningWarning(model?.name ?? model?.id ?? 'unknown', mismatches)
+        const facts = (g: ChildGroup): GroupModelFacts | undefined =>
+            groupModelFacts(ctx, readSpecs()[g])
+        const mismatches = reasoningMismatches(facts, readSettings())
+        const base = formatReasoningWarning(mismatches)
         if (base === null) return null
 
         // Fire-and-forget: the server probe only ever REFINES the cause line, so it
         // must not delay the warning or be able to prevent it. `probeChatTemplateCaps`
         // carries its own short timeout and returns null on any failure, so a
         // backend that does not answer `/props` costs nothing.
-        const baseUrl = model?.baseUrl
-        if (model === undefined || baseUrl === undefined || baseUrl === '') return {text: base}
-        const declares = model.reasoning
+        //
+        // One probe per DISTINCT baseUrl among the mismatching groups, not one
+        // per group: eleven groups usually collapse to one or two servers, and
+        // four research workers on one server would otherwise print the same
+        // sentence four times. `allSettled`, so one dead endpoint cannot blank
+        // the line for the others.
+        const probes = distinctBackends(mismatches, facts)
+        if (probes.length === 0) return {text: base}
         return {
             text: base,
-            refine: probe(baseUrl).then(caps => {
-                if (caps === null) return null
-                const extra = formatCapabilityConflict(caps.supportsReasoningEffort, declares)
-                return extra === null ? null : base + extra
+            refine: Promise.allSettled(
+                probes.map(async b => {
+                    const caps = await probe(b.baseUrl)
+                    return caps === null ? null : (
+                            formatCapabilityConflict(caps.supportsReasoningEffort, b.declares)
+                        )
+                })
+            ).then(results => {
+                const causes = new Set(
+                    results.flatMap(r =>
+                        r.status === 'fulfilled' && r.value !== null ? [r.value] : []
+                    )
+                )
+                return causes.size === 0 ? null : base + [...causes].join('')
             })
         }
     })
+}
+
+/** What one group runs on, as {@link reasoningMismatches} wants it. */
+function groupModelFacts(ctx: ExtensionContext, spec: string): GroupModelFacts | undefined {
+    // `inherit` is the session's model. That is decision 3 of the model table —
+    // children are NOT switched to follow the host — and the honest value is
+    // settings.json's default, which need not be the session's. Naming the
+    // session's model is still the better of the two: it is the one the user can
+    // see, and on every machine with one provider the two agree.
+    const model =
+        spec === MODEL_INHERIT ?
+            ctx.model
+        :   (() => {
+                const parts = splitSpec(spec)
+                return parts ? ctx.modelRegistry.find(parts.provider, parts.id) : undefined
+            })()
+    if (!model) return undefined
+    return {
+        name: model.name || model.id,
+        reasoning: model.reasoning,
+        ...(model.thinkingLevelMap === undefined ? {} : {thinkingLevelMap: model.thinkingLevelMap}),
+        ...(model.baseUrl ? {baseUrl: model.baseUrl} : {})
+    }
+}
+
+/** The distinct servers behind a set of mismatches, deduped by URL. */
+function distinctBackends(
+    mismatches: readonly ReasoningMismatch[],
+    facts: (group: ChildGroup) => GroupModelFacts | undefined
+): Array<{baseUrl: string; declares: boolean}> {
+    const byUrl = new Map<string, {baseUrl: string; declares: boolean}>()
+    for (const m of mismatches) {
+        const f = facts(m.group)
+        if (!f?.baseUrl) continue
+        if (!byUrl.has(f.baseUrl)) byUrl.set(f.baseUrl, {baseUrl: f.baseUrl, declares: f.reasoning})
+    }
+    return [...byUrl.values()]
 }

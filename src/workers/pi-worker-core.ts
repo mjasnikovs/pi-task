@@ -23,7 +23,8 @@ import {
     leakedToolCallHint,
     MAX_LEAK_RETRIES
 } from '../shared/leaked-tool-call.js'
-import {discoverModelEndpoints, probeModelEndpoints} from '../shared/model-endpoint.js'
+import {childModelEndpoints, probeModelEndpoints} from '../shared/model-endpoint.js'
+import {modelSpecFromArgs} from '../config/group-models.js'
 import {streamStallHint} from '../shared/stream-watchdog.js'
 import {classifyWorkerFailure} from './worker-failure.js'
 import {CARRY_FORWARD_IDS, RESTART_ORDER, type WorkerKillId} from './worker-kill.js'
@@ -267,15 +268,15 @@ export interface RunWorkerInput {
      */
     onCarryForward?: (info: {attempt: number; chars: number; promptCharsBefore: number}) => void
     /**
-     * An already-resolved `['--thinking', level]` fragment, or `[]`/omitted to
-     * inherit the session default exactly as before.
+     * An already-resolved group fragment — `--model` then `--thinking` — or
+     * `[]`/omitted to inherit both defaults exactly as before.
      *
-     * Resolved by the CALLER because runWorker serves three different reasoning
-     * groups — the research workers, the post-implementation gates, and the
-     * ad-hoc `pi-worker` tool — and has nothing in its input that tells them
-     * apart. Guessing here would give a verify gate the research workers' level.
+     * Resolved by the CALLER because runWorker serves three different groups —
+     * the research workers, the post-implementation gates, and the ad-hoc
+     * `pi-worker` tool — and has nothing in its input that tells them apart.
+     * Guessing here would give a verify gate the research workers' model.
      */
-    thinking?: readonly string[]
+    groupArgs?: readonly string[]
     /**
      * Called once per DISCARDED attempt, at the moment the worker decides to
      * re-spawn — the only window in which a restart is observable at all.
@@ -740,7 +741,7 @@ export async function runWorker(input: RunWorkerInput): Promise<RunWorkerResult>
     // moments before close and leave workMs at nearly zero.
     const baseArgs = [
         ...childBaseArgs(input.extensions ?? []),
-        ...(input.thinking ?? []),
+        ...(input.groupArgs ?? []),
         '--mode',
         'json',
         '--tools',
@@ -862,7 +863,12 @@ export async function runWorker(input: RunWorkerInput): Promise<RunWorkerResult>
                                 // comparable data — see StalledGuard.probe.
                                 probe:
                                     guards.stalled.probe
-                                    ?? (() => probeModelEndpoints(discoverModelEndpoints()))
+                                    ?? (() =>
+                                        probeModelEndpoints(
+                                            childModelEndpoints(
+                                                modelSpecFromArgs(input.groupArgs ?? [])
+                                            )
+                                        ))
                             }
                         }),
                     ...(guards['stream-stall'] ? {streamInactivityMs: guards['stream-stall']} : {}),

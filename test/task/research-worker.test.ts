@@ -65,7 +65,7 @@ function harness(attempts: RunWorkerResult[], opts: {cached?: string} = {}): Har
             cwd: '/nowhere',
             taskId: 'TASK_0001',
             signal: new AbortController().signal,
-            thinkingFor: () => [],
+            groupArgsFor: () => [],
             record: (_label, p) => p,
             onDone: () => {
                 h.done += 1

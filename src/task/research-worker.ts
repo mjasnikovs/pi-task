@@ -28,7 +28,7 @@ import type {DebugLine} from './debug-log.js'
 /**
  * One research worker's row. `section` is the heading its output is assembled
  * and cached under; `label` is its child NAME — what the loader and the debug
- * trail print, and the key into `REASONING_GROUP_BY_CHILD` (config/reasoning.ts).
+ * trail print, and the key into `GROUP_BY_CHILD` (config/groups.ts).
  */
 export interface ResearchWorkerSpec {
     section: string
@@ -74,7 +74,7 @@ export interface ResearchWorkerRun {
     signal: AbortSignal
     spawn?: SpawnFn
     /** The `--thinking` fragment for a named child. */
-    thinkingFor: (label: string) => string[]
+    groupArgsFor: (label: string) => string[]
     logDebug?: (msg: string, kind?: DebugLine) => void
     onChildOutput?: (line: string) => void
     /** Record one finished worker's timing splits. */
@@ -355,7 +355,7 @@ export async function runResearchWorker(
                 // config/reasoning.ts is where each one's level lives, so this
                 // line decides what THIS worker runs at for a default-mode
                 // user.
-                thinking: run.thinkingFor(spec.label),
+                groupArgs: run.groupArgsFor(spec.label),
                 ...(spec.tools ? {tools: spec.tools} : {}),
                 ...(spec.extensions ? {extensions: spec.extensions} : {}),
                 // The three lever spreads that would otherwise sit here are the

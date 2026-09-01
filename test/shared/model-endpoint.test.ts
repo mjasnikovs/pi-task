@@ -11,7 +11,10 @@ import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import {
+    childModelEndpoints,
+    defaultModelRef,
     discoverModelEndpoints,
+    modelBaseUrl,
     probeChatTemplateCaps,
     probeModelEndpoints
 } from '../../src/shared/model-endpoint.js'
@@ -97,6 +100,184 @@ describe('probeModelEndpoints', () => {
             ).toBe(true)
         } finally {
             void srv.stop(true)
+        }
+    })
+})
+
+/** An agent dir with any subset of the three files pi keeps there. */
+function makeDir(files: Record<string, unknown>): string {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-agent-dir-'))
+    for (const [name, body] of Object.entries(files)) {
+        fs.writeFileSync(path.join(dir, name), JSON.stringify(body))
+    }
+    return dir
+}
+
+describe('defaultModelRef', () => {
+    test('reads the pair a child will actually resolve', () => {
+        const dir = makeDir({
+            'settings.json': {defaultProvider: 'local', defaultModel: 'Qwen.gguf', theme: 'dark'}
+        })
+        expect(defaultModelRef(dir)).toEqual({provider: 'local', id: 'Qwen.gguf'})
+    })
+
+    test('a half-written or absent settings.json is undefined, never a partial ref', () => {
+        expect(defaultModelRef(makeDir({}))).toBeUndefined()
+        expect(
+            defaultModelRef(makeDir({'settings.json': {defaultProvider: 'local'}}))
+        ).toBeUndefined()
+        expect(defaultModelRef(makeDir({'settings.json': {defaultModel: 'x'}}))).toBeUndefined()
+        expect(
+            defaultModelRef(makeDir({'settings.json': {defaultProvider: '', defaultModel: 'x'}}))
+        ).toBeUndefined()
+    })
+})
+
+describe('modelBaseUrl', () => {
+    // The two files disagree about where baseUrl lives, and reading only the
+    // first shape is the defect this PR exists to close.
+    test('models.json hangs it off the PROVIDER', () => {
+        const dir = makeDir({
+            'models.json': {providers: {local: {baseUrl: 'http://127.0.0.1:8080/v1'}}}
+        })
+        expect(modelBaseUrl({provider: 'local', id: 'Qwen.gguf'}, dir)).toBe(
+            'http://127.0.0.1:8080/v1'
+        )
+    })
+
+    test('models-store.json hangs it off the MODEL', () => {
+        const dir = makeDir({
+            'models-store.json': {
+                moonshotai: {
+                    checkedAt: 1,
+                    models: [
+                        {id: 'kimi-k2', baseUrl: 'https://api.moonshot.ai/v1'},
+                        {id: 'kimi-k3', baseUrl: 'https://other.example/v1'}
+                    ]
+                }
+            }
+        })
+        expect(modelBaseUrl({provider: 'moonshotai', id: 'kimi-k3'}, dir)).toBe(
+            'https://other.example/v1'
+        )
+    })
+
+    test('a model entry in models.json overrides its provider', () => {
+        const dir = makeDir({
+            'models.json': {
+                providers: {
+                    local: {
+                        baseUrl: 'http://127.0.0.1:8080/v1',
+                        models: [{id: 'other.gguf', baseUrl: 'http://127.0.0.1:9090/v1'}]
+                    }
+                }
+            }
+        })
+        expect(modelBaseUrl({provider: 'local', id: 'other.gguf'}, dir)).toBe(
+            'http://127.0.0.1:9090/v1'
+        )
+        expect(modelBaseUrl({provider: 'local', id: 'unlisted.gguf'}, dir)).toBe(
+            'http://127.0.0.1:8080/v1'
+        )
+    })
+
+    test('a provider pi serves from its built-in catalogue is undefined, not guessed', () => {
+        const dir = makeDir({
+            'models.json': {providers: {local: {baseUrl: 'http://127.0.0.1:8080/v1'}}},
+            'models-store.json': {}
+        })
+        expect(modelBaseUrl({provider: 'anthropic', id: 'claude-x'}, dir)).toBeUndefined()
+    })
+})
+
+describe('childModelEndpoints', () => {
+    test('a PINNED child probes ITS OWN backend, not the saved default', () => {
+        // The regression this parameter exists for. `--model` means the child is
+        // not on the saved default, so reading that default asks about the wrong
+        // server — and gets it wrong in both directions.
+        const dir = makeDir({
+            'settings.json': {defaultProvider: 'local', defaultModel: 'Qwen.gguf'},
+            'models.json': {
+                providers: {
+                    local: {baseUrl: 'http://127.0.0.1:8080/v1'},
+                    cloud: {baseUrl: 'https://api.example/v1'}
+                }
+            }
+        })
+        expect(childModelEndpoints('cloud/kimi', dir)).toEqual(['https://api.example/v1'])
+        // And the unpinned child still asks about the default.
+        expect(childModelEndpoints(undefined, dir)).toEqual(['http://127.0.0.1:8080/v1'])
+    })
+
+    test('a pinned model with no endpoint on disk probes nothing', () => {
+        const dir = makeDir({
+            'settings.json': {defaultProvider: 'local', defaultModel: 'Qwen.gguf'},
+            'models.json': {providers: {local: {baseUrl: 'http://127.0.0.1:8080/v1'}}}
+        })
+        // NOT the local url: probing some other provider's server on behalf of
+        // an anthropic child is the false positive this avoids.
+        expect(childModelEndpoints('anthropic/claude-x', dir)).toEqual([])
+    })
+
+    test('the default model resolves to exactly one url', () => {
+        const dir = makeDir({
+            'settings.json': {defaultProvider: 'local', defaultModel: 'Qwen.gguf'},
+            'models.json': {
+                providers: {
+                    local: {baseUrl: 'http://127.0.0.1:8080/v1'},
+                    other: {baseUrl: 'http://10.0.0.2:9000/v1'}
+                }
+            }
+        })
+        // Not the `other` provider, which discovery would have included.
+        expect(childModelEndpoints(undefined, dir)).toEqual(['http://127.0.0.1:8080/v1'])
+    })
+
+    test('a known model with no endpoint on disk probes NOTHING, and so never kills', () => {
+        const dir = makeDir({
+            'settings.json': {defaultProvider: 'anthropic', defaultModel: 'claude-x'},
+            'models.json': {providers: {local: {baseUrl: 'http://127.0.0.1:8080/v1'}}}
+        })
+        // The local url is present and would be returned by discovery. Probing it
+        // on behalf of an anthropic child is exactly the false positive this
+        // avoids: an empty list reads as reachable.
+        expect(childModelEndpoints(undefined, dir)).toEqual([])
+    })
+
+    test('no readable default → discovery, unchanged', () => {
+        const dir = makeDir({
+            'models.json': {providers: {local: {baseUrl: 'http://127.0.0.1:8080/v1'}}}
+        })
+        expect(childModelEndpoints(undefined, dir)).toEqual(discoverModelEndpoints(dir))
+    })
+
+    test('THE REGRESSION: a dead backend beside a live one is now reported dead', async () => {
+        const live = Bun.serve({port: 0, fetch: () => new Response('ok')})
+        const dead = Bun.serve({port: 0, fetch: () => new Response('x')})
+        const deadPort = dead.port
+        await dead.stop(true)
+        try {
+            const files: Record<string, unknown> = {
+                'settings.json': {defaultProvider: 'local', defaultModel: 'Qwen.gguf'},
+                'models.json': {
+                    providers: {
+                        local: {baseUrl: `http://127.0.0.1:${deadPort}/v1`},
+                        cloud: {baseUrl: `http://127.0.0.1:${live.port}/v1`}
+                    }
+                }
+            }
+            const dir = makeDir(files)
+            // What the guard used to ask: the OR sees `cloud` answering and
+            // disarms itself for a child that will never speak again.
+            expect(await probeModelEndpoints(discoverModelEndpoints(dir), 2_000)).toBe(true)
+            // What it asks now, for an unpinned child on the dead default.
+            expect(await probeModelEndpoints(childModelEndpoints(undefined, dir), 2_000)).toBe(
+                false
+            )
+            // And a child PINNED to the live provider is not condemned by it.
+            expect(await probeModelEndpoints(childModelEndpoints('cloud/x', dir), 2_000)).toBe(true)
+        } finally {
+            void live.stop(true)
         }
     })
 })

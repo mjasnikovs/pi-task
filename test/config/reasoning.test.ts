@@ -3,7 +3,7 @@ import {DEFAULT_CONFIG, type PiTaskConfig} from '../../src/config/config.js'
 import {
     effectiveReasoning,
     DEFAULT_REASONING_TABLE,
-    REASONING_GROUPS,
+    CHILD_GROUPS,
     REASONING_MODES,
     REASONING_ON_LEVEL,
     REASONING_SETTINGS,
@@ -12,7 +12,7 @@ import {
     sanitizeReasoningMode,
     thinkingArgs,
     type GroupSetting,
-    type ReasoningGroup
+    type ChildGroup
 } from '../../src/config/reasoning.js'
 
 const cfgWith = (over: Partial<PiTaskConfig>): PiTaskConfig => ({...DEFAULT_CONFIG, ...over})
@@ -23,7 +23,7 @@ const cfgWith = (over: Partial<PiTaskConfig>): PiTaskConfig => ({...DEFAULT_CONF
  * the wrong table visible; the levels are not unique per group and do not need to
  * be.
  */
-const distinct = (): Record<ReasoningGroup, GroupSetting> => ({
+const distinct = (): Record<ChildGroup, GroupSetting> => ({
     research: 'off',
     'research:files': 'minimal',
     'research:apis': 'low',
@@ -42,17 +42,17 @@ describe('resolveReasoning', () => {
         // Including the groups whose custom table says otherwise: a forcing mode
         // that consulted the table would not be forcing anything.
         const cfg = cfgWith({reasoningMode: 'off', reasoningLevels: distinct()})
-        for (const g of REASONING_GROUPS) expect(resolveReasoning(g, cfg)).toBe('off')
+        for (const g of CHILD_GROUPS) expect(resolveReasoning(g, cfg)).toBe('off')
     })
 
     test('mode on pins every group to the one on-level', () => {
         const cfg = cfgWith({reasoningMode: 'on', reasoningLevels: distinct()})
-        for (const g of REASONING_GROUPS) expect(resolveReasoning(g, cfg)).toBe(REASONING_ON_LEVEL)
+        for (const g of CHILD_GROUPS) expect(resolveReasoning(g, cfg)).toBe(REASONING_ON_LEVEL)
     })
 
     test('mode default reads the measured table, not the custom one', () => {
         const cfg = cfgWith({reasoningMode: 'default', reasoningLevels: distinct()})
-        for (const g of REASONING_GROUPS) {
+        for (const g of CHILD_GROUPS) {
             expect(resolveReasoning(g, cfg)).toBe(DEFAULT_REASONING_TABLE[g])
         }
     })
@@ -60,13 +60,13 @@ describe('resolveReasoning', () => {
     test('mode custom reads the custom table', () => {
         const levels = distinct()
         const cfg = cfgWith({reasoningMode: 'custom', reasoningLevels: levels})
-        for (const g of REASONING_GROUPS) expect(resolveReasoning(g, cfg)).toBe(levels[g])
+        for (const g of CHILD_GROUPS) expect(resolveReasoning(g, cfg)).toBe(levels[g])
     })
 })
 
 describe('the table and the emitted flag agree', () => {
     test('an inherit cell emits no flag, a measured cell emits its level', () => {
-        for (const g of REASONING_GROUPS) {
+        for (const g of CHILD_GROUPS) {
             const cell = DEFAULT_REASONING_TABLE[g]
             const args = thinkingArgs(resolveReasoning(g, DEFAULT_CONFIG))
             expect(args).toEqual(cell === 'inherit' ? [] : ['--thinking', cell])
@@ -118,7 +118,7 @@ describe('sanitizeReasoningLevels', () => {
         // fallback of its own.
         const partial = {research: 'off'}
         const out = sanitizeReasoningLevels(partial)
-        expect(Object.keys(out).sort()).toEqual([...REASONING_GROUPS].sort())
+        expect(Object.keys(out).sort()).toEqual([...CHILD_GROUPS].sort())
         expect(out.research).toBe('off')
         expect(out.gate).toBe(DEFAULT_REASONING_TABLE.gate)
     })
@@ -163,7 +163,7 @@ describe('sanitizeReasoningLevels', () => {
 
     test('a group from a future version is dropped, not carried', () => {
         const out = sanitizeReasoningLevels({research: 'low', 'some-new-group': 'high'})
-        expect(Object.keys(out).sort()).toEqual([...REASONING_GROUPS].sort())
+        expect(Object.keys(out).sort()).toEqual([...CHILD_GROUPS].sort())
     })
 
     test('a non-object yields the complete default table', () => {
@@ -184,8 +184,8 @@ describe('effectiveReasoning', () => {
         for (const mode of REASONING_MODES) {
             const cfg = {...DEFAULT_CONFIG, reasoningMode: mode}
             const table = effectiveReasoning(cfg)
-            expect(Object.keys(table).sort()).toEqual([...REASONING_GROUPS].sort())
-            for (const group of REASONING_GROUPS) {
+            expect(Object.keys(table).sort()).toEqual([...CHILD_GROUPS].sort())
+            for (const group of CHILD_GROUPS) {
                 expect(table[group]).toBe(resolveReasoning(group, cfg))
             }
         }

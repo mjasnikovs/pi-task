@@ -24,7 +24,7 @@ import {runChild, type SpawnFn} from '../shared/child-process.js'
 import {docsLookup, type DocsCorpus} from './docs-lookup.js'
 import {buildExtractionPrompt} from './abstention.js'
 import {type ExcerptVerification} from '../shared/child-output.js'
-import {groupThinkingArgs} from '../config/reasoning-args.js'
+import {groupChildArgs} from '../config/group-args.js'
 
 const DEFAULT_LIMIT = PACKAGE_RETRIEVE_LIMIT
 const DEFAULT_BUDGET = RETRIEVE_CONTENT_BUDGET
@@ -784,7 +784,7 @@ export async function docsFocused(input: DocsFocusedInput): Promise<DocsFocusedR
         spawn,
         // The `extraction` group's level. Resolved at the call site so neither
         // the lookup nor the extractor reads ambient config.
-        thinking: groupThinkingArgs('extraction')
+        groupArgs: groupChildArgs('extraction')
     })
     const extraction = r.extraction
 

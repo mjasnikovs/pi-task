@@ -62,7 +62,14 @@ import {findDeliveryPhantoms, formatApiOverrideBanner} from '../workers/phantom-
 import {titleForDisplay} from './parsers.js'
 import {USER_CANCELLED, type PhaseDeps, type PhaseSeams} from './child-runner.js'
 import {cancelCheckpoint} from './cancel-points.js'
-import {holdImplementationThinking, type ThinkingControl} from './implementation-thinking.js'
+import type {ThinkingLevel} from '@earendil-works/pi-agent-core'
+import {splitSpec} from '../config/group-models.js'
+import {
+    holdImplementation,
+    type ImplementationControls,
+    type ModelControl,
+    type ThinkingControl
+} from './implementation-hold.js'
 import {rearmCancelListener} from './cancel-input.js'
 import {takeHeldInput} from './mid-run-input.js'
 import {withRun, announceTerminal} from './run-bracket.js'
@@ -108,7 +115,50 @@ let piApi: ExtensionAPI | null = null
 function piThinkingControl(): ThinkingControl {
     const api = piApi
     if (!api) return {get: () => 'off', set: () => {}}
-    return {get: () => api.getThinkingLevel(), set: level => api.setThinkingLevel(level)}
+    return {
+        get: () => api.getThinkingLevel(),
+        set: (level: ThinkingLevel) => api.setThinkingLevel(level)
+    }
+}
+
+/**
+ * pi's own `Model`, named WITHOUT importing `@earendil-works/pi-ai` — which is
+ * neither a dependency, a devDependency nor a peerDependency of this package
+ * (see shared/model-endpoint.ts's header). The context already carries the type,
+ * so deriving it costs nothing and adds no edge to the dependency graph.
+ */
+type PiModel = NonNullable<ExtensionCommandContext['model']>
+
+/**
+ * The live session's model, as a {@link ModelControl} over pi's own `Model`.
+ *
+ * `current()` reads `ctx.model`, which is a live GETTER on the extension context
+ * (pi's `core/extensions/runner.js`), so a read after a set is the new value.
+ * `resolve` goes through `find(provider, id)` — EXACT, deliberately stricter
+ * than pi's own CLI, which also substring-matches. We store a canonical
+ * `provider/id`, so exact is the only match that should ever count, and being
+ * stricter here can only cost us a hold we then decline to take.
+ */
+function piModelControl(ctx: ExtensionCommandContext): ModelControl<PiModel> {
+    const api = piApi
+    return {
+        current: () => {
+            const m = ctx.model
+            return m ? {spec: `${m.provider}/${m.id}`, handle: m} : undefined
+        },
+        resolve: spec => {
+            const parts = splitSpec(spec)
+            return parts ? ctx.modelRegistry.find(parts.provider, parts.id) : undefined
+        },
+        apply: async handle => (api ? api.setModel(handle) : false)
+    }
+}
+
+/** Both halves of the implementation hold, over the live session. */
+export function piImplementationControls(
+    ctx: ExtensionCommandContext
+): ImplementationControls<PiModel> {
+    return {thinking: piThinkingControl(), model: piModelControl(ctx)}
 }
 
 // ─── TaskRunner options ──────────────────────────────────────────────────────
@@ -586,11 +636,14 @@ export interface RunSingleTaskOptions extends Pick<
      */
     notifyFinish?: boolean
     /**
-     * How the implementation turn's thinking level is read and written. Defaults
-     * to the live pi session; injectable so the hold-and-restore is assertable
-     * with no real session to restore.
+     * How the implementation turn's MODEL and thinking level are read and
+     * written. Defaults to the live pi session; injectable so the
+     * hold-and-restore is assertable with no real session to restore.
+     *
+     * One object rather than two, because the two must be acquired and released
+     * in one order and a caller handed two seams could supply half of one.
      */
-    thinkingControl?: ThinkingControl
+    implementationControls?: ImplementationControls<never>
 }
 
 export interface RunSingleTaskResult {
@@ -662,8 +715,8 @@ export async function runSingleTask(
                     // The autofix re-runner (gateRunTask) re-enters runSingleTask
                     // and so re-enters this closure, which is why the hold lives
                     // here rather than at either call site.
-                    const release = holdImplementationThinking(
-                        opts.thinkingControl ?? piThinkingControl()
+                    const release = await holdImplementation(
+                        opts.implementationControls ?? piImplementationControls(newCtx)
                     )
                     try {
                         // Queue-or-run: naming a delivery mode means pi's
@@ -683,7 +736,7 @@ export async function runSingleTask(
                             implError = outcome.error
                         }
                     } finally {
-                        release()
+                        await release()
                     }
                 },
                 seams: opts.seams,

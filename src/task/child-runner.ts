@@ -31,14 +31,15 @@ import {
     commandWatch,
     type CommandKill
 } from '../shared/command-watchdog.js'
-import {discoverModelEndpoints, probeModelEndpoints} from '../shared/model-endpoint.js'
+import {childModelEndpoints, probeModelEndpoints} from '../shared/model-endpoint.js'
+import {modelSpecFromArgs} from '../config/group-models.js'
 // VALUE import, and it is only safe because worker-profiles.ts reads its loop
 // constants from loop-detector.ts. Point those back at this file and the graph
 // closes into a TDZ ReferenceError that no compile step catches.
 import {workerPolicy, type WorkerGuardPolicy} from '../workers/worker-profiles.js'
 import {getConfig} from '../config/config.js'
-import {groupThinkingArgs} from '../config/reasoning-args.js'
-import {reasoningGroupForChild} from '../config/reasoning.js'
+import {groupChildArgs, groupWindow} from '../config/group-args.js'
+import {groupForChild, type ChildGroup} from '../config/groups.js'
 import type {DebugLine} from './debug-log.js'
 // Type-only: `PhaseDeps` declares the research/auto-answer seams, and a seam is
 // declared by the shape of the thing it stands in for. Erased at compile time,
@@ -151,10 +152,11 @@ export function guardKillError(
 ): Error | null {
     if (r.commandKill) return new CommandTimeoutError(name, r.commandKill)
     // A dead-backend verdict is only trusted once every attempt has produced it.
-    // `discoverModelEndpoints` reads EVERY provider in models.json, not the one
-    // this child's model uses, so a stopped local server can condemn a run against
-    // a healthy cloud backend. The asymmetry settles it: a backend that really is
-    // down costs three 5s probes, a wrong verdict costs the whole run.
+    // The probe now asks about this child's own endpoint rather than ORing over
+    // every provider, so it is exact — but it is still one network call at one
+    // instant, and a blip is indistinguishable from a death in a single sample.
+    // The asymmetry settles it: a backend that really is down costs three 5s
+    // probes, a wrong verdict costs the whole run.
     if (r.stalled) return opts.finalAttempt === false ? null : new BackendDownError(name)
     return null
 }
@@ -163,10 +165,9 @@ export function guardKillError(
  * The dead-backend probe killed a phase child on its LAST attempt.
  *
  * Reaching this means every attempt found no endpoint answering, not one. The
- * single-probe verdict is not trusted on its own: `discoverModelEndpoints` reads
- * every provider in models.json rather than the one this child's model uses, so a
- * stopped local server can condemn a run against a healthy cloud backend. Three
- * failed probes cost ~15s; one wrong verdict costs the run.
+ * single-probe verdict is not trusted on its own, because one sample cannot tell
+ * a dead server from a blip. Three failed probes cost ~15s; one wrong verdict
+ * costs the run.
  */
 export class BackendDownError extends Error {
     constructor(readonly childName: string) {
@@ -323,12 +324,16 @@ export function childArgs(
     tools: string,
     extensions: readonly string[] = [],
     /**
-     * An already-resolved `['--thinking', level]`, or `[]` for "emit no flag".
-     * Resolved by the CALLER, never here: the level is a property of the child's
-     * ROLE, and this function is handed tools and extensions, not a name.
-     * Omitted ⇒ byte-identical argv to the version before reasoning profiles.
+     * This child's group fragment: `--model` then `--thinking`, either half
+     * possibly absent. Resolved by the CALLER, never here — both are properties
+     * of the child's ROLE, and this function is handed tools and extensions, not
+     * a name. Omitted ⇒ byte-identical argv to the version before group profiles.
+     *
+     * ONE field rather than a `model` beside a `thinking`, because nothing may
+     * compose the two halves by hand: `groupChildArgs` is the only producer, so a
+     * doubled `--thinking` is unreachable rather than merely unlikely.
      */
-    thinking: readonly string[] = []
+    groupArgs: readonly string[] = []
 ): string[] {
     // `--mode json` puts the child into the structured event stream the
     // unified runner parses in `mode: 'json-events'`. Without it the child
@@ -351,7 +356,7 @@ export function childArgs(
     // one — the guards all hang off pi's `tool_call` hook.
     const toolFlags = tools === '' ? ['--no-tools'] : ['--tools', tools]
     const internal = tools === '' ? [] : extensions
-    return [...childBaseArgs(internal), ...thinking, '--mode', 'json', ...toolFlags]
+    return [...childBaseArgs(internal), ...groupArgs, '--mode', 'json', ...toolFlags]
 }
 
 // Sentinel error thrown when the user dismisses a grill-me dialog.
@@ -403,10 +408,10 @@ export interface ChildRun {
      */
     contextWindow?: number
     /**
-     * The resolved `['--thinking', level]` fragment for this child's reasoning
-     * group, or `[]`/omitted to inherit the session default as before.
+     * The resolved argv fragment for this child's group — `--model` then
+     * `--thinking` — or `[]`/omitted to inherit both defaults as before.
      */
-    thinking?: readonly string[]
+    groupArgs?: readonly string[]
     /**
      * This attempt's per-command ceiling, already halved for prior hangs by the
      * caller's strike loop. Omitted -> the `phase` row's full configured ceiling,
@@ -442,10 +447,10 @@ export async function runChild({
     extensions,
     onToolResult,
     contextWindow,
-    thinking,
+    groupArgs,
     commandCeilingMs
 }: ChildRun): Promise<PhaseRunResult> {
-    const invocation = getPiInvocation(childArgs(tools, extensions, thinking), prompt)
+    const invocation = getPiInvocation(childArgs(tools, extensions, groupArgs), prompt)
     let loopHit: LoopHit | undefined
     const guards = phasePolicy().guards
     // Null when the user set the ceiling to `off`. Why a phase child needs this at
@@ -474,7 +479,10 @@ export async function runChild({
                             afterMs: guards.stalled.afterMs,
                             probe:
                                 guards.stalled.probe
-                                ?? (() => probeModelEndpoints(discoverModelEndpoints()))
+                                ?? (() =>
+                                    probeModelEndpoints(
+                                        childModelEndpoints(modelSpecFromArgs(groupArgs ?? []))
+                                    ))
                         }
                     }),
                 onLine,
@@ -790,17 +798,17 @@ async function triageChildResult(
  * exit status describes our SIGTERM and says nothing about its verdict.
  */
 /**
- * The `--thinking` fragment for a named child, or `[]` when the name is unmapped.
+ * The group fragment for a named child, or `[]` when the name is unmapped.
  *
  * An unmapped name INHERITS rather than throwing: a child that reaches the model
  * with today's argv is always safe, and aborting a user's task over a missing
  * table row would be a worse failure than the one it reports. The guard that
- * makes the table complete is `reasoning-groups.test.ts`, which fails the BUILD —
+ * makes the table complete is `config/groups.test.ts`, which fails the BUILD —
  * where someone can actually fix it.
  */
-export function thinkingForChild(name: string): string[] {
-    const group = reasoningGroupForChild(name)
-    return group ? groupThinkingArgs(group) : []
+export function groupArgsForChild(name: string): string[] {
+    const group = groupForChild(name)
+    return group ? groupChildArgs(group) : []
 }
 
 /**
@@ -812,9 +820,22 @@ export function thinkingForChild(name: string): string[] {
  * which is what the degrade's own comment ("the degrade changes the TOOLS, not
  * the role") claimed while three bare `undefined`s quietly made it false.
  */
+/**
+ * The context window a child of this group runs against.
+ *
+ * The GROUP's window when this session resolved one, else the run's. Too small a
+ * window makes the churn rule fire early and kill a healthy child, so an
+ * `inherit` or unresolved group keeps the parent's number rather than a guess.
+ */
+function childContextWindow(deps: PhaseDeps, group: ChildGroup | undefined): number | undefined {
+    return (group === undefined ? undefined : groupWindow(group)) ?? deps.contextWindow
+}
+
 function phaseChildRun(
     deps: PhaseDeps,
-    over: Pick<ChildRun, 'tools' | 'prompt' | 'signal' | 'thinking'>
+    /** This child's group, for the window. Undefined ⇒ the run's own window. */
+    group: ChildGroup | undefined,
+    over: Pick<ChildRun, 'tools' | 'prompt' | 'signal' | 'groupArgs'>
         & Partial<
             Pick<ChildRun, 'onContextUsage' | 'onToolCall' | 'onToolResult' | 'commandCeilingMs'>
         >
@@ -825,7 +846,10 @@ function phaseChildRun(
         onContextUsage: deps.onContextUsage,
         spawn: deps.spawn,
         extensions: deps.childExtensions,
-        contextWindow: deps.contextWindow,
+        // The GROUP's window when this session resolved one, else the run's.
+        // Too small a window makes the churn rule fire early and kill a healthy
+        // child, so an unresolved group keeps the parent's number.
+        contextWindow: (group === undefined ? undefined : groupWindow(group)) ?? deps.contextWindow,
         ...over
     }
 }
@@ -842,8 +866,9 @@ export async function runPhaseChild(
     // between a loop-kill and its retry would otherwise make the two attempts
     // different experiments, and the retry exists to repeat the first one with a
     // hint. An unmapped name inherits, which is today's argv — the build-time
-    // guard for that is reasoning-groups.test.ts, not a throw in a user's run.
-    const thinking = thinkingForChild(name)
+    // guard for that is config/groups.test.ts, not a throw in a user's run.
+    const groupArgs = groupArgsForChild(name)
+    const group = groupForChild(name)
     const verb = opts.verb ?? 'retry'
     let hint: string | null = null
     const loopHistory: LoopHit[] = []
@@ -875,16 +900,22 @@ export async function runPhaseChild(
         // context WINDOW, so a detector that waited to be told one would sit at 0,
         // and the churn rule returns false on a non-positive window. The parent
         // knows the value at spawn time — say it then, not later.
-        stall?.noteContext(deps.contextWindow ?? 0)
+        //
+        // The SAME number the child is handed below. Arming it from the run's
+        // window while the child runs on a bigger model's would judge the child
+        // against a window it does not have, for exactly the stretch before the
+        // first `context_usage` event corrects it — which is the stretch this
+        // line exists to cover.
+        stall?.noteContext(childContextWindow(deps, group) ?? 0)
         const clock = phaseTimeout(deps.signal, budgetMs)
         let r: PhaseRunResult
         try {
             r = await runChild(
-                phaseChildRun(deps, {
+                phaseChildRun(deps, group, {
                     tools,
                     prompt: prependHint(hint, prompt),
                     signal: clock.signal,
-                    thinking,
+                    groupArgs,
                     onContextUsage: snapshot => {
                         // Real window or nothing: `noteContext` ignores 0, which is
                         // why the parent's value must be supplied at spawn — a
@@ -1102,14 +1133,15 @@ async function runDegradedFinalAttempt(
     let r: PhaseRunResult
     try {
         r = await runChild(
-            phaseChildRun(deps, {
+            phaseChildRun(deps, groupForChild(name), {
                 tools: '', // --no-tools: the model cannot read/grep/list, only answer
                 prompt: prependHint(formatDegradeHint(hit), prompt),
                 signal: clock.signal,
                 // Same group as the attempts that led here. The degrade changes the
-                // TOOLS, not the role — running it at a different thinking level would
-                // make the fallback a different experiment from the thing it rescues.
-                thinking: thinkingForChild(name)
+                // TOOLS, not the role — running it on a different model, or at a
+                // different thinking level, would make the fallback a different
+                // experiment from the thing it rescues.
+                groupArgs: groupArgsForChild(name)
             })
         )
     } finally {

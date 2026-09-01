@@ -1,7 +1,7 @@
 /**
  * THE GUARD THAT MAKES THE GROUP TABLE TRUE.
  *
- * `reasoningGroupForChild` returns undefined for an unmapped name, and
+ * `groupForChild` returns undefined for an unmapped name, and
  * `runPhaseChild` treats undefined as `inherit` — a child that reaches the model
  * with today's argv, which is always safe at run time. That safety is exactly
  * what makes the gap invisible: a phase added next year would silently opt out
@@ -20,11 +20,7 @@ import {describe, expect, test} from 'bun:test'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 import {SRC_ROOT, srcPath} from '../test-utils/src-tree.js'
-import {
-    REASONING_GROUP_BY_CHILD,
-    reasoningGroupForChild,
-    REASONING_GROUPS
-} from '../../src/config/reasoning.js'
+import {GROUP_BY_CHILD, groupForChild, CHILD_GROUPS} from '../../src/config/groups.js'
 
 const src = (f: string): string => fs.readFileSync(srcPath('task', f), 'utf8')
 
@@ -103,7 +99,7 @@ describe('every named child has a reasoning group', () => {
         // Sanity: if the scanner finds nothing the assertion below is vacuous,
         // which is the one way this test could pass while being broken.
         expect(discovered.length).toBeGreaterThan(10)
-        const unmapped = discovered.filter(n => reasoningGroupForChild(n) === undefined)
+        const unmapped = discovered.filter(n => groupForChild(n) === undefined)
         expect(unmapped).toEqual([])
     })
 
@@ -112,20 +108,20 @@ describe('every named child has a reasoning group', () => {
         // is the shape a rename leaves behind, where the real child then falls
         // through to `inherit` while the table still claims to cover it.
         const discovered = discoveredChildNames()
-        const stale = Object.keys(REASONING_GROUP_BY_CHILD).filter(n => !discovered.has(n))
+        const stale = Object.keys(GROUP_BY_CHILD).filter(n => !discovered.has(n))
         expect(stale).toEqual([])
     })
 
     test('every mapped group is a real group', () => {
-        for (const [name, group] of Object.entries(REASONING_GROUP_BY_CHILD)) {
-            expect(REASONING_GROUPS, `${name} -> ${group}`).toContain(group)
+        for (const [name, group] of Object.entries(GROUP_BY_CHILD)) {
+            expect(CHILD_GROUPS as readonly string[], `${name} -> ${group}`).toContain(group)
         }
     })
 
     test('an unknown name inherits rather than throwing', () => {
         // The run-time contract: a missing row costs today's behaviour, never a
         // user's task.
-        expect(reasoningGroupForChild('a-phase-invented-next-year')).toBeUndefined()
+        expect(groupForChild('a-phase-invented-next-year')).toBeUndefined()
     })
 })
 

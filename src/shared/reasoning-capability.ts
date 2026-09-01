@@ -30,7 +30,7 @@
  * line-for-line identical to it, ladder included. Nothing here imports pi-ai, so
  * an upstream change will not fail a test — the two have to be re-compared.
  */
-import {REASONING_GROUPS, type ReasoningGroup, type GroupSetting} from '../config/reasoning.js'
+import {CHILD_GROUPS, type ChildGroup, type GroupSetting} from '../config/reasoning.js'
 
 /**
  * pi's own level ladder, in order — the same seven names, in the same sequence,
@@ -95,17 +95,38 @@ export function clampToModel(model: ReasoningModelFacts, level: LadderLevel): La
     return available[0] ?? 'off'
 }
 
-/** One group whose configured setting the connected model will not honour. */
+/** One group whose configured setting the model it runs on will not honour. */
 export interface ReasoningMismatch {
-    group: ReasoningGroup
+    group: ChildGroup
+    /**
+     * The model THIS GROUP runs on. Per-item, not per-warning, because groups no
+     * longer share one model: a line that opens `model "X" will not run …` while
+     * listing groups that run on Y is itself a lie about what it checked.
+     */
+    modelName: string
     /** What /task-config says. Never `inherit` — an inherited group asks for nothing. */
     wanted: LadderLevel
     /** What pi will send instead. */
     actual: LadderLevel
 }
 
+/** What a group runs on, as much of it as this check needs. */
+export interface GroupModelFacts extends ReasoningModelFacts {
+    /** What to call it in the warning. */
+    name: string
+    /** Where it is served from, for the `/props` probe. Absent ⇒ not probeable. */
+    baseUrl?: string
+}
+
 /**
- * Every group whose setting the model will silently change.
+ * Every group whose setting the model IT RUNS ON will silently change.
+ *
+ * `modelFor` is a FUNCTION rather than a `Record`, for two reasons: a record
+ * would build eleven identical entries for the overwhelmingly common
+ * all-`inherit` case, and a function is drivable from a test with two literals.
+ * It answers `undefined` for a group whose model cannot be resolved — nothing is
+ * reported for those, because the run degrades to the session default and the
+ * separate model hint is what names them.
  *
  * `inherit` groups are skipped entirely, because an inherited group asks for
  * nothing. That is not the same as a quiet default: the shipped table is mostly
@@ -121,18 +142,20 @@ export interface ReasoningMismatch {
  * would ship this feature unable to see its own failure mode.
  */
 export function reasoningMismatches(
-    model: ReasoningModelFacts | undefined,
-    levels: Readonly<Record<ReasoningGroup, GroupSetting>>
+    modelFor: (group: ChildGroup) => GroupModelFacts | undefined,
+    levels: Readonly<Record<ChildGroup, GroupSetting>>
 ): ReasoningMismatch[] {
-    // No model resolved yet (session still starting, or none selected): say
-    // nothing. A warning naming no model is noise, not information.
-    if (!model) return []
     const out: ReasoningMismatch[] = []
-    for (const group of REASONING_GROUPS) {
+    for (const group of CHILD_GROUPS) {
         const wanted = levels[group]
         if (wanted === 'inherit') continue
+        // No model resolved for this group (session still starting, none
+        // selected, or a spec this machine cannot resolve): say nothing. A
+        // warning naming no model is noise, not information.
+        const model = modelFor(group)
+        if (!model) continue
         const actual = clampToModel(model, wanted)
-        if (actual !== wanted) out.push({group, wanted, actual})
+        if (actual !== wanted) out.push({group, modelName: model.name, wanted, actual})
     }
     return out
 }

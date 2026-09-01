@@ -1,7 +1,7 @@
 import {appendFileSync, mkdirSync, readFileSync, writeFileSync} from 'node:fs'
-import os from 'node:os'
 import path from 'node:path'
 import webpush from 'web-push'
+import {dataHome} from '../shared/data-home.js'
 
 /** Minimal shape of a browser PushSubscription serialized to JSON. */
 export interface PushSubscriptionJSON {
@@ -13,13 +13,6 @@ export interface PushSubscriptionJSON {
 export interface VapidKeys {
     publicKey: string
     privateKey: string
-}
-
-/** Resolve the XDG data-home base. Same env-or-homedir shape the docs cache uses
- *  (workers/docs-core.ts), but rooted at data-home rather than cache-home: what
- *  lives under here is not reconstructible by re-fetching. */
-function dataHome(): string {
-    return process.env.XDG_DATA_HOME?.trim() || path.join(os.homedir(), '.local', 'share')
 }
 
 /** Where the VAPID keypair is persisted. The browser subscribes with this

@@ -16,7 +16,7 @@ import {
     registerReasoningWarning
 } from '../../src/workers/reasoning-warning.js'
 import {DEFAULT_CONFIG, type PiTaskConfig} from '../../src/config/config.js'
-import {effectiveReasoning, REASONING_GROUPS} from '../../src/config/reasoning.js'
+import {effectiveReasoning, CHILD_GROUPS} from '../../src/config/reasoning.js'
 
 type SessionStart = (event: unknown, ctx: unknown) => void
 
@@ -174,25 +174,37 @@ describe('when it fires', () => {
 
 describe('formatReasoningWarning', () => {
     test('is null when there is nothing to say', () => {
-        expect(formatReasoningWarning('m', [])).toBeNull()
+        expect(formatReasoningWarning([])).toBeNull()
     })
 
     test('names at most two groups and counts the rest', () => {
-        const many = REASONING_GROUPS.map(group => ({
+        const many = CHILD_GROUPS.map(group => ({
             group,
+            modelName: 'm',
             wanted: 'medium' as const,
             actual: 'off' as const
         }))
-        const line = formatReasoningWarning('m', many)!
-        expect(line).toContain(`+${REASONING_GROUPS.length - 2} more`)
+        const line = formatReasoningWarning(many)!
+        expect(line).toContain(`+${CHILD_GROUPS.length - 2} more`)
         // A line long enough to list every group is a line nobody reads.
-        expect(line).toContain(`${REASONING_GROUPS[0]} medium→off`)
-        expect(line).not.toContain(`${REASONING_GROUPS[3]} medium→off`)
+        expect(line).toContain(`${CHILD_GROUPS[0]}@m medium→off`)
+        expect(line).not.toContain(`${CHILD_GROUPS[3]}@m medium→off`)
+    })
+
+    test('each item names its OWN model, because groups can differ', () => {
+        // A single leading `model "X" will not run …` is a lie about what was
+        // checked the moment two groups run on different models.
+        const line = formatReasoningWarning([
+            {group: 'gate', modelName: 'acme/dumb', wanted: 'high', actual: 'off'},
+            {group: 'phase', modelName: 'zeta/odd', wanted: 'off', actual: 'medium'}
+        ])!
+        expect(line).toContain('gate@acme/dumb high→off')
+        expect(line).toContain('phase@zeta/odd off→medium')
     })
 
     test('names both the file to fix and the way out', () => {
-        const line = formatReasoningWarning('m', [
-            {group: 'gate', wanted: 'off', actual: 'medium'}
+        const line = formatReasoningWarning([
+            {group: 'gate', modelName: 'm', wanted: 'off', actual: 'medium'}
         ])!
         expect(line).toContain('models.json')
         expect(line).toContain('inherit')
@@ -301,5 +313,112 @@ describe('the server probe that refines the cause line', () => {
         await settle()
 
         expect(ui.widgets).toHaveLength(1)
+    })
+})
+
+describe('the probe fans out over DISTINCT backends', () => {
+    /**
+     * Groups can now run on different models, so one probe is no longer the
+     * whole story. Eleven groups usually collapse to one or two servers, and the
+     * four research workers on one server must not print the same sentence four
+     * times.
+     */
+    const served = (baseUrl: string) => ({...DEAD_MODEL, baseUrl, name: `m@${baseUrl}`})
+
+    function handlerFor(
+        models: Record<string, ReturnType<typeof served>>,
+        probe: (baseUrl: string) => Promise<{supportsReasoningEffort: boolean} | null>,
+        groupSpecs: Record<string, string>
+    ): SessionStart {
+        let handler: SessionStart | undefined
+        const pi = {
+            on: (event: string, h: SessionStart) => {
+                if (event === 'session_start') handler = h
+            }
+        }
+        registerReasoningWarning(
+            pi as unknown as ExtensionAPI,
+            () => effectiveReasoning(DEFAULT_CONFIG),
+            probe as never,
+            () => groupSpecs as never
+        )
+        void models
+        return handler!
+    }
+
+    const settle = async (): Promise<void> => {
+        for (let i = 0; i < 6; i++) await Promise.resolve()
+    }
+
+    /** A ctx whose registry answers with the model named by the spec. */
+    const registryCtx = (models: Record<string, ReturnType<typeof served>>, mode = 'tui') => {
+        const ui = fakeCtx(mode, DEAD_MODEL)
+        ;(ui.ctx as {modelRegistry: unknown}).modelRegistry = {
+            find: (p: string, i: string) => models[`${p}/${i}`]
+        }
+        return ui
+    }
+
+    test('one probe per distinct baseUrl, however many groups share it', async () => {
+        const models = {
+            'a/one': served('http://one'),
+            'a/two': served('http://one'),
+            'b/three': served('http://two')
+        }
+        const probed: string[] = []
+        const ui = registryCtx(models)
+        // `planning`, not `gate`: the shipped table runs gate at `off`, which a
+        // reasoning:false model honours, so gate never mismatches and its
+        // backend is correctly never probed.
+        const specs = Object.fromEntries(
+            CHILD_GROUPS.map(g => [
+                g,
+                g === 'planning' ? 'b/three'
+                : g.startsWith('research') ? 'a/one'
+                : 'a/two'
+            ])
+        )
+        handlerFor(
+            models,
+            async url => {
+                probed.push(url)
+                return {supportsReasoningEffort: false}
+            },
+            specs
+        )({}, ui.ctx)
+        await settle()
+        expect([...probed].sort()).toEqual(['http://one', 'http://two'])
+    })
+
+    test('one DEAD endpoint does not blank the line for the others', async () => {
+        const models = {'a/one': served('http://live'), 'b/two': served('http://dead')}
+        const specs = Object.fromEntries(
+            CHILD_GROUPS.map(g => [g, g === 'planning' ? 'b/two' : 'a/one'])
+        )
+        const ui = registryCtx(models)
+        handlerFor(
+            models,
+            async url => {
+                if (url === 'http://dead') throw new Error('connection refused')
+                return {supportsReasoningEffort: true}
+            },
+            specs
+        )({}, ui.ctx)
+        await settle()
+        // The refined line still landed, from the endpoint that answered.
+        expect(String(ui.widgets.at(-1)!.state)).toContain('/login llama.cpp')
+    })
+
+    test('duplicate cause strings are printed once', async () => {
+        const models = {'a/one': served('http://one'), 'b/two': served('http://two')}
+        const specs = Object.fromEntries(
+            CHILD_GROUPS.map(g => [g, g === 'planning' ? 'b/two' : 'a/one'])
+        )
+        const ui = registryCtx(models)
+        handlerFor(models, async () => ({supportsReasoningEffort: true}), specs)({}, ui.ctx)
+        await settle()
+        const text = String(ui.widgets.at(-1)!.state)
+        const hits = text.split('/login llama.cpp').length - 1
+        expect(hits).toBe(1)
     })
 })

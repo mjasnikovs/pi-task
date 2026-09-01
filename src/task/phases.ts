@@ -101,7 +101,7 @@ import {
 } from './owned-freeze-reassign.js'
 import {trackedSourceOracle} from './owned-freeze-conflict.js'
 import {
-    thinkingForChild,
+    groupArgsForChild,
     runPhaseChild,
     runWithEmphasisRetry,
     prependHint,
@@ -731,8 +731,8 @@ export async function phaseResearch(deps: PhaseDeps, refined: string): Promise<s
         /** Section heading this worker's output is assembled under. */
         section: string
         /** The worker's child NAME — what the loader and the debug trail print, and
-         *  the key into `REASONING_GROUP_BY_CHILD`, so it also decides the worker's
-         *  own reasoning cell. */
+         *  the key into `GROUP_BY_CHILD`, so it also decides the worker's
+         *  own model and reasoning cells. */
         label: string
         /** Static, or built from the sections completed so far (serial mode
          *  hands APIS the finished FILES map; parallel mode hands it nothing). */
@@ -895,7 +895,7 @@ export async function phaseResearch(deps: PhaseDeps, refined: string): Promise<s
                 // questions, so one shared `research` cell is the tempting shape —
                 // but the four cells do not ship identical, so sharing one would
                 // silently change three of them. See config/reasoning.ts.
-                thinkingFor: thinkingForChild,
+                groupArgsFor: groupArgsForChild,
                 logDebug: deps.logDebug,
                 onChildOutput: deps.onChildOutput,
                 record: recordWorker,

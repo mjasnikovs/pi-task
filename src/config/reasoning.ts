@@ -17,60 +17,22 @@
  *
  * PURE MODULE — no imports with runtime side effects, so `config.ts` can import
  * the table and the sanitizers during its own module evaluation. `getConfig()`
- * lives one hop away in `reasoning-args.ts` for exactly this reason: importing
+ * lives one hop away in `group-args.ts` for exactly this reason: importing
  * it here would make config.ts ⇄ reasoning.ts a real cycle, and whichever module
  * a caller reached first would decide whether `DEFAULT_REASONING_TABLE` was
  * initialised before `DEFAULT_CONFIG` read it.
  */
 import type {PiTaskConfig} from './config.js'
+import {CHILD_GROUPS, sanitizeGroupRecord, type ChildGroup} from './groups.js'
 
 /**
- * The child roles that share one reasoning setting.
- *
- * Grouped by JOB, not by spawn mechanism — two children that both go through
- * `runWorker` (a research worker and a verify gate) want different amounts of
- * thinking, while `refine` in phases.ts and `compress-label` in title-label.ts
- * want the same amount and share the `phase` cell.
- *
- * - `research`     the ad-hoc `pi-worker` subagent tool, and the fallback the four
- *                  research workers use when their own cell is unset
- * - `research:files` / `research:apis` / `research:context` / `research:tooling`
- *                  one cell per research worker, so a level can be paid for in
- *                  one worker without paying for it in the other three
- * - `phase`        refine, verify-tooling, grill, compose, critique, compress-label
- * - `planning`     /task-auto's planning children — clarify, decompose, and the
- *                  extract/coverage passes around them
- * - `plan`         /task-plan's question and answer children
- * - `gate`         enforce, verify, lint-fix, final-fix, recommend
- * - `extraction`   the --no-tools focused docs/fetch extractors
- * - `implementation` the host-session turn that writes the code (not a child)
+ * Re-exported because this module's whole public surface — the default table,
+ * `resolveReasoning`, `effectiveReasoning` — is typed on them, so an importer of
+ * those already needs them. The roster itself lives in groups.ts; `GROUP_BY_CHILD`
+ * and `groupForChild` are deliberately NOT re-exported, so a caller that wants
+ * the roster reaches for the roster.
  */
-export type ReasoningGroup =
-    | 'research'
-    | 'research:files'
-    | 'research:apis'
-    | 'research:context'
-    | 'research:tooling'
-    | 'phase'
-    | 'planning'
-    | 'plan'
-    | 'gate'
-    | 'extraction'
-    | 'implementation'
-
-export const REASONING_GROUPS: readonly ReasoningGroup[] = [
-    'research',
-    'research:files',
-    'research:apis',
-    'research:context',
-    'research:tooling',
-    'phase',
-    'planning',
-    'plan',
-    'gate',
-    'extraction',
-    'implementation'
-] as const
+export {CHILD_GROUPS, type ChildGroup}
 
 /**
  * The four profiles offered by /task-config.
@@ -120,7 +82,7 @@ export const REASONING_ON_LEVEL: GroupSetting = 'medium'
  * host's level. Any other value is a decision this project made for that
  * group's job, and `/task-config` mode `custom` overrides all of it.
  */
-export const DEFAULT_REASONING_TABLE: Readonly<Record<ReasoningGroup, GroupSetting>> = {
+export const DEFAULT_REASONING_TABLE: Readonly<Record<ChildGroup, GroupSetting>> = {
     research: 'medium',
 
     // The four research workers, one cell each.
@@ -143,86 +105,6 @@ export function sanitizeReasoningMode(value: unknown): ReasoningMode {
 }
 
 /**
- * Child NAME → reasoning group, for every child spawned under a name:
- * `runPhaseChild`, `runPlanningChild`, and the research workers' `spec.label`.
- *
- * WHY KEYED ON THE NAME
- * ---------------------
- * The name is the only identifier in scope at all three spawn paths (phases,
- * /task-auto planning, /task-plan), it is what the loader and the debug trail
- * already print, and it is the one thing a reader can check against the phase
- * list without following the call graph. Threading a group parameter through
- * `PhaseDeps` / `AutoDeps` instead would touch both orchestrators' dep bags to
- * express something the call site already says out loud.
- *
- * AN UNMAPPED NAME IS A BUILD FAILURE, not a silent `inherit`.
- * `reasoning-groups.test.ts` scans every literal child name under `src/task`
- * and fails if it is missing here. A defaulting lookup would let a phase added
- * later opt itself out of the table without anyone deciding to.
- *
- * The gate and extraction groups are NOT here: those children reach the model
- * through `groupThinkingArgs('gate' | 'extraction')` at call sites with no name
- * in scope (gate-deps.ts, fetch-core.ts, docs-core.ts, pi-worker-docs.ts). The
- * four research workers do have a name — their `spec.label` — so they are here.
- */
-export const REASONING_GROUP_BY_CHILD: Readonly<Record<string, ReasoningGroup>> = {
-    // ── phase: task/phases.ts + task/title-label.ts ──────────────────────────
-    refine: 'phase',
-    'verify-tooling': 'phase',
-    'grill-auto': 'phase',
-    'grill-gen': 'phase',
-    compose: 'phase',
-    critique: 'phase',
-    'critique-triage': 'phase',
-    'compress-label': 'phase',
-
-    // ── planning: task/auto-orchestrator.ts ──────────────────────────────────
-    'clarify-triage': 'planning',
-    'auto-clarify': 'planning',
-    'auto-decompose': 'planning',
-    'requirement-extract': 'planning',
-    'decompose-coverage': 'planning',
-    'coverage-map': 'planning',
-    'contract-extract': 'planning',
-    'launch-extract': 'planning',
-
-    // ── plan: task/plan-orchestrator.ts ──────────────────────────────────────
-    'plan-question': 'plan',
-    'plan-answer': 'plan',
-
-    // ── research: task/phases.ts `workerSpecs`, keyed on the spec's LABEL ─────
-    'worker:files': 'research:files',
-    'worker:apis': 'research:apis',
-    'worker:context': 'research:context',
-    'worker:tooling': 'research:tooling'
-}
-
-/**
- * The group a named child belongs to.
- *
- * Returns `undefined` for a name the table does not know, and the CALLER decides
- * what that means. `runPhaseChild` treats it as `inherit` — a child that reaches
- * the model with today's argv is always safe — while the test treats it as a
- * failure. That split is deliberate: the guard belongs at build time, where
- * someone can fix it, not at run time, where it would abort a user's task over a
- * missing table row.
- */
-export function reasoningGroupForChild(name: string): ReasoningGroup | undefined {
-    return REASONING_GROUP_BY_CHILD[name]
-}
-
-/**
- * For a `research:*` group, the group a stored config falls back to when its own
- * key is missing. Every other group maps to `undefined`.
- */
-const RESEARCH_SUBGROUP_PARENT: Readonly<Partial<Record<ReasoningGroup, ReasoningGroup>>> = {
-    'research:files': 'research',
-    'research:apis': 'research',
-    'research:context': 'research',
-    'research:tooling': 'research'
-}
-
-/**
  * Always returns a COMPLETE record, never a partial one.
  *
  * A hand-edited file missing a group, or one carrying a group from a future
@@ -230,27 +112,12 @@ const RESEARCH_SUBGROUP_PARENT: Readonly<Partial<Record<ReasoningGroup, Reasonin
  * `undefined`, and every call site would need its own fallback. Filling the gaps
  * here means the type is true at the only place that constructs the value.
  */
-export function sanitizeReasoningLevels(value: unknown): Record<ReasoningGroup, GroupSetting> {
-    const stored =
-        typeof value === 'object' && value !== null && !Array.isArray(value) ?
-            (value as Record<string, unknown>)
-        :   {}
-    const valid = (v: unknown): v is GroupSetting => REASONING_SETTINGS.includes(v as GroupSetting)
-    const out = {} as Record<ReasoningGroup, GroupSetting>
-    for (const group of REASONING_GROUPS) {
-        const stored_ = stored[group]
-        if (valid(stored_)) {
-            out[group] = stored_
-            continue
-        }
-        // A `research:*` key the stored config never had falls back to its
-        // parent `research` value, so a config written before the split keeps
-        // meaning what it meant.
-        const parent = RESEARCH_SUBGROUP_PARENT[group]
-        out[group] =
-            parent && valid(stored[parent]) ? stored[parent] : DEFAULT_REASONING_TABLE[group]
-    }
-    return out
+export function sanitizeReasoningLevels(value: unknown): Record<ChildGroup, GroupSetting> {
+    return sanitizeGroupRecord(
+        value,
+        (v): v is GroupSetting => REASONING_SETTINGS.includes(v as GroupSetting),
+        group => DEFAULT_REASONING_TABLE[group]
+    )
 }
 
 /**
@@ -259,9 +126,9 @@ export function sanitizeReasoningLevels(value: unknown): Record<ReasoningGroup, 
  *
  * `cfg` is required rather than defaulted to `getConfig()` so this module stays
  * import-free (see the header). Callers that want the live config use
- * `groupThinkingArgs` from reasoning-args.ts.
+ * `groupThinkingArgs` from group-args.ts.
  */
-export function resolveReasoning(group: ReasoningGroup, cfg: PiTaskConfig): GroupSetting {
+export function resolveReasoning(group: ChildGroup, cfg: PiTaskConfig): GroupSetting {
     switch (cfg.reasoningMode) {
         case 'off':
             return 'off'
@@ -282,9 +149,9 @@ export function resolveReasoning(group: ReasoningGroup, cfg: PiTaskConfig): Grou
  * asks the single-group question instead, through `resolveReasoning` — which is
  * the only place the four modes are interpreted.
  */
-export function effectiveReasoning(cfg: PiTaskConfig): Record<ReasoningGroup, GroupSetting> {
-    const out = {} as Record<ReasoningGroup, GroupSetting>
-    for (const group of REASONING_GROUPS) out[group] = resolveReasoning(group, cfg)
+export function effectiveReasoning(cfg: PiTaskConfig): Record<ChildGroup, GroupSetting> {
+    const out = {} as Record<ChildGroup, GroupSetting>
+    for (const group of CHILD_GROUPS) out[group] = resolveReasoning(group, cfg)
     return out
 }
 
@@ -298,7 +165,7 @@ export function thinkingArgs(setting: GroupSetting): string[] {
 }
 
 /** One honest sentence per group, for the /task-config rows. */
-export const REASONING_GROUP_HELP: Readonly<Record<ReasoningGroup, string>> = {
+export const REASONING_GROUP_HELP: Readonly<Record<ChildGroup, string>> = {
     research:
         'The pi-worker subagent tool, and the fallback for any research worker below '
         + 'whose own level is unset. Read-only exploration loops.',
@@ -328,4 +195,33 @@ export const REASONING_GROUP_HELP: Readonly<Record<ReasoningGroup, string>> = {
     implementation:
         'The main session turn that actually writes the code. Changing this briefly '
         + "changes pi's own thinking level, and puts it back afterwards."
+}
+
+/**
+ * One honest sentence per model row.
+ *
+ * They are NOT the reasoning help reworded. A model cell answers a different
+ * question — which machine does this work — and one of them costs money every
+ * turn rather than once per change, which is a thing the row has to say.
+ */
+export const MODEL_GROUP_HELP: Readonly<Record<ChildGroup, string>> = {
+    research:
+        'The pi-worker subagent tool, and the fallback for any research worker below. '
+        + 'Long read-only loops: a cheap fast model pays off here.',
+    'research:files': 'Research worker 1 of 4: maps which files the task will touch.',
+    'research:apis': 'Research worker 2 of 4: the symbols and signatures the task must call.',
+    'research:context': 'Research worker 3 of 4: how the project is put together.',
+    'research:tooling': 'Research worker 4 of 4: the commands that build, test and run it.',
+    phase:
+        'Refining your request, generating and answering the clarifying questions, '
+        + 'writing the spec, and critiquing it.',
+    planning: "/task-auto's planners: splitting a design document into tasks.",
+    plan: "/task-plan's interactive question-and-answer children.",
+    gate: 'The checks that run after code is written: verify, enforce, lint-fix, autofix.',
+    extraction: 'The small no-tools children that pull one answer out of a page or a docs chunk.',
+    implementation:
+        'The main session turn that writes the code — YOUR session, switched for the turn and '
+        + 'switched back. Unlike every row above, this one is not free: a model switch re-bills '
+        + 'the whole prompt as a cache miss, twice per task. Leave it on inherit unless you '
+        + 'want a different model than the one you are reading this in.'
 }

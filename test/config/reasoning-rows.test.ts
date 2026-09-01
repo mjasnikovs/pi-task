@@ -11,13 +11,18 @@ import {describe, expect, test} from 'bun:test'
 import {SettingsList} from '@earendil-works/pi-tui'
 import type {SettingsListTheme} from '@earendil-works/pi-tui'
 import {
+    applyGroupModel,
     applyReasoningLevel,
+    createSettingsPanel,
+    offeredLevels,
     panelItems,
     reasoningItems,
     reasoningRowLabel,
+    renderRows,
     syncRows,
     configRows,
-    SECTION_ID_PREFIX
+    SECTION_ID_PREFIX,
+    type ModelCatalog
 } from '../../src/config/register.js'
 
 /** The minimum theme SettingsList needs; none of it is asserted on. */
@@ -31,7 +36,7 @@ const listTheme = (): SettingsListTheme => ({
 import {DEFAULT_CONFIG, type PiTaskConfig} from '../../src/config/config.js'
 import {
     DEFAULT_REASONING_TABLE,
-    REASONING_GROUPS,
+    CHILD_GROUPS,
     REASONING_ON_LEVEL,
     REASONING_SETTINGS,
     resolveReasoning
@@ -64,16 +69,16 @@ describe('reasoningRowLabel', () => {
 
     test('the corner is derived, not hand-kept', () => {
         // Exactly one child per parent may carry the corner, and it must be the
-        // LAST one listed. A fifth worker appended to REASONING_GROUPS moves it
+        // LAST one listed. A fifth worker appended to CHILD_GROUPS moves it
         // without anyone editing this file.
-        const corners = REASONING_GROUPS.filter(g => reasoningRowLabel(g).includes('\u2514'))
-        const children = REASONING_GROUPS.filter(g => g.includes(':'))
+        const corners = CHILD_GROUPS.filter(g => reasoningRowLabel(g).includes('\u2514'))
+        const children = CHILD_GROUPS.filter(g => g.includes(':'))
         expect(corners).toHaveLength(new Set(children.map(g => g.split(':')[0])).size)
         expect(corners.at(-1)).toBe(children.at(-1))
     })
 
     test('a parentless group keeps the think: prefix', () => {
-        for (const group of REASONING_GROUPS.filter(g => !g.includes(':'))) {
+        for (const group of CHILD_GROUPS.filter(g => !g.includes(':'))) {
             expect(reasoningRowLabel(group)).toBe(`think: ${group}`)
         }
     })
@@ -93,9 +98,9 @@ describe('reasoningItems', () => {
         for (const mode of ['default', 'on', 'off', 'custom'] as const) {
             const cfg = draft({reasoningMode: mode})
             const rows = reasoningItems()
-            expect(rows).toHaveLength(REASONING_GROUPS.length)
+            expect(rows).toHaveLength(CHILD_GROUPS.length)
             for (const [i, row] of rows.entries()) {
-                expect(row.format(cfg)).toBe(resolveReasoning(REASONING_GROUPS[i]!, cfg))
+                expect(row.format(cfg)).toBe(resolveReasoning(CHILD_GROUPS[i]!, cfg))
             }
         }
     })
@@ -121,7 +126,7 @@ describe('reasoningItems', () => {
     test('the rows appear in the panel', () => {
         const ids = panelItems(draft(), [], []).map(i => i.id)
         expect(ids).toContain('reasoningMode')
-        for (const g of REASONING_GROUPS) expect(ids).toContain(`reason:${g}`)
+        for (const g of CHILD_GROUPS) expect(ids).toContain(`reason:${g}`)
     })
 
     test('every row id is unique', () => {
@@ -150,7 +155,7 @@ describe('applyReasoningLevel', () => {
         })
         applyReasoningLevel(cfg, 'gate', 'low')
         expect(cfg.reasoningLevels.gate).toBe('low')
-        for (const g of REASONING_GROUPS) {
+        for (const g of CHILD_GROUPS) {
             if (g === 'gate') continue
             expect(resolveReasoning(g, cfg)).toBe('off')
         }
@@ -207,7 +212,7 @@ describe('the rows do not go stale (the bug you saw)', () => {
         cfg.reasoningMode = 'off'
         syncRows(cfg, configRows([], []), list)
 
-        for (const g of REASONING_GROUPS) {
+        for (const g of CHILD_GROUPS) {
             const row = items.find(i => i.id === `reason:${g}`)!
             expect(row.currentValue, `think: ${g}`).toBe('off')
         }
@@ -231,7 +236,7 @@ describe('the rows do not go stale (the bug you saw)', () => {
 
         expect(items.find(i => i.id === 'reasoningMode')!.currentValue).toBe('custom')
         expect(items.find(i => i.id === 'reason:gate')!.currentValue).toBe('medium')
-        for (const g of REASONING_GROUPS) {
+        for (const g of CHILD_GROUPS) {
             if (g === 'gate') continue
             expect(items.find(i => i.id === `reason:${g}`)!.currentValue, g).toBe('off')
         }
@@ -250,7 +255,7 @@ describe('the rows do not go stale (the bug you saw)', () => {
                 () => {}
             )
             syncRows(cfg, configRows([], []), list)
-            for (const g of REASONING_GROUPS) {
+            for (const g of CHILD_GROUPS) {
                 const row = items.find(i => i.id === `reason:${g}`)!
                 expect(row.currentValue, `${mode}/${g}`).toBe(resolveReasoning(g, cfg))
             }
@@ -320,6 +325,128 @@ describe('the menu is divided into titled sections', () => {
         const start = rows.indexOf('reasoningMode')
         const nextHeader = rows.findIndex((id, i) => i > start && id.startsWith(SECTION_ID_PREFIX))
         const block = rows.slice(start, nextHeader)
-        for (const g of REASONING_GROUPS) expect(block).toContain(`reason:${g}`)
+        for (const g of CHILD_GROUPS) expect(block).toContain(`reason:${g}`)
+    })
+})
+
+// ─── narrowing, and the re-clamp that has to come with it ────────────────────
+
+const NON_REASONING = {reasoning: false}
+const FULL = {reasoning: true}
+/** Declares xhigh, which this menu excludes on purpose. */
+const DECLARES_XHIGH = {reasoning: true, thinkingLevelMap: {xhigh: 'xhigh'}}
+
+const cat = (facts: ModelCatalog['facts'], specs = ['acme/small']): ModelCatalog => ({specs, facts})
+
+describe('the thinking picker narrows to what the model can honour', () => {
+    test('a reasoning:false model offers only inherit and off', () => {
+        expect(offeredLevels(NON_REASONING)).toEqual(['inherit', 'off'])
+    })
+
+    test("an unknown model offers everything — today's behaviour", () => {
+        expect(offeredLevels(undefined)).toEqual([...REASONING_SETTINGS])
+    })
+
+    test('a model declaring xhigh does NOT smuggle xhigh into this menu', () => {
+        // supportedThinkingLevels returns the whole ladder. REASONING_SETTINGS
+        // excludes xhigh/max on purpose, because pi's own UI may not offer them.
+        expect(offeredLevels(DECLARES_XHIGH)).toEqual([...REASONING_SETTINGS])
+        expect(offeredLevels(DECLARES_XHIGH)).not.toContain('xhigh')
+    })
+
+    test('the submenu is built at ENTER-time, from the LIVE draft', () => {
+        // `values` is static and computed once. The narrowing depends on a cell
+        // the user changes while the panel is open, so a snapshot would offer
+        // levels the chosen model erases.
+        const catalog = cat(spec => (spec === 'acme/small' ? NON_REASONING : FULL))
+        const row = reasoningItems(catalog).find(i => i.id === 'reason:gate')!
+        const cfg = draft()
+        expect(row.submenu!(cfg).map(o => o.value)).toEqual([...REASONING_SETTINGS])
+        cfg.groupModels = {...cfg.groupModels, gate: 'acme/small'}
+        expect(row.submenu!(cfg).map(o => o.value)).toEqual(['inherit', 'off'])
+    })
+})
+
+describe("choosing a model re-clamps that group's level in the same write", () => {
+    test('a level the new model cannot honour is moved, not frozen', () => {
+        // Narrowing the picker alone would freeze a lie into a cell it has just
+        // made unconfigurable.
+        const cfg = draft({reasoningMode: 'custom'})
+        cfg.reasoningLevels = {...cfg.reasoningLevels, gate: 'high'}
+        applyGroupModel(
+            cfg,
+            'gate',
+            'acme/small',
+            cat(() => NON_REASONING)
+        )
+        expect(resolveReasoning('gate', cfg)).toBe('off')
+    })
+
+    test('it fires in mode `on`, where the STORED cell says nothing', () => {
+        // resolveReasoning is the only place the four modes are read; in `on`
+        // every group runs at medium whatever the table holds. Comparing the
+        // stored cell would see no clamp and stay silent about a real lie.
+        const cfg = draft({reasoningMode: 'on'})
+        expect(resolveReasoning('gate', cfg)).toBe(REASONING_ON_LEVEL)
+        applyGroupModel(
+            cfg,
+            'gate',
+            'acme/small',
+            cat(() => NON_REASONING)
+        )
+        expect(resolveReasoning('gate', cfg)).toBe('off')
+    })
+
+    test('a fully-capable model does NOT gratuitously flip the mode to custom', () => {
+        const cfg = draft({reasoningMode: 'default'})
+        applyGroupModel(
+            cfg,
+            'gate',
+            'acme/small',
+            cat(() => FULL)
+        )
+        expect(cfg.reasoningMode).toBe('default')
+    })
+
+    test('an unresolvable model leaves the level alone', () => {
+        const cfg = draft({reasoningMode: 'default'})
+        applyGroupModel(
+            cfg,
+            'gate',
+            'acme/small',
+            cat(() => undefined)
+        )
+        expect(cfg.reasoningMode).toBe('default')
+        expect(cfg.groupModels.gate).toBe('acme/small')
+    })
+})
+
+describe('a submenu suspends the inert-row walk', () => {
+    test('one arrow press inside a picker reaches it exactly once', () => {
+        // SkipInertRows replays the key ONCE PER ROW IT SKIPS, and SettingsList
+        // forwards everything to an open submenu. So the row that proves this
+        // has to be the LAST of its section: after `model: implementation` come a
+        // gap and the `reasoning` header, so one press would arrive THREE times
+        // and pick the wrong option. A row with a selectable neighbour cannot
+        // show the bug at all.
+        const catalog = cat(() => FULL, ['acme/a', 'acme/b', 'acme/c', 'acme/d'])
+        const cfg = draft()
+        const written: Array<[string, string]> = []
+        const items = renderRows(cfg, configRows([], [], catalog))
+        const panel = createSettingsPanel(
+            items,
+            {fg: (_c: string, t: string) => t, bold: (t: string) => t} as never,
+            (id, value) => written.push([id, value]),
+            () => {}
+        )
+        const selectable = items.filter(i => !i.id.startsWith(SECTION_ID_PREFIX))
+        const steps = selectable.findIndex(i => i.id === 'model:implementation')
+        for (let i = 0; i < steps; i++) panel.handleInput('\x1b[B')
+        panel.handleInput('\r')
+        panel.handleInput('\x1b[B')
+        panel.handleInput('\r')
+        // Option 0 is `inherit`; one press lands on option 1. Three presses land
+        // on `acme/c`, which is what an unsuspended walk produces.
+        expect(written).toEqual([['model:implementation', 'acme/a']])
     })
 })

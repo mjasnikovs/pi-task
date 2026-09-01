@@ -16,9 +16,9 @@ import type {ExtensionAPI} from '@earendil-works/pi-coding-agent'
 import {Text} from '@earendil-works/pi-tui'
 import {Type} from '@sinclair/typebox'
 import {getConfig} from '../config/config.js'
-import {groupThinkingArgs} from '../config/reasoning-args.js'
+import {groupChildArgs} from '../config/group-args.js'
 import {runWorker} from './pi-worker-core.js'
-import {getParentContextWindow} from '../task/context-usage.js'
+import {contextWindowForGroup} from '../task/context-usage.js'
 import {
     childFailureReason,
     formatChildFailure,
@@ -83,8 +83,8 @@ export function registerPiWorker(pi: ExtensionAPI): void {
                 // this codebase passes `-m`, so the parent's model IS the child's
                 // model and its window is the honest one. Without this the churn
                 // rule cannot fire — see RunWorkerInput.contextWindow.
-                contextWindow: getParentContextWindow(ctx) || 'unknown',
-                thinking: groupThinkingArgs('research')
+                contextWindow: contextWindowForGroup(ctx, 'research') || 'unknown',
+                groupArgs: groupChildArgs('research')
             })
             const details: WorkerDetails = {exitCode: result.exitCode}
 

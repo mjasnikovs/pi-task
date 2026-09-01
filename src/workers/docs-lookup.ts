@@ -39,10 +39,11 @@ export interface DocsLookupInput {
     signal?: AbortSignal
     spawn?: SpawnFn
     /**
-     * The `extraction` group's `--thinking` fragment. Resolved by the CALLER so
-     * this module — like the extractor it wraps — never reads ambient config.
+     * The `extraction` group's argv fragment — its model and its thinking level.
+     * Resolved by the CALLER so this module, like the extractor it wraps, never
+     * reads ambient config.
      */
-    thinking: readonly string[]
+    groupArgs: readonly string[]
 }
 
 export type DocsLookup =
@@ -74,7 +75,7 @@ export async function docsLookup(input: DocsLookupInput): Promise<DocsLookup> {
         cwd: input.cwd,
         signal: input.signal,
         spawn: input.spawn,
-        thinking: input.thinking,
+        groupArgs: input.groupArgs,
         abortedMessage: input.corpus.abortedMessage
     })
     if (!extraction.ok) return {kind: 'failed', extraction}

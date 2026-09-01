@@ -51,7 +51,7 @@ const run = (corpus: DocsCorpus, child: ReturnType<typeof fakeChild>) =>
         query: 'what does greet return?',
         cwd: process.cwd(),
         spawn: child.spawn,
-        thinking: ['--thinking', 'off']
+        groupArgs: ['--thinking', 'off']
     })
 
 const PKG = {

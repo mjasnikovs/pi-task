@@ -69,7 +69,8 @@ import {assessRunnerGlobs, runnerGlobVerifyFindings} from './runner-globs.js'
 import {captureGitState, reconcileGitState, type ReconcileResult} from './git-state-guard.js'
 import {runWorker} from '../workers/pi-worker-core.js'
 import {getConfig} from '../config/config.js'
-import {groupThinkingArgs} from '../config/reasoning-args.js'
+import {groupChildArgs} from '../config/group-args.js'
+import {contextWindowForGroup} from './context-usage.js'
 import {makeDebugAppender} from './debug-log.js'
 import {startAutoLoader} from './widget.js'
 import {ChildStatus} from './child-status.js'
@@ -729,7 +730,11 @@ export function buildGateDeps(params: {
             streamInactivityMs: getConfig().streamInactivityMs,
             // Read per gateChild() call, like its two neighbours, so a
             // /task-config change lands on the next gate without a restart.
-            thinking: groupThinkingArgs('gate'),
+            groupArgs: groupChildArgs('gate'),
+            // `gateCtx` rather than the run's own window: a run spans several
+            // groups, and a window smaller than the child's real one makes the
+            // churn rule fire early and kill a healthy child.
+            contextWindow: contextWindowForGroup(gateCtx, 'gate'),
             status,
             runWorker,
             makeDebugAppender,

@@ -17,7 +17,7 @@ import {
     THINKING_LADDER,
     type ReasoningModelFacts
 } from '../../src/shared/reasoning-capability.js'
-import {REASONING_GROUPS, type GroupSetting} from '../../src/config/reasoning.js'
+import {CHILD_GROUPS, type GroupSetting} from '../../src/config/reasoning.js'
 
 /** A map declaring every level, with high/xhigh/max all folded onto xhigh —
  *  the shape a real local-model entry takes. Its extended levels are DECLARED,
@@ -115,29 +115,38 @@ describe('clampToModel', () => {
 })
 
 describe('reasoningMismatches', () => {
-    const every = (
-        setting: GroupSetting
-    ): Record<(typeof REASONING_GROUPS)[number], GroupSetting> =>
-        Object.fromEntries(REASONING_GROUPS.map(group => [group, setting])) as Record<
-            (typeof REASONING_GROUPS)[number],
+    const every = (setting: GroupSetting): Record<(typeof CHILD_GROUPS)[number], GroupSetting> =>
+        Object.fromEntries(CHILD_GROUPS.map(group => [group, setting])) as Record<
+            (typeof CHILD_GROUPS)[number],
             GroupSetting
         >
+
+    /** The same model for every group — the all-`inherit`-models case. */
+    const one =
+        (facts: ReasoningModelFacts | undefined, name = 'acme/one') =>
+        () =>
+            facts === undefined ? undefined : {name, ...facts}
 
     test('says nothing when every group inherits — the shipped state', () => {
         // The real anti-nag: an all-`inherit` table asks for nothing, so nothing
         // can be erased and even a reasoning:false model warrants no warning.
         // Setting a group back to inherit is therefore what silences the hint.
-        expect(reasoningMismatches({reasoning: false}, every('inherit'))).toEqual([])
+        expect(reasoningMismatches(one({reasoning: false}), every('inherit'))).toEqual([])
     })
 
-    test('says nothing when no model has resolved yet', () => {
-        expect(reasoningMismatches(undefined, every('medium'))).toEqual([])
+    test('says nothing for a group whose model has not resolved', () => {
+        expect(reasoningMismatches(one(undefined), every('medium'))).toEqual([])
     })
 
     test('reports every group a reasoning:false model will erase', () => {
-        const out = reasoningMismatches({reasoning: false}, every('medium'))
-        expect(out).toHaveLength(REASONING_GROUPS.length)
-        expect(out[0]).toEqual({group: REASONING_GROUPS[0]!, wanted: 'medium', actual: 'off'})
+        const out = reasoningMismatches(one({reasoning: false}), every('medium'))
+        expect(out).toHaveLength(CHILD_GROUPS.length)
+        expect(out[0]).toEqual({
+            group: CHILD_GROUPS[0]!,
+            modelName: 'acme/one',
+            wanted: 'medium',
+            actual: 'off'
+        })
     })
 
     test('reports the OFF direction too', () => {
@@ -145,14 +154,38 @@ describe('reasoningMismatches', () => {
             reasoning: true,
             thinkingLevelMap: {off: null, minimal: null, low: null, medium: 'medium'}
         }
-        const out = reasoningMismatches(model, every('off'))
-        expect(out).toHaveLength(REASONING_GROUPS.length)
+        const out = reasoningMismatches(one(model), every('off'))
+        expect(out).toHaveLength(CHILD_GROUPS.length)
         expect(out[0]?.wanted).toBe('off')
         expect(out[0]?.actual).toBe('medium')
     })
 
     test('says nothing when the model honours what was asked', () => {
-        expect(reasoningMismatches(QWEN38, every('medium'))).toEqual([])
-        expect(reasoningMismatches(QWEN38, every('off'))).toEqual([])
+        expect(reasoningMismatches(one(QWEN38), every('medium'))).toEqual([])
+        expect(reasoningMismatches(one(QWEN38), every('off'))).toEqual([])
+    })
+
+    test('TWO groups on two different models each carry their OWN name', () => {
+        // The whole reason `modelFor` is a function. A single leading
+        // `model "X" will not run …` is a lie about what was checked the moment
+        // two groups differ.
+        const out = reasoningMismatches(
+            group =>
+                group === 'gate' ?
+                    {name: 'acme/dumb', reasoning: false}
+                :   {name: 'acme/smart', reasoning: true},
+            {...every('inherit'), gate: 'high', phase: 'high'}
+        )
+        expect(out).toEqual([
+            {group: 'gate', modelName: 'acme/dumb', wanted: 'high', actual: 'off'}
+        ])
+    })
+
+    test('a group whose model is unresolvable is skipped, not reported', () => {
+        const out = reasoningMismatches(
+            group => (group === 'gate' ? undefined : {name: 'acme/one', reasoning: false}),
+            {...every('inherit'), gate: 'high'}
+        )
+        expect(out).toEqual([])
     })
 })

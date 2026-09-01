@@ -8,6 +8,7 @@ import {registerRemote} from './remote/register.js'
 import {registerCommandWatchdog} from './task/command-watchdog.js'
 import {registerStreamWatchdog} from './task/stream-watchdog.js'
 import {registerImplementationGuards} from './task/implementation-guards.js'
+import {registerModelHoldRestore} from './task/model-hold-stash.js'
 
 export default function (pi: ExtensionAPI): void {
     registerConfig(pi)
@@ -19,4 +20,5 @@ export default function (pi: ExtensionAPI): void {
     registerCommandWatchdog(pi)
     registerStreamWatchdog(pi)
     registerImplementationGuards(pi)
+    registerModelHoldRestore(pi)
 }

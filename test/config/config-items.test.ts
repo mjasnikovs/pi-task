@@ -104,7 +104,7 @@ describe('every DISCOVERED row obeys the same contract', () => {
 
     test('the discovered families are actually in there', () => {
         // Guards against a vacuous suite: every assertion below iterates `rows`.
-        for (const prefix of ['reason:', 'tool:', 'ext:']) {
+        for (const prefix of ['reason:', 'model:', 'tool:', 'ext:']) {
             expect(
                 rows.some(r => r.id.startsWith(prefix)),
                 prefix

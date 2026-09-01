@@ -8,9 +8,10 @@ import {
     sanitizeReasoningLevels,
     sanitizeReasoningMode,
     type GroupSetting,
-    type ReasoningGroup,
+    type ChildGroup,
     type ReasoningMode
 } from './reasoning.js'
+import {DEFAULT_GROUP_MODELS, sanitizeGroupModels} from './group-models.js'
 import {DEFAULT_STREAM_INACTIVITY_MS} from '../shared/stream-watchdog.js'
 
 export interface PiTaskConfig {
@@ -168,7 +169,21 @@ export interface PiTaskConfig {
      * survives the watchdog being turned off. Its sanitizer always returns a
      * complete record, so no consumer needs a per-key fallback.
      */
-    reasoningLevels: Record<ReasoningGroup, GroupSetting>
+    reasoningLevels: Record<ChildGroup, GroupSetting>
+    /**
+     * The per-group MODEL, as a `provider/id` string, or `inherit` to emit no
+     * `--model` and let the child resolve pi's saved default as it always has.
+     *
+     * DEFAULT: every cell `inherit`, which makes every child's argv
+     * byte-identical to a build without this field. There is no mode enum and no
+     * shipped table — a model id is machine-local, so there is nothing to ship.
+     *
+     * Its sanitizer checks SHAPE, never existence: a spec naming a model this
+     * machine cannot resolve survives, because the alternative is deleting a
+     * setting the user made on their other machine. The once-per-session
+     * resolution check names it instead.
+     */
+    groupModels: Record<ChildGroup, string>
 }
 
 /** How verbose the `.pi-tasks/*-debug.log` trail is. See {@link PiTaskConfig.debugLogs}. */
@@ -283,7 +298,10 @@ export const DEFAULT_CONFIG: PiTaskConfig = {
     // DEFAULT: the shipped per-group table. A cell left at `inherit` emits no
     // --thinking flag, so that child keeps the host's own level.
     reasoningMode: 'default',
-    reasoningLevels: {...DEFAULT_REASONING_TABLE}
+    reasoningLevels: {...DEFAULT_REASONING_TABLE},
+    // INHERIT everywhere. Nothing is measured here and nothing can be: which
+    // models exist is a property of the machine, not of pi-task.
+    groupModels: {...DEFAULT_GROUP_MODELS}
 }
 
 /**
@@ -338,7 +356,8 @@ export const CONFIG_LOADERS: {
     streamInactivityMs: sanitizeStreamInactivityMs,
     debugLogs: sanitizeDebugLogs,
     reasoningMode: sanitizeReasoningMode,
-    reasoningLevels: sanitizeReasoningLevels
+    reasoningLevels: sanitizeReasoningLevels,
+    groupModels: sanitizeGroupModels
 }
 
 /**

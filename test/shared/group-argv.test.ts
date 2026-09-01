@@ -1,7 +1,7 @@
 /**
- * WHERE `--thinking` MAY AND MAY NOT APPEAR IN A CHILD'S ARGV.
+ * WHERE `--model` AND `--thinking` MAY AND MAY NOT APPEAR IN A CHILD'S ARGV.
  *
- * Three properties.
+ * Five properties.
  *
  *  1. Given the EMPTY fragment, every builder emits no `--thinking` at all, so
  *     an `inherit` group leaves the child's argv exactly as it would be with no
@@ -27,10 +27,14 @@ import {focusedChildArgs} from '../../src/workers/focused-extractor.js'
 import {DEFAULT_CONFIG} from '../../src/config/config.js'
 import {
     DEFAULT_REASONING_TABLE,
-    REASONING_GROUPS,
+    CHILD_GROUPS,
     resolveReasoning,
     thinkingArgs
 } from '../../src/config/reasoning.js'
+import {groupChildArgs} from '../../src/config/group-args.js'
+import {MODEL_INHERIT} from '../../src/config/group-models.js'
+import {focusedChildArgs as focused} from '../../src/workers/focused-extractor.js'
+import type {PiTaskConfig} from '../../src/config/config.js'
 
 describe('childBaseArgs stays universal', () => {
     test('never emits --thinking, in any config state', () => {
@@ -135,10 +139,10 @@ describe('what the shipped table puts on the wire', () => {
     test('every group is accounted for', () => {
         // A group added without a line above would otherwise be silently
         // unasserted, which is how a cell ships unnoticed.
-        expect(Object.keys(EXPECTED).sort()).toEqual([...REASONING_GROUPS].sort())
+        expect(Object.keys(EXPECTED).sort()).toEqual([...CHILD_GROUPS].sort())
     })
 
-    for (const group of REASONING_GROUPS) {
+    for (const group of CHILD_GROUPS) {
         test(`${group} resolves to ${EXPECTED[group]!.join(' ') || 'no flag'}`, () => {
             expect(thinkingArgs(resolveReasoning(group, DEFAULT_CONFIG))).toEqual(EXPECTED[group]!)
         })
@@ -174,5 +178,74 @@ describe('what the shipped table puts on the wire', () => {
             '--tools',
             'read'
         ])
+    })
+})
+
+/** DEFAULT_CONFIG with one group's model cell set, and nothing else touched. */
+const withModel = (group: string, spec: string): PiTaskConfig => ({
+    ...DEFAULT_CONFIG,
+    groupModels: {...DEFAULT_CONFIG.groupModels, [group]: spec}
+})
+
+describe('the model half of the fragment', () => {
+    test('the SHIPPED table adds nothing — argv is byte-identical to the pre-model build', () => {
+        // Decision 3, as code. Every cell ships `inherit`, so for every group the
+        // combined fragment is exactly the thinking fragment and nothing else.
+        for (const group of CHILD_GROUPS) {
+            expect(DEFAULT_CONFIG.groupModels[group]).toBe(MODEL_INHERIT)
+            expect(groupChildArgs(group, DEFAULT_CONFIG)).toEqual(
+                thinkingArgs(resolveReasoning(group, DEFAULT_CONFIG))
+            )
+        }
+    })
+
+    test('--model comes FIRST, then --thinking', () => {
+        // pi's parser is a flat loop and does not care. A human diffing two runs
+        // does: the identity of the child, then the dial on it.
+        expect(groupChildArgs('gate', withModel('gate', 'acme/small'))).toEqual([
+            '--model',
+            'acme/small',
+            '--thinking',
+            'off'
+        ])
+    })
+
+    test('a model on an `inherit`-thinking group emits --model alone', () => {
+        expect(DEFAULT_REASONING_TABLE.plan).toBe('inherit')
+        expect(groupChildArgs('plan', withModel('plan', 'acme/big'))).toEqual([
+            '--model',
+            'acme/big'
+        ])
+    })
+
+    test('--provider NEVER appears, in any config state', () => {
+        // Adding it is what converts pi's loud "model not found, exit 1" into
+        // buildFallbackModel's synthetic model at exit 0. There is no config that
+        // may produce it, so this quantifies over every group and both builders.
+        for (const group of CHILD_GROUPS) {
+            for (const spec of [MODEL_INHERIT, 'acme/small', 'openrouter/z-ai/glm-4.6']) {
+                const argv = groupChildArgs(group, withModel(group, spec))
+                expect(argv).not.toContain('--provider')
+                expect(childArgs('read', [], argv)).not.toContain('--provider')
+                expect(focused(argv)).not.toContain('--provider')
+            }
+        }
+    })
+
+    test('an OpenRouter-style id keeps both its slashes as ONE argv token', () => {
+        // Splitting on the LAST slash would invent the provider `openrouter/z-ai`.
+        // The spec never gets split for argv at all; this pins that.
+        expect(groupChildArgs('phase', withModel('phase', 'openrouter/z-ai/glm-4.6'))).toEqual([
+            '--model',
+            'openrouter/z-ai/glm-4.6',
+            '--thinking',
+            'off'
+        ])
+    })
+
+    test('childBaseArgs never carries --model either', () => {
+        expect(CHILD_BASE_ARGS).not.toContain('--model')
+        expect(childBaseArgs()).not.toContain('--model')
+        expect(childBaseArgs(['/some/ext.js'])).not.toContain('--model')
     })
 })
