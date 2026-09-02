@@ -30,7 +30,12 @@
  * line-for-line identical to it, ladder included. Nothing here imports pi-ai, so
  * an upstream change will not fail a test — the two have to be re-compared.
  */
-import {CHILD_GROUPS, type ChildGroup, type GroupSetting} from '../config/reasoning.js'
+import {
+    CHILD_GROUPS,
+    REASONING_SETTINGS,
+    type ChildGroup,
+    type GroupSetting
+} from '../config/reasoning.js'
 
 /**
  * pi's own level ladder, in order — the same seven names, in the same sequence,
@@ -93,6 +98,40 @@ export function clampToModel(model: ReasoningModelFacts, level: LadderLevel): La
         if (available.includes(candidate)) return candidate
     }
     return available[0] ?? 'off'
+}
+
+/**
+ * The settings a /task-config row may offer, given the model its group runs on.
+ *
+ * The INTERSECTION with `REASONING_SETTINGS`, not `supportedThinkingLevels`
+ * directly: that returns the whole ladder including `xhigh` and `max`, which
+ * the menu excludes on purpose (see config/reasoning.ts) because pi's own UI
+ * may not offer them. A model declaring `xhigh` must not smuggle it in.
+ */
+export function offeredLevels(facts: ReasoningModelFacts | undefined): GroupSetting[] {
+    if (facts === undefined) return [...REASONING_SETTINGS]
+    const supported = supportedThinkingLevels(facts)
+    return REASONING_SETTINGS.filter(s => s === 'inherit' || supported.includes(s as LadderLevel))
+}
+
+/**
+ * The setting a row will really run at, inside the menu's own vocabulary.
+ *
+ * ONE function for the picker's preselect and the writer, because they used to
+ * be two copies of the same clamp and only one re-projected into
+ * {@link offeredLevels}. `clampToModel` walks UP first and knows the whole
+ * ladder, so a model declaring `xhigh` can land on a level the menu excludes;
+ * a writer that stored it would put a value in the table that no row can show.
+ * The highest OFFERED level is the honest neighbour of an excluded one.
+ */
+export function effectiveSetting(
+    facts: ReasoningModelFacts | undefined,
+    wanted: GroupSetting
+): GroupSetting {
+    if (facts === undefined || wanted === 'inherit') return wanted
+    const offered = offeredLevels(facts)
+    const clamped = clampToModel(facts, wanted) as GroupSetting
+    return offered.includes(clamped) ? clamped : (offered.at(-1) ?? 'inherit')
 }
 
 /** One group whose configured setting the model it runs on will not honour. */

@@ -20,7 +20,7 @@
  * silences it: an all-`inherit` table yields no mismatches for any model.
  */
 
-import type {ExtensionAPI, ExtensionContext} from '@earendil-works/pi-coding-agent'
+import type {ExtensionAPI} from '@earendil-works/pi-coding-agent'
 import {getConfig} from '../config/config.js'
 import {effectiveReasoning, type GroupSetting, type ChildGroup} from '../config/reasoning.js'
 import {
@@ -28,7 +28,7 @@ import {
     type GroupModelFacts,
     type ReasoningMismatch
 } from '../shared/reasoning-capability.js'
-import {MODEL_INHERIT, splitSpec} from '../config/group-models.js'
+import {resolveModel} from '../shared/model-resolve.js'
 import {probeChatTemplateCaps, type ChatTemplateCaps} from '../shared/model-endpoint.js'
 import {registerSessionHint} from './session-hint.js'
 
@@ -112,7 +112,7 @@ export function registerReasoningWarning(
 ): void {
     registerSessionHint(pi, WIDGET_KEY, ctx => {
         const facts = (g: ChildGroup): GroupModelFacts | undefined =>
-            groupModelFacts(ctx, readSpecs()[g])
+            resolveModel(ctx, readSpecs()[g])
         const mismatches = reasoningMismatches(facts, readSettings())
         const base = formatReasoningWarning(mismatches)
         if (base === null) return null
@@ -148,29 +148,6 @@ export function registerReasoningWarning(
             })
         }
     })
-}
-
-/** What one group runs on, as {@link reasoningMismatches} wants it. */
-function groupModelFacts(ctx: ExtensionContext, spec: string): GroupModelFacts | undefined {
-    // `inherit` is the session's model. That is decision 3 of the model table —
-    // children are NOT switched to follow the host — and the honest value is
-    // settings.json's default, which need not be the session's. Naming the
-    // session's model is still the better of the two: it is the one the user can
-    // see, and on every machine with one provider the two agree.
-    const model =
-        spec === MODEL_INHERIT ?
-            ctx.model
-        :   (() => {
-                const parts = splitSpec(spec)
-                return parts ? ctx.modelRegistry.find(parts.provider, parts.id) : undefined
-            })()
-    if (!model) return undefined
-    return {
-        name: model.name || model.id,
-        reasoning: model.reasoning,
-        ...(model.thinkingLevelMap === undefined ? {} : {thinkingLevelMap: model.thinkingLevelMap}),
-        ...(model.baseUrl ? {baseUrl: model.baseUrl} : {})
-    }
 }
 
 /** The distinct servers behind a set of mismatches, deduped by URL. */

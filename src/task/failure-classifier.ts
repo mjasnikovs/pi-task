@@ -7,14 +7,8 @@ import type {ExtensionCommandContext} from '@earendil-works/pi-coding-agent'
 import {updateTaskFrontMatter} from './task-io.js'
 import {flashTerminalWidget} from './widget.js'
 import {publishLifecycleNotice} from '../remote/bridge.js'
-import {
-    BackendDownError,
-    CommandTimeoutError,
-    LoopExhaustedError,
-    LeakedToolCallError,
-    ModelError,
-    USER_CANCELLED
-} from './child-runner.js'
+import {ChildFailureError, USER_CANCELLED} from './child-runner.js'
+import {streamStallCause} from '../shared/stream-watchdog.js'
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -30,96 +24,105 @@ export interface FailureClass {
 
 // ─── Classifier ──────────────────────────────────────────────────────────────
 
+const failed = (reason: string, flash: string, notify: string): FailureClass => ({
+    state: 'failed',
+    reason,
+    flash,
+    notify,
+    level: 'error'
+})
+
+/**
+ * What one phase child failure says to the user. A switch over the cause, so a
+ * new arm cannot be added to `ChildFailure` without a notice.
+ */
+function classifyChildFailure(e: ChildFailureError): FailureClass {
+    const f = e.failure
+    switch (f.kind) {
+        case 'stalled':
+            return failed(
+                `model_unreachable: ${e.message}`,
+                'model_unreachable',
+                'failed: model unreachable — restart the model, then resume.'
+            )
+        // The fix is in the SPEC, not the model, so the notify says which command.
+        case 'command-timeout':
+            return failed(
+                e.message.slice(0, 200),
+                'command_timeout',
+                `failed: \`${f.toolName}\` never returned on any attempt. Resume to bound it in VERIFY.`
+            )
+        case 'loop':
+            return failed(
+                `loop detected ${f.strikes}× in ${e.phase}`,
+                'loop_detected',
+                `failed: ${e.phase} loop detected ${f.strikes}×. Resume to retry.`
+            )
+        case 'leaked-tool-call':
+            return failed(
+                `leaked tool call in ${e.phase}: ${f.text.trim()}`,
+                'leaked_tool_call',
+                `failed: ${e.phase} wrote a tool call as text instead of running it — it never executed. Resume to retry.`
+            )
+        case 'model-error':
+        case 'stream-stall': {
+            const cause = f.kind === 'model-error' ? f.cause : streamStallCause(f.idleMs)
+            return failed(
+                `model_error in ${e.phase}: ${cause.slice(0, 160)}`,
+                'model_error',
+                `failed: ${e.phase} — model error: ${cause.slice(0, 120)}. Restart the model, then resume.`
+            )
+        }
+        case 'worker-timeout':
+            return failed(
+                e.message.slice(0, 200),
+                'child_timeout',
+                `failed: ${e.phase} ran out of time on every attempt. Resume to retry.`
+            )
+        case 'aborted':
+        case 'exit':
+        case 'empty-answer':
+            return unreachable(e.message) ?? generic(e.message)
+    }
+}
+
+const generic = (msg: string): FailureClass =>
+    failed(msg.slice(0, 200), msg.slice(0, 80), `failed: ${msg.slice(0, 120)}`)
+
+/**
+ * A failure whose only evidence of a dead backend is an errno in its text: a
+ * child's stderr, the research phase's own network calls, a probe.
+ */
+function unreachable(msg: string): FailureClass | undefined {
+    if (!/ECONNREFUSED|fetch failed|connect/i.test(msg)) return undefined
+    return failed(
+        `model_unreachable: ${msg.slice(0, 120)}`,
+        'model_unreachable',
+        'failed: model unreachable.'
+    )
+}
+
 export function classifyFailure(err: unknown, aborted: boolean): FailureClass {
     const msg = err instanceof Error ? err.message : String(err)
     if (aborted || msg === USER_CANCELLED) {
         return {state: 'cancelled', notify: 'cancelled.', level: 'warning'}
     }
-    // Classified by TYPE, above the message-sniffing branch below: this is the one
-    // case where the probe positively established the endpoint did not answer, and
-    // its message names no errno for that branch to match.
-    if (err instanceof BackendDownError) {
-        return {
-            state: 'failed',
-            reason: `model_unreachable: ${err.message}`,
-            flash: 'model_unreachable',
-            notify: 'failed: model unreachable — restart the model, then resume.',
-            level: 'error'
-        }
-    }
-    // The fix is in the SPEC, not the model, so the notify says which command.
-    if (err instanceof CommandTimeoutError) {
-        return {
-            state: 'failed',
-            reason: err.message.slice(0, 200),
-            flash: 'command_timeout',
-            notify:
-                `failed: \`${err.kill.toolName}\` never returned on any attempt. `
-                + `Resume to bound it in VERIFY.`,
-            level: 'error'
-        }
-    }
-    if (err instanceof LoopExhaustedError) {
-        return {
-            state: 'failed',
-            reason: `loop detected ${err.history.length}× in ${err.phase}`,
-            flash: 'loop_detected',
-            notify: `failed: ${err.phase} loop detected ${err.history.length}×. Resume to retry.`,
-            level: 'error'
-        }
-    }
-    if (err instanceof LeakedToolCallError) {
-        return {
-            state: 'failed',
-            reason: `leaked tool call in ${err.phase}: ${err.marker.trim()}`,
-            flash: 'leaked_tool_call',
-            notify: `failed: ${err.phase} wrote a tool call as text instead of running it — it never executed. Resume to retry.`,
-            level: 'error'
-        }
-    }
-    if (err instanceof ModelError) {
-        return {
-            state: 'failed',
-            reason: `model_error in ${err.phase}: ${err.cause.slice(0, 160)}`,
-            flash: 'model_error',
-            notify: `failed: ${err.phase} — model error: ${err.cause.slice(0, 120)}. Restart the model, then resume.`,
-            level: 'error'
-        }
-    }
+    if (err instanceof ChildFailureError) return classifyChildFailure(err)
     if (msg === 'no_verify_block') {
-        return {
-            state: 'failed',
-            reason: 'no_verify_block',
-            flash: 'no_verify_block',
-            notify: 'failed: spec has no VERIFY block. Resume to edit and try again.',
-            level: 'error'
-        }
+        return failed(
+            'no_verify_block',
+            'no_verify_block',
+            'failed: spec has no VERIFY block. Resume to edit and try again.'
+        )
     }
     if (msg.startsWith('compose_invalid')) {
-        return {
-            state: 'failed',
-            reason: msg.slice(0, 200),
-            flash: 'compose_invalid',
-            notify: `failed: compose produced malformed spec (${msg.replace(/^compose_invalid:\s*/, '')}). Resume to retry.`,
-            level: 'error'
-        }
+        return failed(
+            msg.slice(0, 200),
+            'compose_invalid',
+            `failed: compose produced malformed spec (${msg.replace(/^compose_invalid:\s*/, '')}). Resume to retry.`
+        )
     }
-    if (/ECONNREFUSED|fetch failed|connect/i.test(msg)) {
-        return {
-            state: 'failed',
-            reason: `model_unreachable: ${msg.slice(0, 120)}`,
-            flash: 'model_unreachable',
-            notify: 'failed: model unreachable.',
-            level: 'error'
-        }
-    }
-    return {
-        state: 'failed',
-        reason: msg.slice(0, 200),
-        flash: msg.slice(0, 80),
-        notify: `failed: ${msg.slice(0, 120)}`,
-        level: 'error'
-    }
+    return unreachable(msg) ?? generic(msg)
 }
 
 /**

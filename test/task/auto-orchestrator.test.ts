@@ -1,6 +1,6 @@
 import {expect, test} from 'bun:test'
 import {withTmpTaskDir} from '../test-utils/tmp-task-dir.js'
-import {USER_CANCELLED, BackendDownError} from '../../src/task/child-runner.js'
+import {USER_CANCELLED, ChildFailureError} from '../../src/task/child-runner.js'
 import {makeFakeCtx} from '../test-utils/fake-ctx.js'
 import {
     flushPlanDebug,
@@ -3525,7 +3525,8 @@ test('orientFeature: a user cancel during extraction is not swallowed', async ()
 test('orientFeature: a dead backend during extraction is not swallowed', async () => {
     await withTmpTaskDir(async dir => {
         const d: AutoDeps = {
-            runChild: () => Promise.reject(new BackendDownError('requirement-extract')),
+            runChild: () =>
+                Promise.reject(new ChildFailureError('requirement-extract', {kind: 'stalled'})),
             runTask: () => Promise.resolve({taskId: 'TASK_0001', end: {kind: 'completed'}}),
             commit: () => Promise.resolve({committed: true})
         }
@@ -3533,6 +3534,6 @@ test('orientFeature: a dead backend during extraction is not swallowed', async (
             () => null,
             e => e as Error
         )
-        expect(err).toBeInstanceOf(BackendDownError)
+        expect(err).toBeInstanceOf(ChildFailureError)
     })
 })

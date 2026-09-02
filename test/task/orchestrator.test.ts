@@ -22,6 +22,7 @@ import {
     implementationGuardArmed,
     disarmImplementationGuard
 } from '../../src/task/implementation-guards.js'
+import {implWidgetArmed} from '../../src/task/impl-widget.js'
 
 // ─── Phase children: routed by NAME through the `runChild` seam ───────────────
 
@@ -246,6 +247,7 @@ describe('implementation guard lifetime', () => {
             await runner.run().catch(() => {})
             expect(armedAtDelivery).toBe(true)
             expect(implementationGuardArmed()).toBe(false)
+            expect(implWidgetArmed()).toBe(false)
         })
     })
 
@@ -269,6 +271,7 @@ describe('implementation guard lifetime', () => {
             // Without this the assertion below passes on a run that never delivered.
             expect(armedAtDelivery).toBe(true)
             expect(implementationGuardArmed()).toBe(false)
+            expect(implWidgetArmed()).toBe(false)
         })
     })
 })

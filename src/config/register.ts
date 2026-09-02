@@ -2,12 +2,12 @@ import type {ExtensionAPI, ExtensionCommandContext} from '@earendil-works/pi-cod
 import {getKeybindings, SettingsList, visibleWidth, wrapTextWithAnsi} from '@earendil-works/pi-tui'
 import type {Component, SettingItem, SettingsListTheme} from '@earendil-works/pi-tui'
 import {
-    clampToModel,
-    supportedThinkingLevels,
-    type LadderLevel,
+    effectiveSetting,
+    offeredLevels,
     type ReasoningModelFacts
 } from '../shared/reasoning-capability.js'
-import {MODEL_INHERIT, splitSpec} from './group-models.js'
+import {resolveModel, specOf, type PiModel} from '../shared/model-resolve.js'
+import {MODEL_INHERIT} from './group-models.js'
 import {PairPicker, type PairOptions} from './option-picker.js'
 import {registerBridgeCommand} from '../remote/bridge.js'
 import {readPkgVersion} from '../shared/pkg-version.js'
@@ -588,20 +588,6 @@ export interface ModelCatalog {
 /** No registry reachable. Every row still renders; nothing narrows. */
 export const EMPTY_CATALOG: ModelCatalog = {specs: [], facts: () => undefined}
 
-/**
- * The levels a row may offer, given the model that row's group will run on.
- *
- * The INTERSECTION with `REASONING_SETTINGS`, not `supportedThinkingLevels`
- * directly: that returns the whole ladder including `xhigh` and `max`, which
- * this menu excludes on purpose (see reasoning.ts) because pi's own UI may not
- * offer them. A model declaring `xhigh` must not smuggle it in here.
- */
-export function offeredLevels(facts: ReasoningModelFacts | undefined): GroupSetting[] {
-    if (facts === undefined) return [...REASONING_SETTINGS]
-    const supported = supportedThinkingLevels(facts)
-    return REASONING_SETTINGS.filter(s => s === 'inherit' || supported.includes(s as LadderLevel))
-}
-
 /** The separator between a step row's two halves. */
 const PAIR_SEP = ' \u00b7 '
 
@@ -708,20 +694,10 @@ function stepPicker(group: ChildGroup, cfg: PiTaskConfig, catalog: ModelCatalog)
         ],
         second: spec => {
             const facts = catalog.facts(spec)
-            const offered = offeredLevels(facts)
             const wanted = resolveReasoning(group, cfg)
-            const clamped =
-                facts === undefined || wanted === 'inherit' ?
-                    wanted
-                :   (clampToModel(facts, wanted) as GroupSetting)
-            // Back inside the menu's own vocabulary. `clampToModel` walks UP
-            // first and knows the whole ladder, so a model declaring `xhigh`
-            // can land on a level `offeredLevels` deliberately excludes — and
-            // then stage two would open on `inherit` with the explanation
-            // attached to no row at all.
-            const runs = offered.includes(clamped) ? clamped : (offered.at(-1) ?? 'inherit')
+            const runs = effectiveSetting(facts, wanted)
             return {
-                options: offered.map(level => ({
+                options: offeredLevels(facts).map(level => ({
                     value: level,
                     label: level,
                     ...(level === runs && runs !== wanted ?
@@ -769,11 +745,7 @@ export function applyStepValue(
         return
     }
     cfg.groupModels = {...cfg.groupModels, [group]: pair.spec}
-    const facts = catalog.facts(pair.spec)
-    const level =
-        facts === undefined || pair.level === 'inherit' ?
-            pair.level
-        :   (clampToModel(facts, pair.level) as GroupSetting)
+    const level = effectiveSetting(catalog.facts(pair.spec), pair.level)
     // Only when it MOVES something: `applyReasoningLevel` flips the whole table
     // to `custom`, and picking a pair the config already runs must not do that
     // as a side effect.
@@ -1136,32 +1108,20 @@ function liveCatalog(ctx: ExtensionCommandContext): ModelCatalog {
     // registry that cannot answer must cost the model rows, never the menu.
     // Every row below still renders; `EMPTY_CATALOG` offers only `inherit` and
     // narrows nothing, which is exactly the pre-feature panel.
-    let registry: ExtensionCommandContext['modelRegistry']
-    let available: ReturnType<ExtensionCommandContext['modelRegistry']['getAvailable']>
-    let fromExtension: Set<string>
+    let available: readonly PiModel[]
     try {
-        registry = ctx.modelRegistry
-        available = registry.getAvailable()
-        fromExtension = new Set(registry.getRegisteredProviderIds())
+        available = ctx.modelRegistry.getAvailable()
     } catch {
         return EMPTY_CATALOG
     }
     return {
-        specs: available.map(m => `${m.provider}/${m.id}`),
-        note: spec => {
-            const parts = splitSpec(spec)
-            return parts && fromExtension.has(parts.provider) ?
-                    'provider comes from an extension — whitelist it under child extensions, '
-                        + "or this group's children exit 1"
-                :   undefined
-        },
-        facts: spec => {
-            // `inherit` means the session's own model, which is what a child
-            // resolves today. Its facts are what the thinking row must narrow to.
-            if (spec === MODEL_INHERIT) return ctx.model
-            const parts = splitSpec(spec)
-            return parts ? registry.find(parts.provider, parts.id) : undefined
-        }
+        specs: available.map(specOf),
+        note: spec =>
+            resolveModel(ctx, spec)?.fromExtension ?
+                'provider comes from an extension — whitelist it under child extensions, '
+                + "or this group's children exit 1"
+            :   undefined,
+        facts: spec => resolveModel(ctx, spec)
     }
 }
 
@@ -1170,16 +1130,10 @@ async function handleTaskConfig(
     ctx: ExtensionCommandContext,
     getTools: () => GuardableTool[] = () => []
 ): Promise<void> {
-    const cfg = {
-        ...getConfig(),
-        extensionWhitelist: [...getConfig().extensionWhitelist],
-        commandTimeoutExemptTools: [...getConfig().commandTimeoutExemptTools],
-        // Copied for the same reason as the two arrays above: the panel mutates
-        // its own draft, and sharing the live object would apply half-made
-        // choices to running children before the user finished choosing.
-        reasoningLevels: {...getConfig().reasoningLevels},
-        groupModels: {...getConfig().groupModels}
-    }
+    // A deep copy: the panel mutates its own draft, and sharing the live object
+    // would apply half-made choices to running children before the user
+    // finished choosing.
+    const cfg = structuredClone(getConfig())
 
     // Enumerated live at open so an installed extension appears and an
     // uninstalled one vanishes without pi-task doing any bookkeeping. A failed

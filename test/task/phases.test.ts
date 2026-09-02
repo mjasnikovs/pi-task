@@ -23,7 +23,7 @@ import * as nodeFs from 'node:fs'
 import * as nodePath from 'node:path'
 import {readSection, readTaskFile} from '../../src/task/task-io.js'
 import {agentErrorResponse} from '../test-utils/fake-spawn.js'
-import {BackendDownError, USER_CANCELLED} from '../../src/task/child-runner.js'
+import {ChildFailureError, USER_CANCELLED} from '../../src/task/child-runner.js'
 import {parseVerifyToolingOutput} from '../../src/task/parsers.js'
 import {
     agentEndResponse,
@@ -3772,7 +3772,7 @@ describe('a best-effort catch must not absorb a fatal cause', () => {
         'GOAL\n  do the thing\n\nCONSTRAINTS\n  - keep x\n\nACCEPTANCE\n  - y works\n\nVERIFY:\n```sh\nnpm test\n```\n'
 
     for (const [label, make] of [
-        ['a dead backend', () => new BackendDownError('critique-triage')],
+        ['a dead backend', () => new ChildFailureError('critique-triage', {kind: 'stalled'})],
         ['a user cancel', () => new Error(USER_CANCELLED)]
     ] as const) {
         test(`critique triage propagates ${label}`, async () => {

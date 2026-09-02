@@ -49,8 +49,8 @@ import {
     writeTaskFile
 } from './task-io.js'
 import {startWidget, type WidgetState} from './widget.js'
-import {armImplWidget, disarmImplWidget, setupImplWidget} from './impl-widget.js'
-import {armImplementationGuard, disarmImplementationGuard} from './implementation-guards.js'
+import {setupImplWidget} from './impl-widget.js'
+import {enterImplementationTurn} from './implementation-scope.js'
 import {publishViewer, publishNotify, registerBridgeCommand, getBridge} from '../remote/bridge.js'
 import {pushNotify} from '../remote/push.js'
 import {getConfig} from '../config/config.js'
@@ -63,9 +63,10 @@ import {titleForDisplay} from './parsers.js'
 import {USER_CANCELLED, type PhaseDeps, type PhaseSeams} from './child-runner.js'
 import {cancelCheckpoint} from './cancel-points.js'
 import type {ThinkingLevel} from '@earendil-works/pi-agent-core'
-import {splitSpec} from '../config/group-models.js'
+import type {PiModel} from '../shared/model-resolve.js'
 import {
     holdImplementation,
+    liveModelControl,
     type ImplementationControls,
     type ModelControl,
     type ThinkingControl
@@ -122,36 +123,13 @@ function piThinkingControl(): ThinkingControl {
 }
 
 /**
- * pi's own `Model`, named WITHOUT importing `@earendil-works/pi-ai` — which is
- * neither a dependency, a devDependency nor a peerDependency of this package
- * (see shared/model-endpoint.ts's header). The context already carries the type,
- * so deriving it costs nothing and adds no edge to the dependency graph.
- */
-type PiModel = NonNullable<ExtensionCommandContext['model']>
-
-/**
  * The live session's model, as a {@link ModelControl} over pi's own `Model`.
- *
- * `current()` reads `ctx.model`, which is a live GETTER on the extension context
- * (pi's `core/extensions/runner.js`), so a read after a set is the new value.
- * `resolve` goes through `find(provider, id)` — EXACT, deliberately stricter
- * than pi's own CLI, which also substring-matches. We store a canonical
- * `provider/id`, so exact is the only match that should ever count, and being
- * stricter here can only cost us a hold we then decline to take.
+ * Before `registerTask(pi)` has run there is nothing to apply to, so the move
+ * reports failure and the hold declines — same degrade as the thinking half.
  */
 function piModelControl(ctx: ExtensionCommandContext): ModelControl<PiModel> {
     const api = piApi
-    return {
-        current: () => {
-            const m = ctx.model
-            return m ? {spec: `${m.provider}/${m.id}`, handle: m} : undefined
-        },
-        resolve: spec => {
-            const parts = splitSpec(spec)
-            return parts ? ctx.modelRegistry.find(parts.provider, parts.id) : undefined
-        },
-        apply: async handle => (api ? api.setModel(handle) : false)
-    }
+    return liveModelControl(ctx, async handle => (api ? api.setModel(handle) : false))
 }
 
 /** Both halves of the implementation hold, over the live session. */
@@ -531,10 +509,7 @@ export class TaskRunner {
             label: this._widgetState.label
         }
         if (this._sendSpec) {
-            armImplWidget(meta, {oneShot: !this._implAwaited})
-            // Same lifetime as the widget, and for the same reason: an awaited run
-            // spans resume and steer turns, a fire-and-forget one does not.
-            armImplementationGuard({oneShot: !this._implAwaited})
+            const leave = enterImplementationTurn(meta, {oneShot: !this._implAwaited})
             let delivered = false
             try {
                 await this._sendSpec(spec)
@@ -545,18 +520,14 @@ export class TaskRunner {
                 // run: pi's `prompt` rejects on a compaction already in progress, a
                 // missing model, or a failed auth. The next unrelated turn would
                 // inherit it, and this guard can end a turn outright.
-                if (this._implAwaited || !delivered) {
-                    disarmImplWidget()
-                    disarmImplementationGuard()
-                }
+                if (this._implAwaited || !delivered) leave()
             }
             return
         }
         if (!piApi) {
             throw new Error('extension not initialised (no ExtensionAPI captured)')
         }
-        armImplWidget(meta, {oneShot: true})
-        armImplementationGuard({oneShot: true})
+        const leave = enterImplementationTurn(meta, {oneShot: true})
         // Same reason as the awaited path's `delivered` flag: this send can throw
         // SYNCHRONOUSLY — the loader gates every ExtensionAPI action behind
         // `assertActive()` — and a guard left armed over a turn that never starts
@@ -569,8 +540,7 @@ export class TaskRunner {
         try {
             piApi.sendUserMessage(spec, {deliverAs: 'followUp'})
         } catch (e) {
-            disarmImplWidget()
-            disarmImplementationGuard()
+            leave()
             throw e
         }
     }

@@ -47,6 +47,7 @@ import type {ThinkingLevel} from '@earendil-works/pi-agent-core'
 import {getConfig} from '../config/config.js'
 import {MODEL_INHERIT} from '../config/group-models.js'
 import {resolveReasoning, type GroupSetting} from '../config/reasoning.js'
+import {resolveModel, type ModelContext, type PiModel} from '../shared/model-resolve.js'
 import {readHoldStash, writeHoldStash, clearHoldStash, type HoldStash} from './model-hold-stash.js'
 
 /**
@@ -80,6 +81,29 @@ export interface ModelControl<H = unknown> {
 export interface ImplementationControls<H = unknown> {
     thinking: ThinkingControl
     model: ModelControl<H>
+}
+
+/**
+ * The live session's model as a {@link ModelControl}, for both the turn's hold
+ * and the crash restore at session_start.
+ *
+ * `current()` reads `ctx.model`, which is a live GETTER on the extension
+ * context (pi's `core/extensions/runner.js`), so a read after a set is the new
+ * value. `apply` is the caller's because the setter lives on `ExtensionAPI`,
+ * which the two callers hold differently.
+ */
+export function liveModelControl(
+    ctx: ModelContext,
+    apply: (handle: PiModel) => Promise<boolean>
+): ModelControl<PiModel> {
+    return {
+        current: () => {
+            const m = resolveModel(ctx, MODEL_INHERIT)
+            return m && {spec: m.spec, handle: m.handle}
+        },
+        resolve: spec => resolveModel(ctx, spec)?.handle,
+        apply
+    }
 }
 
 /** What acquire wrote, so release knows what it is allowed to undo. */

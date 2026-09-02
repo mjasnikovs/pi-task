@@ -1,12 +1,8 @@
 import {describe, expect, test} from 'bun:test'
 import {classifyFailure} from '../../src/task/failure-classifier.js'
-import {BackendDownError, CommandTimeoutError} from '../../src/task/child-runner.js'
-import {
-    LoopExhaustedError,
-    LeakedToolCallError,
-    ModelError,
-    USER_CANCELLED
-} from '../../src/task/child-runner.js'
+import {ChildFailureError, USER_CANCELLED} from '../../src/task/child-runner.js'
+
+const hit = {call: {name: 'Read', args: {}}, count: 5, windowSize: 5}
 
 describe('classifyFailure', () => {
     test('USER_CANCELLED message → cancelled', () => {
@@ -20,20 +16,16 @@ describe('classifyFailure', () => {
         expect(c.state).toBe('cancelled')
     })
 
-    test('LoopExhaustedError → failed with loop_detected flash', () => {
-        const err = new LoopExhaustedError('refine', [
-            {call: {name: 'Read', args: {}}, count: 5, windowSize: 5},
-            {call: {name: 'Read', args: {}}, count: 5, windowSize: 5},
-            {call: {name: 'Read', args: {}}, count: 5, windowSize: 5}
-        ])
+    test('a loop kill → failed with loop_detected flash and the strike count', () => {
+        const err = new ChildFailureError('refine', {kind: 'loop', hit, strikes: 3})
         const c = classifyFailure(err, false)
         expect(c.state).toBe('failed')
         expect(c.flash).toBe('loop_detected')
         expect(c.reason).toMatch(/loop detected 3× in refine/)
     })
 
-    test('LeakedToolCallError → failed with leaked_tool_call flash', () => {
-        const err = new LeakedToolCallError('refine', '<tool_call>')
+    test('a leaked tool call → failed with leaked_tool_call flash', () => {
+        const err = new ChildFailureError('refine', {kind: 'leaked-tool-call', text: '<tool_call>'})
         const c = classifyFailure(err, false)
         expect(c.state).toBe('failed')
         expect(c.flash).toBe('leaked_tool_call')
@@ -41,13 +33,25 @@ describe('classifyFailure', () => {
         expect(c.notify).toMatch(/tool call/i)
     })
 
-    test('ModelError → failed with model_error flash and the real cause surfaced', () => {
-        const c = classifyFailure(new ModelError('refine', 'connection lost'), false)
+    test('a model error → failed with model_error flash and the real cause surfaced', () => {
+        const c = classifyFailure(
+            new ChildFailureError('refine', {kind: 'model-error', cause: 'connection lost'}),
+            false
+        )
         expect(c.state).toBe('failed')
         expect(c.flash).toBe('model_error')
         expect(c.reason).toMatch(/model_error in refine: connection lost/)
         expect(c.notify).toMatch(/connection lost/)
         expect(c.notify).toMatch(/restart the model/i)
+    })
+
+    test('a stream stall is a model error whose cause names the watchdog', () => {
+        const c = classifyFailure(
+            new ChildFailureError('refine', {kind: 'stream-stall', idleMs: 60_000}),
+            false
+        )
+        expect(c.flash).toBe('model_error')
+        expect(c.reason).toMatch(/stream watchdog/)
     })
 
     test('no_verify_block → failed with matching flash', () => {
@@ -90,21 +94,60 @@ describe('classifyFailure', () => {
 
 describe('the terminal guard kills', () => {
     /**
-     * REGRESSION (review finding 2). A dead-backend kill is the ONE case where we
-     * positively know the model server did not answer. It must reach the user as
-     * "model unreachable", with a flash id — not as a generic failure whose flash
-     * is the first 80 characters of an English sentence.
+     * A dead-backend kill is the ONE case where we positively know the model
+     * server did not answer. It must reach the user as "model unreachable", with
+     * a flash id — not as a generic failure whose flash is the first 80
+     * characters of an English sentence.
      */
     test('a dead-backend kill is reported as model_unreachable', () => {
-        const c = classifyFailure(new BackendDownError('refine'), false)
+        const c = classifyFailure(new ChildFailureError('refine', {kind: 'stalled'}), false)
         expect(c.flash).toBe('model_unreachable')
+    })
+
+    test('a child that exited on ECONNREFUSED is model_unreachable, not its stderr', () => {
+        const err = new ChildFailureError(
+            'refine',
+            {kind: 'exit', code: 1},
+            'TypeError: fetch failed: connect ECONNREFUSED 127.0.0.1:8080'
+        )
+        expect(classifyFailure(err, false).flash).toBe('model_unreachable')
     })
 
     test('a command-ceiling kill carries a flash id, not a sentence fragment', () => {
         const c = classifyFailure(
-            new CommandTimeoutError('verify-tooling', {toolName: 'bash', timeoutMs: 900_000}),
+            new ChildFailureError('verify-tooling', {
+                kind: 'command-timeout',
+                toolName: 'bash',
+                timeoutMs: 900_000
+            }),
             false
         )
         expect(c.flash).not.toContain(' ')
+        expect(c.notify).toContain('`bash`')
+    })
+
+    test('a wall-clock kill carries its own flash id', () => {
+        const c = classifyFailure(new ChildFailureError('refine', {kind: 'worker-timeout'}), false)
+        expect(c.flash).toBe('child_timeout')
+    })
+
+    test('every ChildFailure kind yields a flash with no spaces', () => {
+        const kinds = [
+            {kind: 'stalled'},
+            {kind: 'command-timeout', toolName: 'bash', timeoutMs: 1},
+            {kind: 'stream-stall', idleMs: 1},
+            {kind: 'worker-timeout'},
+            {kind: 'loop', hit, strikes: 1},
+            {kind: 'leaked-tool-call', text: 'x'},
+            {kind: 'model-error', cause: 'x'},
+            {kind: 'aborted'},
+            {kind: 'exit', code: 1},
+            {kind: 'empty-answer'}
+        ] as const
+        for (const f of kinds) {
+            const c = classifyFailure(new ChildFailureError('refine', f), false)
+            expect([f.kind, c.state]).toEqual([f.kind, 'failed'])
+            expect(c.flash?.length ?? 0).toBeGreaterThan(0)
+        }
     })
 })

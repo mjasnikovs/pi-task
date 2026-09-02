@@ -1,24 +1,29 @@
 /**
- * The live-config bridge for per-group child settings: group in, argv fragment out.
+ * The live-config bridge for per-group child settings: group in, argv fragment
+ * out — plus the session's model snapshot, which the argv needs and which only a
+ * session_start with a `ctx` can produce.
  *
  * Separate from reasoning.ts and group-models.ts because those must take no
  * import with a runtime side effect — see their headers. The `getConfig()` read
  * lives here instead: this file imports them and nothing in config/ imports it
  * back, so the graph stays a tree.
  *
- * Read PER CALL, never cached at module scope, so a /task-config change lands on
- * the next child without a restart. Same contract `childBaseArgs` keeps.
+ * Config is read PER CALL, never cached at module scope, so a /task-config
+ * change lands on the next child without a restart. Same contract
+ * `childBaseArgs` keeps. The snapshot is the one deliberate exception, and it is
+ * a snapshot of the REGISTRY, not of config.
  */
 import {getConfig, type PiTaskConfig} from './config.js'
 import {MODEL_INHERIT, modelArgs} from './group-models.js'
 import {resolveReasoning, thinkingArgs} from './reasoning.js'
 import type {ChildGroup} from './groups.js'
+import type {GroupModelSnapshot} from '../shared/model-resolve.js'
 
 /**
- * Specs this session has proven a child cannot resolve.
+ * What this session resolved each group's model cell to.
  *
- * WHY A SESSION-SCOPED SET AND NOT A LOOKUP
- * -----------------------------------------
+ * WHY A SESSION-SCOPED SNAPSHOT AND NOT A LOOKUP
+ * ----------------------------------------------
  * The honest question is "can a `--no-extensions` child resolve this spec?", and
  * only `ctx.modelRegistry` can answer it. Five of the six argv producers have no
  * `ctx` — `pi-worker`, `pi-worker-docs`, `docs-core`, `fetch-core` and
@@ -28,45 +33,49 @@ import type {ChildGroup} from './groups.js'
  * this project does not depend on pi-ai.
  *
  * So it is answered ONCE, at session_start, where ctx exists and every task is
- * still in the future, and the verdict is left here.
+ * still in the future, and the whole verdict is left here — usability and the
+ * context window from ONE walk, so the argv and the churn rule can never
+ * disagree about which model a group runs on.
  *
  * EMPTY MEANS EMIT. A host that never fires session_start therefore behaves
  * exactly as it does today — the failure direction is "pi decides", never "we
  * silently dropped a flag nobody checked".
  */
-let unusableSpecs: ReadonlySet<string> = new Set()
+let groupModels: Readonly<Partial<Record<ChildGroup, GroupModelSnapshot>>> = {}
 
-export function setUnusableSpecs(specs: Iterable<string>): void {
-    unusableSpecs = new Set(specs)
-}
-
-export function isSpecUsable(spec: string): boolean {
-    return !unusableSpecs.has(spec)
+export function setGroupModels(
+    snapshot: Readonly<Partial<Record<ChildGroup, GroupModelSnapshot>>>
+): void {
+    groupModels = {...snapshot}
 }
 
 /**
- * The context window of each group's model, resolved in the SAME session pass
- * that filled {@link setUnusableSpecs}.
- *
- * It lives here for the same reason that set does — `child-runner` and the
- * workers have no `ctx`, so they cannot ask a registry — and it is filled by the
- * same walk, so the two can never disagree about which model a group runs on.
+ * The group's own window, or `undefined` for "caller keeps its fallback".
  *
  * The number drives `StallDetector`'s churn rule, where the two error directions
  * are NOT symmetric: too large fires late (degraded, and the no-new-ground rule
  * still covers it), too small fires early and KILLS A HEALTHY CHILD. So an
  * absent answer means "use the parent's", never a guess.
  */
-let groupWindows: Readonly<Partial<Record<ChildGroup, number>>> = {}
-
-export function setGroupWindows(windows: Readonly<Partial<Record<ChildGroup, number>>>): void {
-    groupWindows = {...windows}
+export function groupWindow(group: ChildGroup): number | undefined {
+    const w = groupModels[group]?.contextWindow
+    return w !== undefined && w > 0 ? w : undefined
 }
 
-/** The group's own window, or `undefined` for "caller keeps its fallback". */
-export function groupWindow(group: ChildGroup): number | undefined {
-    const w = groupWindows[group]
-    return w !== undefined && w > 0 ? w : undefined
+/**
+ * `spec → baseUrl` for every model the session can use, from the same
+ * session_start pass. Read by the dead-backend probe (shared/model-endpoint.ts),
+ * which runs where no `ctx` exists. Empty until a session starts, and the probe
+ * reads "no url" as "cannot see this server, so never kill".
+ */
+let modelEndpoints: ReadonlyMap<string, string> = new Map()
+
+export function setModelEndpoints(endpoints: ReadonlyMap<string, string>): void {
+    modelEndpoints = new Map(endpoints)
+}
+
+export function modelEndpoint(spec: string): string | undefined {
+    return modelEndpoints.get(spec)
 }
 
 /**
@@ -79,19 +88,23 @@ export function groupWindow(group: ChildGroup): number | undefined {
  * `reasoning: true` onto it, inherits the provider's default baseUrl and answers
  * at exit 0. Dropping the flag runs the same child the user got last week and
  * says so out loud; passing it runs a model nobody chose and says nothing.
+ *
+ * The verdict applies to the spec it was proven on: a cell changed since
+ * session_start is emitted, and pi decides.
  */
 export function groupModelArgs(group: ChildGroup, cfg?: PiTaskConfig): string[] {
     const spec = (cfg ?? getConfig()).groupModels[group]
     if (spec === undefined || spec === MODEL_INHERIT) return []
-    return isSpecUsable(spec) ? modelArgs(spec) : []
+    const proven = groupModels[group]
+    return proven?.spec === spec && !proven.usable ? [] : modelArgs(spec)
 }
 
 /**
  * The `['--thinking', level]` fragment for a group, or `[]` when the group is
  * `inherit` and the child should keep falling back to settings.json.
  *
- * Still exported on its own: the host-session turn (implementation-hold.ts) and
- * the settings UI (register.ts) need the level rather than a whole fragment.
+ * Exported for its own tests only: the per-call config read is a contract on
+ * each half, and only the half on its own can assert it.
  */
 export function groupThinkingArgs(group: ChildGroup, cfg?: PiTaskConfig): string[] {
     // The default is evaluated HERE, per call. Hoisting the read to module scope

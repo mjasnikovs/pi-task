@@ -9,7 +9,7 @@ import {
     streamStallReminder,
     type TimerHandle
 } from '../../src/shared/stream-watchdog.js'
-import {isConnectionError} from '../../src/task/child-runner.js'
+import {isConnectionError} from '../../src/shared/connection-error.js'
 import {WATCHDOG_CANCEL_MARKER} from '../../src/shared/command-watchdog.js'
 
 /** Fake clock + scheduler: `advance` moves `now` and then calls the scheduled

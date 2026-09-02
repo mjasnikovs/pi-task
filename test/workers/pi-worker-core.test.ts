@@ -671,7 +671,7 @@ describe('runWorker', () => {
             contextWindow: 'unknown',
             override: {
                 'worker-timeout': {timeoutMs: 0, progressCeilingMs: null, fanout: null},
-                stalled: {afterMs: 50, probe: () => Promise.resolve(false)}
+                stalled: {afterMs: 50, probe: () => Promise.resolve(false), restart: false}
             },
             cwd: process.cwd(),
             spawn
@@ -1278,7 +1278,7 @@ describe('runWorker', () => {
                 contextWindow: 'unknown',
                 override: {
                     'worker-timeout': {timeoutMs: 60, progressCeilingMs: 300_000, fanout: null},
-                    stalled: {afterMs: 40, probe: () => Promise.resolve(false)},
+                    stalled: {afterMs: 40, probe: () => Promise.resolve(false), restart: false},
                     loop: {detector: false, progress: {...DEFAULT_LOOP_PROGRESS}}
                 },
                 cwd: process.cwd(),
@@ -1423,5 +1423,135 @@ describe('runWorker', () => {
             expect(r.attempts).toBe(r.restarts.length + 1)
             expect(r.restarts.map(x => x.reason)).toEqual(['loop', 'leaked-tool-call'])
         })
+    })
+})
+
+// ─── The rows the phase children brought to the one loop ────────────────────
+
+describe('runWorker — profile-switched restarts', () => {
+    const base = {
+        prompt: 'p',
+        cwd: '/tmp',
+        contextWindow: 'unknown' as const,
+        sleepFor: async () => {}
+    }
+
+    test("an empty completion is returned as-is unless the profile's `empty-answer` row says restart", async () => {
+        const off = await runWorker({
+            ...base,
+            profile: 'adhoc',
+            spawn: fakeSpawnQueue([agentEndResponse(''), agentEndResponse('later')])
+        })
+        expect(off.text).toBe('')
+        expect(off.attempts).toBe(1)
+
+        const on = await runWorker({
+            ...base,
+            profile: 'phase',
+            spawn: fakeSpawnQueue([agentEndResponse(''), agentEndResponse('later')])
+        })
+        expect(on.text).toBe('later')
+        expect(on.restarts.map(r => r.reason)).toEqual(['empty-answer'])
+    })
+
+    test('an empty answer spends the SHARED budget and re-sends the bare prompt', async () => {
+        const prompts: string[] = []
+        const r = await runWorker({
+            ...base,
+            profile: 'phase',
+            spawn: fakeSpawnByPrompt(args => {
+                prompts.push(String(args[args.length - 1]))
+                return agentEndResponse('')
+            })
+        })
+        expect(r.attempts).toBe(3)
+        expect(r.text).toBe('')
+        expect(new Set(prompts).size).toBe(1)
+    })
+
+    test("a dead-backend kill restarts only when the profile's `stalled` row says so", async () => {
+        // A child that never speaks and never closes on its own; the probe says
+        // nobody is home. `restart: true` earns the verdict on every attempt.
+        const spawn = (() => {
+            const p = makeProc()
+            p.kill = () => {
+                if (p.killed) return true
+                p.killed = true
+                queueMicrotask(() => p.emit('close', 143))
+                return true
+            }
+            return p
+        }) as unknown as SpawnFn
+        const r = await runWorker({
+            ...base,
+            profile: 'phase',
+            spawn,
+            override: {stalled: {afterMs: 30, probe: () => Promise.resolve(false), restart: true}}
+        })
+        expect(r.stalled).toBe(true)
+        expect(r.attempts).toBe(3)
+        expect(r.restarts.map(x => x.reason)).toEqual(['stalled', 'stalled'])
+    })
+
+    test('the rescue runs ONE more attempt with its tools and hint, and is final', async () => {
+        const argvs: string[][] = []
+        const prompts: string[] = []
+        const spawn = fakeSpawnByPrompt(args => {
+            argvs.push([...args])
+            prompts.push(String(args[args.length - 1]))
+            return argvs.length <= 3 ?
+                    loopResponse('read', {path: 'a'}, DEFAULT_LOOP_DETECTOR.threshold)
+                :   agentEndResponse('')
+        })
+        const r = await runWorker({
+            ...base,
+            profile: 'phase',
+            tools: 'read',
+            spawn,
+            rescue: {tools: '', hint: hit => `RESCUE ${hit.call.name}`}
+        })
+        // 3 loop strikes, then the rescue — which is empty, and NOT retried even
+        // though the phase profile restarts an empty answer.
+        expect(r.attempts).toBe(4)
+        expect(r.rescued).toBe(true)
+        expect(r.restarts.map(x => x.reason)).toEqual(['loop', 'loop', 'loop'])
+        expect(r.restarts.at(-1)?.rescue).toBe(true)
+        expect(r.restarts.every(x => x.loopHit !== undefined)).toBe(true)
+        expect(argvs[3]).toContain('--no-tools')
+        expect(argvs[3]).not.toContain('--tools')
+        expect(prompts[3]).toContain('RESCUE read')
+        expect(r.loopHit).toBeUndefined()
+    })
+
+    test('a cancel between attempts buys no further spawn', async () => {
+        const ctrl = new AbortController()
+        let spawns = 0
+        const spawn = fakeSpawnByPrompt(() => {
+            spawns++
+            // The first attempt answers nothing, which the phase profile would
+            // restart — unless the caller has cancelled meanwhile.
+            ctrl.abort()
+            return agentEndResponse('')
+        })
+        const r = await runWorker({...base, profile: 'phase', spawn, signal: ctrl.signal})
+        expect(spawns).toBe(1)
+        expect(r.attempts).toBe(1)
+    })
+
+    test("`tools: ''` spawns a --no-tools child and drops the guard extensions", async () => {
+        const argvs: string[][] = []
+        await runWorker({
+            ...base,
+            profile: 'adhoc',
+            tools: '',
+            extensions: ['/x/guard.js'],
+            spawn: fakeSpawnByPrompt(args => {
+                argvs.push([...args])
+                return agentEndResponse('ok')
+            })
+        })
+        expect(argvs[0]).toContain('--no-tools')
+        expect(argvs[0]).not.toContain('--tools')
+        expect(argvs[0]).not.toContain('-e')
     })
 })

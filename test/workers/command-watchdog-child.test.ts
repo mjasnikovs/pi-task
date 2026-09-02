@@ -84,7 +84,7 @@ describe('command watchdog — child side', () => {
             spawn: fakeSpawnKillable([hungCommand('bun run dev')], p => prompts.push(p))
         })
 
-        expect(r.commandTimedOut).toEqual({toolName: 'bash', timeoutMs: 30})
+        expect(r.commandTimedOut).toEqual({toolName: 'bash', timeoutMs: 30, detail: 'bun run dev'})
         // The whole-worker cap is off, so nothing else could have ended this.
         expect(r.timedOut).toBeUndefined()
         expect(r.stalled).toBeUndefined()
@@ -205,7 +205,7 @@ describe('command watchdog — child side', () => {
         expect(prompts[1]).toContain('stuck in a loop')
         expect(prompts[2]).toContain('`timeout` parameter')
         // Budget exhausted on the final hang → reported, not mislabeled.
-        expect(r.commandTimedOut).toEqual({toolName: 'bash', timeoutMs: 40})
+        expect(r.commandTimedOut).toEqual({toolName: 'bash', timeoutMs: 40, detail: 'bun run dev'})
     })
 
     test('a command that finishes in time is never killed', async () => {

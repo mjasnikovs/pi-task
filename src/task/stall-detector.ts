@@ -6,7 +6,7 @@
  * takes, and that is not a property of the pathology — it is a property of the
  * model, its sampler settings, the reasoning budget and the size of the document
  * being read. Any of those moving turns the margin into a killer of good runs.
- * `PHASE_CHILD_TIMEOUT_MS` is 0 (off) for exactly that reason.
+ * The `phase` profile arms no wall clock (worker-profiles.ts) for exactly that reason.
  *
  * WHAT REPLACES IT. Two bounds, both dimensionless — invariant to model speed,
  * project size and reasoning budget:

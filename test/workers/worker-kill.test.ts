@@ -17,6 +17,7 @@ import {
     FAILURE_ORDER,
     RESTART_ORDER,
     WORKER_KILLS,
+    isFatalKill,
     workerKill,
     type WorkerKillId
 } from '../../src/workers/worker-kill.js'
@@ -117,7 +118,7 @@ describe('the two ladders, against the one roster', () => {
         // no rule for. A compile-time property, written as a runtime one.
         type Restartable = (typeof RESTART_ORDER)[number]
         type NotRestartable = Exclude<WorkerKillId, Restartable>
-        const notRestartable: NotRestartable[] = ['stalled', 'aborted', 'exit']
+        const notRestartable: NotRestartable[] = ['aborted', 'exit']
         expect(notRestartable.every(id => !RESTART_ORDER.includes(id as never))).toBe(true)
     })
 
@@ -148,5 +149,26 @@ describe('the bug the roster exists to prevent', () => {
 
     test('a bare abort with no specific cause really is a cancel', () => {
         expect(killed({})).toBe('aborted')
+    })
+})
+
+describe('the fatal column', () => {
+    test('only a dead backend is fatal — the one kill a best-effort catch must not absorb', () => {
+        expect(WORKER_KILLS.filter(k => k.fatal).map(k => k.id)).toEqual(['stalled'])
+        expect(isFatalKill('stalled')).toBe(true)
+        expect(isFatalKill('command-timeout')).toBe(false)
+        // Kinds the phase vocabulary adds that are not kills at all.
+        expect(isFatalKill('model-error')).toBe(false)
+        expect(isFatalKill('empty-answer')).toBe(false)
+    })
+
+    test('a restart-only cause is never reported, and says so in both ladders', () => {
+        // `connection-error` reaches the caller as `modelError`, `empty-answer` as
+        // empty text: neither is a kill a consumer switches on.
+        for (const id of ['connection-error', 'empty-answer'] as const) {
+            expect(workerKill(id)?.reported).toBe(false)
+            expect(FAILURE_ORDER.includes(id as never)).toBe(false)
+            expect(RESTART_ORDER.includes(id)).toBe(true)
+        }
     })
 })

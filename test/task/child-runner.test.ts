@@ -3,20 +3,13 @@ import {
     runPhaseChild,
     prependHint,
     runWithEmphasisRetry,
-    LoopExhaustedError,
-    LeakedToolCallError,
-    ModelError,
-    childArgs,
-    isConnectionError,
-    connectionRetryBackoffMs,
-    PhaseTimeoutError,
-    CommandTimeoutError,
-    BackendDownError,
+    ChildFailureError,
     isFatalChildCause,
-    USER_CANCELLED,
-    guardKillError,
-    phasePolicy
+    USER_CANCELLED
 } from '../../src/task/child-runner.js'
+import {childArgs} from '../../src/workers/pi-worker-core.js'
+import {isConnectionError, connectionRetryBackoffMs} from '../../src/shared/connection-error.js'
+import {workerPolicy} from '../../src/workers/worker-profiles.js'
 import {LOOP_THRESHOLD} from '../../src/task/loop-detector.js'
 import {
     fakeSpawnSimple,
@@ -203,7 +196,7 @@ describe('runPhaseChild', () => {
             agentEndResponse('should not be reached')
         ])
         const p = runPhaseChild(depsWith(spawn), 'refine', 'read', 'prompt')
-        await expect(p).rejects.toBeInstanceOf(ModelError)
+        await expect(p).rejects.toMatchObject({failure: {kind: 'model-error'}})
         await expect(p).rejects.toThrow(/model error — 400 context length exceeded/)
     })
 
@@ -228,7 +221,7 @@ describe('runPhaseChild', () => {
             agentErrorResponse('ECONNREFUSED')
         ])
         const p = runPhaseChild(depsWith(spawn), 'grill-gen', 'read', 'prompt')
-        await expect(p).rejects.toBeInstanceOf(ModelError)
+        await expect(p).rejects.toMatchObject({failure: {kind: 'model-error'}})
         await expect(p).rejects.toThrow(/model error — ECONNREFUSED/)
     })
 
@@ -429,7 +422,7 @@ describe('runPhaseChild — the restart-verb call sites (was runPhaseWithLoopGua
                 'PROMPT',
                 {verb: 'restart'}
             )
-            await expect(p).rejects.toBeInstanceOf(ModelError)
+            await expect(p).rejects.toMatchObject({failure: {kind: 'model-error'}})
             await expect(p).rejects.toThrow(/model error — invalid request/)
         })
     })
@@ -507,7 +500,7 @@ describe('runPhaseChild — the restart-verb call sites (was runPhaseWithLoopGua
                 'PROMPT',
                 {verb: 'restart'}
             )
-            await expect(p).rejects.toBeInstanceOf(ModelError)
+            await expect(p).rejects.toMatchObject({failure: {kind: 'model-error'}})
             await expect(p).rejects.toThrow(/model error — Connection error/)
         })
     })
@@ -539,7 +532,7 @@ describe('runPhaseChild — the restart-verb call sites (was runPhaseWithLoopGua
         })
     })
 
-    test('throws LoopExhaustedError after MAX_LOOP_RESTARTS+1 strikes', async () => {
+    test('throws a loop failure after MAX_LOOP_RESTARTS+1 strikes', async () => {
         await withTmpTaskDir(async cwd => {
             await writeTaskFile(
                 cwd,
@@ -566,7 +559,7 @@ describe('runPhaseChild — the restart-verb call sites (was runPhaseWithLoopGua
                     'PROMPT',
                     {verb: 'restart'}
                 )
-            ).rejects.toBeInstanceOf(LoopExhaustedError)
+            ).rejects.toMatchObject({failure: {kind: 'loop'}})
         })
     })
 
@@ -668,7 +661,7 @@ describe('runPhaseChild — the restart-verb call sites (was runPhaseWithLoopGua
                     'read',
                     'PROMPT'
                 )
-            ).rejects.toBeInstanceOf(LoopExhaustedError)
+            ).rejects.toMatchObject({failure: {kind: 'loop'}})
             expect(debug.some(l => l.includes('stalled (context-churn)'))).toBe(true)
         })
     })
@@ -764,14 +757,14 @@ describe('runPhaseChild — the restart-verb call sites (was runPhaseWithLoopGua
             }) as unknown as SpawnFn
 
             // And it reports the cause it ACTUALLY hit. A wall-clock kill is not a
-            // loop: reporting one as `LoopExhaustedError` hands the reader a loop
+            // loop: reporting one as a loop failure hands the reader a loop
             // history that did not cause the failure.
             await expect(
                 runPhaseChild({...depsWith(spawn), timeoutMs: 100}, 'refine', 'read', 'PROMPT', {
                     degradeOnExhaustion: true,
                     verb: 'restart'
                 })
-            ).rejects.toBeInstanceOf(PhaseTimeoutError)
+            ).rejects.toMatchObject({failure: {kind: 'worker-timeout'}})
 
             expect(procs.length).toBe(4)
             expect(procs[3]!.killed).toBe(true)
@@ -810,7 +803,7 @@ describe('runPhaseChild — the restart-verb call sites (was runPhaseWithLoopGua
             })
         })
 
-        test('still throws LoopExhaustedError when even the no-tools attempt yields no output', async () => {
+        test('still throws a loop failure when even the no-tools attempt yields no output', async () => {
             await withTmpTaskDir(async cwd => {
                 await writeTaskFile(
                     cwd,
@@ -838,7 +831,7 @@ describe('runPhaseChild — the restart-verb call sites (was runPhaseWithLoopGua
                         'PROMPT',
                         {degradeOnExhaustion: true, verb: 'restart'}
                     )
-                ).rejects.toBeInstanceOf(LoopExhaustedError)
+                ).rejects.toMatchObject({failure: {kind: 'loop'}})
             })
         })
 
@@ -872,7 +865,7 @@ describe('runPhaseChild — the restart-verb call sites (was runPhaseWithLoopGua
                         'PROMPT',
                         {verb: 'restart'}
                     )
-                ).rejects.toBeInstanceOf(LoopExhaustedError)
+                ).rejects.toMatchObject({failure: {kind: 'loop'}})
                 expect(calls.length).toBe(3) // no 4th (degrade) spawn
             })
         })
@@ -1005,7 +998,7 @@ describe('leaked tool-call guard', () => {
                     'PROMPT',
                     {verb: 'restart'}
                 )
-            ).rejects.toBeInstanceOf(LeakedToolCallError)
+            ).rejects.toMatchObject({failure: {kind: 'leaked-tool-call'}})
         })
     })
 
@@ -1038,7 +1031,7 @@ describe('leaked tool-call guard', () => {
                 'read',
                 'prompt'
             )
-        ).rejects.toBeInstanceOf(LeakedToolCallError)
+        ).rejects.toMatchObject({failure: {kind: 'leaked-tool-call'}})
     })
 })
 
@@ -1177,7 +1170,7 @@ describe('shared error-triage ladder', () => {
                     agentEndResponse('should not be reached')
                 ])
                 const p = site.run(depsFor(spawn), 'refine')
-                await expect(p).rejects.toBeInstanceOf(ModelError)
+                await expect(p).rejects.toMatchObject({failure: {kind: 'model-error'}})
                 await expect(p).rejects.toThrow(/model error — 400 context length exceeded/)
                 expect(prompts.length).toBe(1)
             })
@@ -1206,9 +1199,9 @@ describe('shared error-triage ladder', () => {
 
             test('spends the same budget — 3 attempts — before giving up', async () => {
                 // MAX_LEAK_RETRIES (leaked-tool-call.ts) and MAX_LOOP_RESTARTS
-                // (child-runner.ts) are separate policies that happen to agree at
-                // 2. Both wrappers therefore allow THREE attempts total; this
-                // pins that arithmetic — budget + 1 — on both sides.
+                // (loop-detector.ts) are separate budgets that happen to agree at
+                // 2, so each cause alone allows THREE attempts; this pins that
+                // arithmetic — budget + 1 — for both verbs.
                 const empty = ladderSpawn([agentEndResponse('')])
                 await expect(site.run(depsFor(empty.spawn), 'refine')).rejects.toThrow(
                     /refine child produced no output/
@@ -1216,15 +1209,15 @@ describe('shared error-triage ladder', () => {
                 expect(empty.prompts.length).toBe(3)
 
                 const leak = ladderSpawn([agentEndResponse(LEAKED)])
-                await expect(
-                    site.run(depsFor(leak.spawn), 'verify-tooling')
-                ).rejects.toBeInstanceOf(LeakedToolCallError)
+                await expect(site.run(depsFor(leak.spawn), 'verify-tooling')).rejects.toMatchObject(
+                    {failure: {kind: 'leaked-tool-call'}}
+                )
                 expect(leak.prompts.length).toBe(3)
 
                 const conn = ladderSpawn([agentErrorResponse('socket hang up')])
-                await expect(site.run(depsFor(conn.spawn), 'grill-gen')).rejects.toBeInstanceOf(
-                    ModelError
-                )
+                await expect(site.run(depsFor(conn.spawn), 'grill-gen')).rejects.toMatchObject({
+                    failure: {kind: 'model-error'}
+                })
                 expect(conn.prompts.length).toBe(3)
             })
         })
@@ -1332,8 +1325,8 @@ describe('runPhaseChild — planning-child runaway guards', () => {
         expect(out).toBe('clean answer')
     }, 2000)
 
-    // The wall clock above is OFF in production — PHASE_CHILD_TIMEOUT_MS is 0
-    // (child-runner.ts:73). A healthy decompose and a runaway one occupy the same
+    // The wall clock above is OFF in production — the `phase` row arms none
+    // (worker-profiles.ts). A healthy decompose and a runaway one occupy the same
     // range of elapsed times, so any cap that catches the runaway also kills good
     // work. The StallDetector replaces it, and this pins that it kills the same
     // runaway with NO clock armed at all.
@@ -1503,15 +1496,6 @@ describe('PhaseDeps.runChild seam', () => {
  * The second test carries the weight: a kill reports exit 0, so one that is not
  * mapped to a named cause is returned as a SUCCESSFUL answer with truncated text.
  */
-/**
- * `guardKillError` is the shared answer to "was this child killed by a guard?",
- * and BOTH spawn paths in child-runner.ts must ask it — the strike loop and the
- * no-tools degrade that rescues it.
- *
- * The `stalled` branch is unit-only: its probe needs STALL_AFTER_MS of real
- * silence and child-runner exposes no seam for it. The commandKill branch is
- * covered end-to-end above.
- */
 describe('runPhaseChild — a guard kill on the no-tools degrade attempt', () => {
     /**
      * The degrade is the one spawn path that is not the strike loop, and it is
@@ -1520,7 +1504,7 @@ describe('runPhaseChild — a guard kill on the no-tools degrade attempt', () =>
      * for a handler, so the watchdog is live here despite `--no-tools`.
      *
      * The PARTIAL TEXT is what makes this able to fail: with no text the mutant
-     * falls through to LoopExhaustedError, which still rejects.
+     * falls through to the loop failure, which still rejects.
      */
     test('a command kill on the degrade is thrown, never returned as the answer', async () => {
         const original = getConfig().requestTimeoutMs
@@ -1583,61 +1567,12 @@ describe('runPhaseChild — a guard kill on the no-tools degrade attempt', () =>
             expect('returned' in outcome).toBe(false)
             // The CLASS, not just "it rejected" — that is what the earlier
             // attempt got wrong.
-            expect((outcome as {threw: unknown}).threw).toBeInstanceOf(CommandTimeoutError)
+            expect((outcome as {threw: unknown}).threw).toMatchObject({
+                failure: {kind: 'command-timeout'}
+            })
         } finally {
             getConfig().requestTimeoutMs = original
         }
-    })
-})
-
-describe('guardKillError', () => {
-    const clean = {text: 'an answer', exitCode: 0, stderr: ''}
-
-    test('a command kill and a dead backend each get their own named error', () => {
-        expect(
-            guardKillError('verify-tooling', {
-                ...clean,
-                commandKill: {toolName: 'bash', timeoutMs: 30}
-            })
-        ).toBeInstanceOf(CommandTimeoutError)
-        expect(guardKillError('refine', {...clean, stalled: true})).toBeInstanceOf(BackendDownError)
-    })
-
-    /**
-     * The probe cannot tell "the backend is gone" from "the ONE endpoint I know
-     * about is gone": `discoverModelEndpoints` reads every provider in models.json,
-     * not the one this child's model uses, so a stopped local server condemns a run
-     * against a healthy cloud backend. A single verdict is therefore not enough —
-     * three failed probes cost ~15s, one wrong verdict costs the run.
-     */
-    test('a dead-backend verdict is only final once every attempt has produced it', () => {
-        const stalled = {...clean, stalled: true}
-        expect(guardKillError('refine', stalled, {finalAttempt: false})).toBeNull()
-        expect(guardKillError('refine', stalled, {finalAttempt: true})).toBeInstanceOf(
-            BackendDownError
-        )
-    })
-
-    test('a command kill is final on every attempt — the SPEC named it, not the model', () => {
-        const kill = {...clean, commandKill: {toolName: 'bash', timeoutMs: 30}}
-        expect(guardKillError('t', kill, {finalAttempt: false})).toBeInstanceOf(CommandTimeoutError)
-    })
-
-    test('an ordinary result is not a kill', () => {
-        expect(guardKillError('refine', clean)).toBeNull()
-    })
-
-    /**
-     * The reason this helper exists. child-process.ts reports `exitCode: code ?? 0`
-     * and a signal kill gives null, so a killed child looks clean by exit code and
-     * carries whatever text it had streamed. A caller that tests the exit code
-     * instead of asking here ships that text as the phase's answer.
-     */
-    test('a kill is invisible to an exit-code test — it reports 0 WITH text', () => {
-        const killed = {...clean, exitCode: 0, stalled: true}
-        expect(killed.exitCode).toBe(0)
-        expect(killed.text.length).toBeGreaterThan(0)
-        expect(guardKillError('refine', killed)).not.toBeNull()
     })
 })
 
@@ -1669,9 +1604,11 @@ describe('runPhaseChild — command watchdog', () => {
             // fire this test HANGS rather than fails, which is the production
             // symptom exactly.
             const deps = depsWith(fakeSpawnKillable([hung('bun run dev')], p => prompts.push(p)))
-            await expect(runPhaseChild(deps, 'verify-tooling', 'read,bash', 'go')).rejects.toThrow(
-                CommandTimeoutError
-            )
+            await expect(
+                runPhaseChild(deps, 'verify-tooling', 'read,bash', 'go')
+            ).rejects.toMatchObject({
+                failure: {kind: 'command-timeout'}
+            })
             // Initial attempt plus the leak/restart budget, same as any other
             // restartable phase cause.
             expect(prompts.length).toBe(MAX_LEAK_RETRIES + 1)
@@ -1727,7 +1664,7 @@ describe('runPhaseChild — command watchdog', () => {
             )
             // A healthy child is unaffected either way; this pins that resolving the
             // policy did not make the guard unconditional.
-            expect(phasePolicy().guards['command-timeout']).toBe(0)
+            expect(workerPolicy('phase', {commandTimeoutMs: 0}).guards['command-timeout']).toBe(0)
             await runPhaseChild(deps, 'refine', 'read', 'go').catch(() => {})
         })
     })
@@ -1771,7 +1708,7 @@ describe('isConnectionError — the transport classes pi retries', () => {
 
 describe('isFatalChildCause', () => {
     test('a dead backend and a user cancel are fatal', () => {
-        expect(isFatalChildCause(new BackendDownError('refine'))).toBe(true)
+        expect(isFatalChildCause(new ChildFailureError('refine', {kind: 'stalled'}))).toBe(true)
         expect(isFatalChildCause(new Error(USER_CANCELLED))).toBe(true)
     })
 
@@ -1779,7 +1716,13 @@ describe('isFatalChildCause', () => {
         // These are what the best-effort catches exist to absorb.
         expect(isFatalChildCause(new Error('refine child produced no output'))).toBe(false)
         expect(
-            isFatalChildCause(new CommandTimeoutError('t', {toolName: 'bash', timeoutMs: 1}))
+            isFatalChildCause(
+                new ChildFailureError('t', {
+                    kind: 'command-timeout',
+                    toolName: 'bash',
+                    timeoutMs: 1
+                })
+            )
         ).toBe(false)
         expect(isFatalChildCause(undefined)).toBe(false)
         expect(isFatalChildCause('a bare string')).toBe(false)

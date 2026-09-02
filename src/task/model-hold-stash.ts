@@ -11,13 +11,13 @@
  * So acquire leaves a note on disk and release removes it. A later session
  * finds the note and puts the model back.
  */
-import type {ExtensionAPI, ExtensionContext} from '@earendil-works/pi-coding-agent'
+import type {ExtensionAPI} from '@earendil-works/pi-coding-agent'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
-import {splitSpec} from '../config/group-models.js'
 import {defaultModelRef} from '../shared/model-endpoint.js'
+import {specOf} from '../shared/model-resolve.js'
 import {stateFile} from '../shared/data-home.js'
-import {restoreHeldModel, type ModelControl} from './implementation-hold.js'
+import {liveModelControl, restoreHeldModel} from './implementation-hold.js'
 
 /**
  * Both halves of the switch, as `provider/id` strings.
@@ -79,23 +79,13 @@ export function clearHoldStash(): void {
  */
 export function registerModelHoldRestore(pi: ExtensionAPI): void {
     pi.on('session_start', (_event, ctx) => {
-        const model: ModelControl<NonNullable<ExtensionContext['model']>> = {
-            current: () => {
-                const m = ctx.model
-                return m ? {spec: `${m.provider}/${m.id}`, handle: m} : undefined
-            },
-            resolve: spec => {
-                const parts = splitSpec(spec)
-                return parts ? ctx.modelRegistry.find(parts.provider, parts.id) : undefined
-            },
-            apply: handle => pi.setModel(handle)
-        }
+        const model = liveModelControl(ctx, handle => pi.setModel(handle))
         // The saved default, read from the file the crash left wrong — not from
         // `ctx.model`, which a `--model` flag or a resumed session can make say
         // something else entirely.
         const saved = (): string | undefined => {
             const ref = defaultModelRef()
-            return ref && `${ref.provider}/${ref.id}`
+            return ref && specOf(ref)
         }
         void restoreHeldModel(model, saved).catch(() => {})
     })

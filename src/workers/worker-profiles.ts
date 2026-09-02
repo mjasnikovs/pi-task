@@ -103,6 +103,12 @@ export interface StalledGuard {
      * harnesses inject a real probe through the override.
      */
     probe: (() => Promise<boolean>) | null
+    /**
+     * Re-spawn on a dead-backend kill, within the shared restart budget, so the
+     * verdict is earned on every attempt rather than on one probe sample. Off
+     * for a worker whose caller would rather hear "unreachable" at once.
+     */
+    restart: boolean
 }
 
 /**
@@ -205,6 +211,14 @@ interface WorkerGuardShapes {
     'connection-error': number
     loop: LoopGuard
     'leaked-tool-call': null
+    /**
+     * Re-spawn on an empty completion — exit 0, no text, no reported error —
+     * within the shared restart budget. For a phase child that is almost always
+     * a provider error swallowed inside `--mode json`, not a repeatable mistake.
+     * Off for the research workers, which decide what an empty section means
+     * themselves (research-worker.ts).
+     */
+    'empty-answer': boolean
     aborted: null
     exit: null
 }
@@ -262,6 +276,12 @@ export interface WorkerPolicyInputs {
     commandTimeoutMs?: number
     /** gate, phase: `config.streamInactivityMs`. */
     streamInactivityMs?: number
+    /**
+     * phase: a wall clock on ONE spawn, for a caller that genuinely wants a hard
+     * stop. Nothing sets it in production — see the phase row's `why` — and
+     * tests inject a short one.
+     */
+    timeoutMs?: number
     /** research: only `worker:apis` fans out, so only it can be scaled. */
     fanoutBounded?: boolean
     /** research: the env reader the fanout and progress-ceiling levers use.
@@ -283,7 +303,7 @@ export interface WorkerProfile {
  */
 function baseGuards(): WorkerGuards {
     return {
-        stalled: {afterMs: STALL_AFTER_MS, probe: null},
+        stalled: {afterMs: STALL_AFTER_MS, probe: null, restart: false},
         'command-timeout': 0,
         'stream-stall': 0,
         'worker-timeout': {
@@ -294,6 +314,7 @@ function baseGuards(): WorkerGuards {
         'connection-error': MAX_LOOP_RESTARTS,
         loop: {detector: {...DEFAULT_LOOP_DETECTOR}, progress: {...DEFAULT_LOOP_PROGRESS}},
         'leaked-tool-call': null,
+        'empty-answer': false,
         aborted: null,
         exit: null
     }
@@ -399,21 +420,33 @@ export const WORKER_PROFILES = {
             + 'watchdog SUSPENDS for the duration of a tool call, the dead-backend '
             + 'probe reads a reachable endpoint as alive, and both runaway detectors '
             + 'wait on a result that never arrives. Only a user ESC could end it. '
-            + 'The wall clock stays OFF as PHASE_CHILD_TIMEOUT_MS decided for a FIXED '
-            + "cap; that does not settle research's progress-based ceiling. "
-            + 'PARTIALLY CONSUMED: runPhaseChild has its own strike loop and reads '
-            + 'only `command-timeout`, `stream-stall`, `stalled` and `loop`, so '
-            + 'setting `worker-timeout` or `connection-error` here does NOTHING.',
+            + 'The wall clock is OFF. A wall clock on a model child measures the '
+            + "MODEL'S SPEED, not its health: the same planning child that answers "
+            + 'in seconds on one backend takes minutes on another, so any cap loose '
+            + 'enough to be safe catches nothing and any cap tight enough to catch a '
+            + 'runaway kills healthy work. The runaway it would catch — forward-paging '
+            + "through a whole context window — is the StallDetector's, which bounds "
+            + 'non-progress and churn rather than elapsed time. '
+            + 'Two departures the research workers do not share. A dead-backend kill '
+            + 'is RETRIED: one probe sample cannot tell a blip from a death, three '
+            + 'failed probes cost the stall window three times, and one wrong verdict '
+            + 'ends the whole run. And an EMPTY completion is retried: inside '
+            + '`--mode json` a swallowed provider error arrives as exit 0 with no '
+            + 'text, and a fresh spawn almost always answers.',
         resolve: inputs => {
             const guards = baseGuards()
-            // INERT for this profile — runPhaseChild never reads it. Zeroed anyway
-            // so the row cannot be mistaken for research's armed 240s cap.
-            guards['worker-timeout'] = {timeoutMs: 0, progressCeilingMs: null, fanout: null}
+            guards['worker-timeout'] = {
+                timeoutMs: inputs.timeoutMs ?? 0,
+                progressCeilingMs: null,
+                fanout: null
+            }
             // Both ceilings are the user's own settings, as they are for gate: the
             // number is theirs, the decision to arm it is this row's. 0 from a
             // caller that hands none, so a harness cannot silently acquire a guard.
             guards['command-timeout'] = inputs.commandTimeoutMs ?? 0
             guards['stream-stall'] = inputs.streamInactivityMs ?? 0
+            guards.stalled = {afterMs: STALL_AFTER_MS, probe: null, restart: true}
+            guards['empty-answer'] = true
             return {guards, carryForward: false}
         }
         // `as const satisfies`, not an annotation — the same reason RESTART_ORDER

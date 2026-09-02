@@ -1,7 +1,10 @@
 import {spawn as defaultSpawn, spawnSync as spawnSyncDefault} from 'node:child_process'
 import type {EventEmitter} from 'node:events'
 import {realStreamTimerDeps, StreamWatchdog} from './stream-watchdog.js'
+import {realStallTimerDeps, StallProbe} from './stall-probe.js'
+import type {CommandKillReason} from './command-watchdog.js'
 import {workerChannel} from '../workers/worker-channels.js'
+import type {LoopHit} from '../task/loop-detector.js'
 
 /** Grace period between SIGTERM and SIGKILL (ms). */
 export const KILL_GRACE_MS = 5000
@@ -60,11 +63,37 @@ export type SpawnFn = (
 
 // ─── Result types ────────────────────────────────────────────────────────────
 
+/**
+ * Why runChild killed the child. Five sources converge on one kill path, and
+ * each names itself here rather than in its own flag — so a consumer reads ONE
+ * field, and a sixth source is one more member, not a fourth boolean that every
+ * consumer has to remember to test before `aborted`.
+ *
+ * `aborted` is the caller's signal with no cause attached: a user cancel, or a
+ * wall clock that aborts without saying so. `command-timeout` also arrives
+ * through the signal, but the watchdog aborts WITH its kill as the reason
+ * (command-watchdog.ts), which is how it stays a member here instead of an
+ * out-of-band query.
+ */
+export type ChildKill =
+    | {by: 'aborted'}
+    | {by: 'loop'; hit: LoopHit}
+    | {by: 'stream-stall'; idleMs: number}
+    | {by: 'stalled'}
+    | CommandKillReason
+
 export interface ChildResult {
     stdout: string
     stderr: string
     exitCode: number
+    /** true exactly when `kill` is set. Kept as a flag for the text-mode callers. */
     aborted: boolean
+    /**
+     * Set when WE ended the child. Its exit status then describes our SIGTERM
+     * and says nothing about the child's verdict, so a consumer must read this
+     * before the exit code.
+     */
+    kill?: ChildKill
     /** Extracted assistant text (only populated in json-events mode). */
     text?: string
     /**
@@ -75,22 +104,12 @@ export interface ChildResult {
      * Only populated in json-events mode.
      */
     modelError?: string
-    /**
-     * true when the stall guard killed the child: no output for the stall
-     * window AND the model endpoint probe found the backend unreachable.
-     * Callers must check this BEFORE `aborted` — the kill sets aborted too,
-     * and without the flag it would mislabel as a user cancel.
-     */
-    stalled?: boolean
-    /**
-     * true when the STREAM watchdog killed the child: no output at all for the
-     * configured inactivity window, regardless of whether the backend answers a
-     * probe. Distinct from `stalled`, which requires an UNREACHABLE endpoint —
-     * these hangs have a perfectly healthy server and a dead stream, so the
-     * probe path could never fire. Callers must check this BEFORE `aborted`
-     * (the kill sets aborted too) and route it into the connection-error retry.
-     */
-    streamStalled?: {idleMs: number}
+}
+
+/** The cause a signal was aborted with, when its owner attached one. */
+function abortCause(reason: unknown): ChildKill {
+    const tagged = reason as {by?: unknown} | null | undefined
+    return tagged?.by === 'command-timeout' ? (reason as CommandKillReason) : {by: 'aborted'}
 }
 
 // ─── JSON event-stream types (for mode: 'json-events') ──────────────────────
@@ -109,19 +128,7 @@ export interface ToolCall {
     toolCallId?: string
 }
 
-export interface LoopHit {
-    call: ToolCall
-    count: number
-    windowSize: number
-    /**
-     * Set when the kill came from the whole-run StallDetector rather than the
-     * short-window LoopDetector, naming which of its two rules tripped
-     * (task/stall-detector.ts). Absent for an ordinary loop hit. Carried here so
-     * a stall rides the kill/restart plumbing the loop hit already has instead of
-     * needing a second channel.
-     */
-    stall?: 'no-new-ground' | 'context-churn'
-}
+export type {LoopHit} from '../task/loop-detector.js'
 
 export interface ContextSnapshot {
     tokens: number
@@ -251,7 +258,7 @@ export class JsonEventSink {
     constructor(
         private readonly opts: RunChildJsonEventsOptions,
         /** Invoked when onToolCall reports a loop hit — runChild kills the child. */
-        private readonly onLoopKill: () => void
+        private readonly onLoopKill: (hit: LoopHit) => void
     ) {}
 
     /** Feed a raw stdout chunk: parse every complete line, buffer the partial tail. */
@@ -376,7 +383,7 @@ export class JsonEventSink {
             }
             if (opts.onToolCall) {
                 const hit = opts.onToolCall({name: tn, args: evt.args, toolCallId: id})
-                if (hit) this.onLoopKill()
+                if (hit) this.onLoopKill(hit)
             }
             return
         }
@@ -418,7 +425,7 @@ export function runChild(
     return new Promise(resolve => {
         let stdout = ''
         let stderr = ''
-        let aborted = false
+        let kill: ChildKill | undefined
         const discardStdout = opts?.mode === 'text' && opts.discardStdout === true
 
         // Deliver the prompt on stdin, not argv. A large prompt — an inlined design
@@ -464,12 +471,13 @@ export function runChild(
             }
         }
 
-        // One kill path, shared by user-abort and loop-kill: SIGTERM, then SIGKILL
-        // after a grace period if the child ignored the term. For a group-owning
-        // (model) child, ALSO sweep the group so anything it backgrounded dies with
-        // it — proc.kill hits only the leader, reapGroup the grandchildren.
-        const killProc = (): void => {
-            aborted = true
+        // One kill path for every source: SIGTERM, then SIGKILL after a grace
+        // period if the child ignored the term. For a group-owning (model) child,
+        // ALSO sweep the group so anything it backgrounded dies with it —
+        // proc.kill hits only the leader, reapGroup the grandchildren. The FIRST
+        // cause wins: a stall kill's SIGTERM can trip the abort path behind it.
+        const killProc = (cause: ChildKill): void => {
+            kill ??= cause
             proc.kill('SIGTERM')
             if (ownGroup) reapGroup('SIGTERM')
             setTimeout(() => {
@@ -483,16 +491,12 @@ export function runChild(
         // below structurally cannot catch. Suspended for the duration of a tool
         // call: a 12-minute build legitimately emits nothing, and that window is
         // the COMMAND watchdog's to police, not this one's.
-        let streamStalledIdleMs: number | undefined
         const streamWatch =
             opts?.mode === 'json-events' && (opts.streamInactivityMs ?? 0) > 0 ?
                 new StreamWatchdog({
                     getTimeoutMs: () => opts.streamInactivityMs!,
                     ...realStreamTimerDeps,
-                    onFire: idleMs => {
-                        streamStalledIdleMs = idleMs
-                        killProc()
-                    }
+                    onFire: idleMs => killProc({by: 'stream-stall', idleMs})
                 })
             :   null
         streamWatch?.start()
@@ -519,46 +523,25 @@ export function runChild(
                     }
                 }
             :   opts
-        const sink = sinkOpts ? new JsonEventSink(sinkOpts, killProc) : null
+        const sink =
+            sinkOpts ? new JsonEventSink(sinkOpts, hit => killProc({by: 'loop', hit})) : null
 
-        // Dead-backend stall guard (json-events children only; see the option
-        // docs). Any output resets the window; a reachable probe also resets it
-        // so the next probe is a full window away, not every tick.
+        // Dead-backend stall guard (json-events children only; see the option docs).
         const stall = opts?.mode === 'json-events' ? opts.stall : undefined
-        let lastActivity = Date.now()
-        let stalled = false
-        let probing = false
-        const stallTimer =
+        const stallProbe =
             stall ?
-                setInterval(
-                    () => {
-                        if (probing || Date.now() - lastActivity < stall.afterMs) return
-                        probing = true
-                        stall
-                            .probe()
-                            .then(reachable => {
-                                probing = false
-                                if (reachable || stalled) {
-                                    lastActivity = Date.now()
-                                    return
-                                }
-                                stalled = true
-                                killProc()
-                            })
-                            .catch(() => {
-                                // A probe that itself crashed proves nothing —
-                                // benefit of the doubt, keep waiting.
-                                probing = false
-                                lastActivity = Date.now()
-                            })
-                    },
-                    Math.max(50, Math.min(stall.afterMs / 2, 15_000))
-                )
-            :   undefined
+                new StallProbe({
+                    afterMs: stall.afterMs,
+                    probe: stall.probe,
+                    ...realStallTimerDeps,
+                    onDead: () => killProc({by: 'stalled'})
+                })
+            :   null
+        stallProbe?.start()
 
         let firstByteFired = false
         proc.stdout?.on('data', (d: Buffer) => {
-            lastActivity = Date.now()
+            stallProbe?.note()
             streamWatch?.note()
             if (!firstByteFired) {
                 firstByteFired = true
@@ -592,10 +575,11 @@ export function runChild(
         // research-worker slices the TAIL of stderr in two places and the HEAD in a
         // third, and child-runner feeds the whole string into its failure message.
         proc.stderr?.on('data', (d: Buffer) => {
-            lastActivity = Date.now()
+            stallProbe?.note()
             streamWatch?.note()
             stderr += d.toString()
         })
+        const onAbort = (): void => killProc(abortCause(signal?.reason))
         // One idempotent settle path for close/error/abort. Detaching the abort
         // listener here is the point. `{once: true}` fires-and-removes on an ACTUAL
         // abort and at no other time, so a child that finishes normally leaves its
@@ -608,9 +592,9 @@ export function runChild(
         // the caller's callbacks close over.
         let settled = false
         const cleanup = (): void => {
-            if (stallTimer) clearInterval(stallTimer)
+            stallProbe?.stop()
             streamWatch?.stop()
-            signal?.removeEventListener('abort', killProc)
+            signal?.removeEventListener('abort', onAbort)
         }
         const settle = (result: ChildResult): void => {
             cleanup()
@@ -634,22 +618,25 @@ export function runChild(
                 stdout,
                 stderr,
                 exitCode: code ?? 0,
-                aborted,
+                aborted: kill !== undefined,
+                ...(kill ? {kill} : {}),
                 text,
-                modelError: sink?.modelError,
-                ...(stalled ? {stalled: true} : {}),
-                ...(streamStalledIdleMs !== undefined ?
-                    {streamStalled: {idleMs: streamStalledIdleMs}}
-                :   {})
+                modelError: sink?.modelError
             })
         })
         proc.once('error', () => {
-            settle({stdout, stderr, exitCode: 1, aborted})
+            settle({
+                stdout,
+                stderr,
+                exitCode: 1,
+                aborted: kill !== undefined,
+                ...(kill ? {kill} : {})
+            })
         })
 
         if (signal) {
-            if (signal.aborted) killProc()
-            else signal.addEventListener('abort', killProc, {once: true})
+            if (signal.aborted) onAbort()
+            else signal.addEventListener('abort', onAbort, {once: true})
         }
     })
 }

@@ -133,6 +133,11 @@ export function disarmImplWidget(): void {
     lastLine = undefined
 }
 
+/** @internal Test seam: is a turn currently showing the widget? */
+export function implWidgetArmed(): boolean {
+    return armed !== null
+}
+
 /** Wire the agent-lifecycle handlers that drive the widget. Call once at setup.
  *  All three events are pi's own: `agent_start`, `tool_execution_start` and
  *  `agent_end` each have an `on()` overload, and ToolExecutionStartEvent carries

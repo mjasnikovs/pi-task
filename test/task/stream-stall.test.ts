@@ -75,8 +75,8 @@ describe('runChild stream-inactivity guard', () => {
             undefined,
             {mode: 'json-events', streamInactivityMs: WINDOW_MS}
         )
-        expect(r.streamStalled).toBeDefined()
-        expect(r.streamStalled!.idleMs).toBeGreaterThanOrEqual(WINDOW_MS)
+        expect(r.kill?.by).toBe('stream-stall')
+        expect(r.kill?.by === 'stream-stall' && r.kill.idleMs).toBeGreaterThanOrEqual(WINDOW_MS)
         expect(r.aborted).toBe(true)
         // The partial text survives — the caller decides what to do with it.
         expect(r.text).toBe('partial ans')
@@ -131,7 +131,7 @@ describe('runChild stream-inactivity guard', () => {
             ctrl.signal,
             {mode: 'json-events', streamInactivityMs: WINDOW_MS}
         )
-        expect((await rearmed).streamStalled).toBeDefined()
+        expect((await rearmed).kill?.by).toBe('stream-stall')
 
         // Release the still-hanging first child so the test doesn't leak it.
         ctrl.abort()
@@ -229,9 +229,11 @@ describe('phase child A/B: hang then retry', () => {
             expect(s.spawns).toBe(2)
             // Honest logging: the trail must name the stall, not just "retry".
             expect(logs.join('\n')).toMatch(/stream inactivity/)
-            // The retry re-sends the ORIGINAL prompt (the child is stateless and
-            // nothing it did was durable), never a duplicated half-turn.
-            expect(s.prompts[1]).toBe(s.prompts[0])
+            // The retry re-sends the ORIGINAL prompt behind the stall hint (the
+            // child is stateless and nothing it did was durable), never a
+            // duplicated half-turn.
+            expect(s.prompts[1]).toEndWith(s.prompts[0])
+            expect(s.prompts[1]).toContain('stream stopped producing output')
         } finally {
             cfg.streamInactivityMs = prev
         }

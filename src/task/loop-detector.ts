@@ -13,11 +13,9 @@
  * Either pattern returns a LoopHit so the caller can kill the child and re-spawn
  * with a hint. No I/O. No imports from index.ts. Trivially unit-testable.
  *
- * The three tuning constants live here rather than in child-runner.ts because
- * worker-profiles.ts reads them at module top level to build DEFAULT_LOOP_DETECTOR.
- * From child-runner.ts that is a cycle — child-runner → worker-profiles →
- * child-runner — and the failure is a TDZ ReferenceError on import order, which
- * no compile step catches. This module imports nothing, so it cannot close one.
+ * This module imports nothing: worker-profiles.ts reads the tuning constants at
+ * module top level, and a dependency from here on any runner would close a cycle
+ * whose only symptom is a TDZ ReferenceError on import order.
  */
 
 /** Recent tool calls the exact-repeat rule looks back over. */
@@ -38,6 +36,14 @@ export interface LoopHit {
     call: ToolCall
     count: number
     windowSize: number
+    /**
+     * Set when the kill came from the whole-run StallDetector rather than this
+     * short-window detector, naming which of its two rules tripped
+     * (stall-detector.ts). Absent for an ordinary loop hit. Carried here so a
+     * stall rides the kill/restart plumbing the loop hit already has instead of
+     * needing a second channel.
+     */
+    stall?: 'no-new-ground' | 'context-churn'
 }
 
 /**
@@ -178,4 +184,15 @@ export class LoopDetector {
         }
         return revisits
     }
+}
+
+/** The restart hint a re-spawned child gets after a loop kill: names the call. */
+export function formatLoopHint(hit: LoopHit): string {
+    const argsStr = JSON.stringify(hit.call.args)
+    return (
+        `[SYSTEM NOTE: Your prior attempt called ${hit.call.name}(${argsStr}) `
+        + `${hit.count} times in the last ${hit.windowSize} tool calls — you appeared to be `
+        + `stuck in a loop. Avoid repeating that exact call; if you've already seen its result, `
+        + `work from memory or pick a different angle.]`
+    )
 }

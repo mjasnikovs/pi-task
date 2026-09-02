@@ -29,7 +29,7 @@ import type {ExtensionCommandContext} from '@earendil-works/pi-coding-agent'
 import type {RunWorkerInput, RunWorkerResult} from '../workers/pi-worker-core.js'
 import type {GitStateSnapshot, ReconcileResult} from './git-state-guard.js'
 import type {ChildStatus} from './child-status.js'
-import {formatLoopHint} from './child-runner.js'
+import {formatLoopHint} from './loop-detector.js'
 import {classifyEnforceChildFailure} from './enforce-guidelines.js'
 
 /** Which gate child this is. */

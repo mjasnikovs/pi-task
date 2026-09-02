@@ -21,7 +21,6 @@ import {
     configRows,
     createSettingsPanel,
     formatStepValue,
-    offeredLevels,
     panelItems,
     parseStepValue,
     renderRows,
@@ -32,7 +31,11 @@ import {
     type ModelCatalog
 } from '../../src/config/register.js'
 import {MODEL_INHERIT} from '../../src/config/group-models.js'
-import {clampToModel} from '../../src/shared/reasoning-capability.js'
+import {
+    clampToModel,
+    effectiveSetting,
+    offeredLevels
+} from '../../src/shared/reasoning-capability.js'
 
 /** The minimum theme SettingsList needs; none of it is asserted on. */
 const listTheme = (): SettingsListTheme => ({
@@ -776,5 +779,28 @@ describe('the clamp stays inside the menu vocabulary', () => {
         expect(stage.options.find(o => o.value === stage.preselect)?.description).toBe(
             'acme/odd cannot do high'
         )
+    })
+
+    test('the WRITER stores exactly what the picker preselects', () => {
+        // The two used to be separate copies of the clamp, and only the picker
+        // re-projected into the menu. On a model whose clamp lands on `xhigh`
+        // the picker showed `medium` while the writer stored `xhigh` — a value
+        // no row can render.
+        const odd = {reasoning: true, thinkingLevelMap: {high: null, xhigh: 'x'}}
+        const catalog: ModelCatalog = {specs: ['acme/odd'], facts: () => odd}
+        const cfg = draft({reasoningMode: 'custom'})
+        cfg.reasoningLevels = {...cfg.reasoningLevels, gate: 'high'}
+        const stage = stepItems(catalog).find(i => i.id === 'step:gate')!.picker!(cfg).second(
+            'acme/odd'
+        )
+        applyStepValue(cfg, 'gate', formatStepValue('acme/odd', 'high'), catalog)
+        expect(stage.preselect).toBe(resolveReasoning('gate', cfg))
+        expect(REASONING_SETTINGS.includes(resolveReasoning('gate', cfg))).toBe(true)
+    })
+
+    test('effectiveSetting: inherit and an unknown model pass through', () => {
+        expect(effectiveSetting(undefined, 'high')).toBe('high')
+        expect(effectiveSetting(NON_REASONING, 'inherit')).toBe('inherit')
+        expect(effectiveSetting(NON_REASONING, 'high')).toBe('off')
     })
 })

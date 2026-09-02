@@ -250,7 +250,7 @@ describe('runChild stall guard (dead model backend)', () => {
                 }
             }
         })
-        expect(result.stalled).toBe(true)
+        expect(result.kill).toEqual({by: 'stalled'})
         expect(result.aborted).toBe(true)
         expect(probes).toBe(1)
     })
@@ -273,7 +273,7 @@ describe('runChild stall guard (dead model backend)', () => {
                 }
             }
         })
-        expect(result.stalled).toBeUndefined()
+        expect(result.kill).toBeUndefined()
         expect(result.aborted).toBe(false)
         expect(probes).toBeGreaterThanOrEqual(1)
     })
@@ -302,7 +302,7 @@ describe('runChild stall guard (dead model backend)', () => {
                 }
             }
         })
-        expect(result.stalled).toBeUndefined()
+        expect(result.kill).toBeUndefined()
         expect(probes).toBe(0)
     })
 
@@ -316,7 +316,7 @@ describe('runChild stall guard (dead model backend)', () => {
             mode: 'json-events',
             stall: {afterMs: 60, probe: () => Promise.reject(new Error('probe broke'))}
         })
-        expect(result.stalled).toBeUndefined()
+        expect(result.kill).toBeUndefined()
         expect(result.aborted).toBe(false)
     })
 })

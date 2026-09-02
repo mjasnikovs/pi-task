@@ -12,7 +12,7 @@ import {
     groupChildArgs,
     groupModelArgs,
     groupThinkingArgs,
-    setUnusableSpecs
+    setGroupModels
 } from '../../src/config/group-args.js'
 import {DEFAULT_CONFIG, type PiTaskConfig} from '../../src/config/config.js'
 import {effectiveReasoning, CHILD_GROUPS} from '../../src/config/reasoning.js'
@@ -89,12 +89,14 @@ describe('groupModelArgs', () => {
 })
 
 describe('a spec this session proved unresolvable', () => {
-    // The set is module state, so every test here puts it back.
-    const clear = (): void => setUnusableSpecs([])
+    // The snapshot is module state, so every test here puts it back.
+    const clear = (): void => setGroupModels({})
+    const gone = (): void =>
+        setGroupModels({gate: {spec: 'acme/gone', usable: false, problem: 'unresolved'}})
 
     test('is dropped, and only it', () => {
         try {
-            setUnusableSpecs(['acme/gone'])
+            gone()
             expect(groupModelArgs('gate', withModel('gate', 'acme/gone'))).toEqual([])
             expect(groupModelArgs('gate', withModel('gate', 'acme/here'))).toEqual([
                 '--model',
@@ -105,11 +107,37 @@ describe('a spec this session proved unresolvable', () => {
         }
     })
 
+    test('the verdict is per CELL: another group on the same spec is emitted', () => {
+        // The snapshot proves what THIS group's cell resolved to. A host that
+        // has not proven another group's cell must leave pi to decide.
+        try {
+            gone()
+            expect(groupModelArgs('phase', withModel('phase', 'acme/gone'))).toEqual([
+                '--model',
+                'acme/gone'
+            ])
+        } finally {
+            clear()
+        }
+    })
+
+    test('a cell changed since session_start is emitted — the verdict was about another spec', () => {
+        try {
+            gone()
+            expect(groupModelArgs('gate', withModel('gate', 'acme/new'))).toEqual([
+                '--model',
+                'acme/new'
+            ])
+        } finally {
+            clear()
+        }
+    })
+
     test('dropping the model leaves the thinking half alone', () => {
         // Half-applying is the failure this avoids: the child runs the model it
         // ran last week, at the level the user chose, and the hint names the cell.
         try {
-            setUnusableSpecs(['acme/gone'])
+            gone()
             expect(groupChildArgs('gate', withModel('gate', 'acme/gone'))).toEqual([
                 '--thinking',
                 'off'
@@ -119,7 +147,7 @@ describe('a spec this session proved unresolvable', () => {
         }
     })
 
-    test('an EMPTY set emits everything — a host with no session_start is unchanged', () => {
+    test('an EMPTY snapshot emits everything — a host with no session_start is unchanged', () => {
         clear()
         expect(groupModelArgs('gate', withModel('gate', 'acme/anything'))).toEqual([
             '--model',

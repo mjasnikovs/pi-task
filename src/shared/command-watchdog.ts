@@ -222,6 +222,16 @@ export interface CommandKill {
 }
 
 /**
+ * The kill, as the REASON the watchdog aborts its signal with. runChild reads
+ * it off the combined signal, so a command kill reaches `ChildResult.kill` by
+ * the same road every other guard's kill does — not through a side query the
+ * caller has to remember to make.
+ */
+export interface CommandKillReason extends CommandKill {
+    by: 'command-timeout'
+}
+
+/**
  * The tool-call fields the child-side watchdog reads. Structural rather than
  * `ToolCall` from child-process.ts, so this module keeps its zero imports and a
  * caller cannot be forced to reach for the runner's types to arm a timer.
@@ -234,9 +244,9 @@ export interface WatchedToolCall {
 
 /**
  * Build the child-side command watchdog for ONE attempt: a per-tool-call timer
- * machine whose `onFire` aborts `signal`, which runChild turns into a
- * process-GROUP kill — reaping the hung command itself, not just the pi child
- * holding it.
+ * machine whose `onFire` aborts `signal` WITH the kill as its reason, which
+ * runChild turns into a process-GROUP kill — reaping the hung command itself,
+ * not just the pi child holding it — and reports as `kill.by === 'command-timeout'`.
  *
  * LIMIT: the group kill only reaches processes still IN the group. A hung command
  * that detached a daemon (setsid, nohup, a background dev server) leaves it
@@ -250,7 +260,6 @@ export interface WatchedToolCall {
 export function commandWatch(timeoutMs: number): {
     onStart: (call: WatchedToolCall) => void
     onEnd: (toolCallId: string | undefined) => void
-    killed: () => CommandKill | undefined
     signal: AbortSignal
     clear: () => void
 } | null {
@@ -261,18 +270,18 @@ export function commandWatch(timeoutMs: number): {
     // child are sequential, so a single slot is still correctly paired.
     const key = (id: string | undefined): string => id ?? 'anon'
     const details = new Map<string, string>()
-    let killed: CommandKill | undefined
 
     const watchdog = new CommandWatchdog({
         getTimeoutMs: () => timeoutMs,
         ...realTimerDeps,
         onFire: (toolCallId, toolName, ms) => {
-            killed = {
+            const reason: CommandKillReason = {
+                by: 'command-timeout',
                 toolName,
                 timeoutMs: ms,
                 ...(details.has(toolCallId) ? {detail: details.get(toolCallId)!} : {})
             }
-            ctrl.abort()
+            ctrl.abort(reason)
         }
     })
 
@@ -293,7 +302,6 @@ export function commandWatch(timeoutMs: number): {
             details.delete(key(id))
             watchdog.onEnd(key(id))
         },
-        killed: () => killed,
         signal: ctrl.signal,
         clear: () => watchdog.clearAll()
     }

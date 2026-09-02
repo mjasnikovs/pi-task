@@ -7,8 +7,8 @@
 
 import type {ContextSnapshot} from '../shared/child-process.js'
 import {getConfig, type PiTaskConfig} from '../config/config.js'
-import {MODEL_INHERIT, splitSpec} from '../config/group-models.js'
 import type {ChildGroup} from '../config/groups.js'
+import {resolveModel, type ModelContext} from '../shared/model-resolve.js'
 
 /**
  * The parent session's context window, or 0 when the model doesn't expose it.
@@ -72,11 +72,7 @@ export function contextWindowForSpec(
     },
     spec: string
 ): number {
-    if (spec === MODEL_INHERIT) return getParentContextWindow(ctx)
-    const parts = splitSpec(spec)
-    const found = parts && ctx.modelRegistry?.find(parts.provider, parts.id)
-    const window = (found as {contextWindow?: number} | undefined)?.contextWindow ?? 0
-    return window > 0 ? window : getParentContextWindow(ctx)
+    return resolveModel(ctx as ModelContext, spec)?.contextWindow || getParentContextWindow(ctx)
 }
 
 /**

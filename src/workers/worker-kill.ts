@@ -17,12 +17,18 @@
  * row type would need an escape hatch per row. What the orderings gain here is that
  * neither can name a cause with no row, nor silently omit one.
  *
- * Not every cause appears in both ladders, and that asymmetry is real. Six of the
- * nine are `restartable` and those six are exactly RESTART_ORDER; eight are
- * `reported` and those eight are exactly FAILURE_ORDER. `connection-error` is the
- * one that restarts without ever being reported as a kill — it reaches the caller
- * as a `modelError`. `stalled`, `aborted` and `exit` end an attempt outright, and
- * no hint would help.
+ * Not every cause appears in both ladders, and that asymmetry is real. Eight of
+ * the ten are `restartable` and those eight are exactly RESTART_ORDER; eight are
+ * `reported` and those eight are exactly FAILURE_ORDER. `connection-error` and
+ * `empty-answer` restart without ever being reported as a kill — the first
+ * reaches the caller as a `modelError`, the second as empty text, and whether
+ * either counts as a failure is the consumer's policy. `aborted` and `exit` end
+ * an attempt outright, and no hint would help.
+ *
+ * Whether a restartable cause actually restarts is the PROFILE's decision
+ * (worker-profiles.ts): `stalled` and `empty-answer` each carry a switch there,
+ * because the phase children re-spawn on both and the research workers on
+ * neither.
  */
 
 /** Every way a worker attempt can end other than by answering. */
@@ -34,6 +40,7 @@ export type WorkerKillId =
     | 'connection-error'
     | 'loop'
     | 'leaked-tool-call'
+    | 'empty-answer'
     | 'aborted'
     | 'exit'
 
@@ -65,6 +72,16 @@ export interface WorkerKill {
     restartable: boolean
     /** Does this cause reach a consumer as a `WorkerFailure`? */
     reported: boolean
+    /**
+     * Must a best-effort `catch` in the phase pipeline rethrow this?
+     *
+     * A child that merely answered badly should degrade — that is what those
+     * catches are for. A dead backend is different in kind: the run is over
+     * either way, and swallowing it ships a half-built spec while every later
+     * phase dies against the same dead server. A property of the cause, so a
+     * catch asks the roster rather than keeping its own list.
+     */
+    fatal: boolean
 }
 
 export const WORKER_KILLS: readonly WorkerKill[] = [
@@ -72,47 +89,82 @@ export const WORKER_KILLS: readonly WorkerKill[] = [
         id: 'stalled',
         resultField: 'stalled',
         carryForward: false,
-        restartable: false,
-        reported: true
+        restartable: true,
+        reported: true,
+        fatal: true
     },
     {
         id: 'command-timeout',
         resultField: 'commandTimedOut',
         carryForward: true,
         restartable: true,
-        reported: true
+        reported: true,
+        fatal: false
     },
     {
         id: 'stream-stall',
         resultField: 'streamStalled',
         carryForward: true,
         restartable: true,
-        reported: true
+        reported: true,
+        fatal: false
     },
     {
         id: 'worker-timeout',
         resultField: 'timedOut',
         carryForward: true,
         restartable: true,
-        reported: true
+        reported: true,
+        fatal: false
     },
     {
         id: 'connection-error',
         resultField: null,
         carryForward: true,
         restartable: true,
-        reported: false
+        reported: false,
+        fatal: false
     },
-    {id: 'loop', resultField: 'loopHit', carryForward: false, restartable: true, reported: true},
+    {
+        id: 'loop',
+        resultField: 'loopHit',
+        carryForward: false,
+        restartable: true,
+        reported: true,
+        fatal: false
+    },
     {
         id: 'leaked-tool-call',
         resultField: 'leakedToolCall',
         carryForward: false,
         restartable: true,
-        reported: true
+        reported: true,
+        fatal: false
     },
-    {id: 'aborted', resultField: null, carryForward: false, restartable: false, reported: true},
-    {id: 'exit', resultField: null, carryForward: false, restartable: false, reported: true}
+    {
+        id: 'empty-answer',
+        resultField: null,
+        carryForward: false,
+        restartable: true,
+        reported: false,
+        fatal: false
+    },
+    {
+        id: 'aborted',
+        resultField: null,
+        carryForward: false,
+        restartable: false,
+        reported: true,
+        fatal: false
+    },
+    {
+        id: 'exit',
+        resultField: null,
+        carryForward: false,
+        restartable: false,
+        reported: true,
+        fatal: false
+    }
 ]
 
 /** Look one cause up. `undefined` only for an id with no row, which the suite forbids. */
@@ -120,22 +172,30 @@ export function workerKill(id: WorkerKillId): WorkerKill | undefined {
     return WORKER_KILLS.find(k => k.id === id)
 }
 
+/** Takes any string: the phase failure union carries kinds that are not kills. */
+export function isFatalKill(kind: string): boolean {
+    return WORKER_KILLS.some(k => k.id === kind && k.fatal)
+}
+
 /**
  * The restart ladder's precedence, as ids. `RESTART_RULES` must be exactly this,
  * in this order.
  *
  * `loop` leads: its hint names the offending call, which is the most useful thing
- * to tell a re-spawn. The two watchdogs come before the wall clock because each
- * is the narrower diagnosis, and they cannot be confused with it — a watchdog
- * kill leaves the worker's own timeout flag false.
+ * to tell a re-spawn. The two watchdogs and the dead-backend probe come before
+ * the wall clock because each is the narrower diagnosis, and they cannot be
+ * confused with it — a guard kill leaves the worker's own timeout flag false.
+ * `empty-answer` is last: like a leaked call it exists only on a clean run.
  */
 export const RESTART_ORDER = [
     'loop',
     'command-timeout',
     'stream-stall',
+    'stalled',
     'worker-timeout',
     'connection-error',
-    'leaked-tool-call'
+    'leaked-tool-call',
+    'empty-answer'
     // `as const satisfies`, not an annotation: `WorkerRestartReason` is
     // `(typeof RESTART_ORDER)[number]`, and a `readonly WorkerKillId[]`
     // annotation collapses that to the whole `WorkerKillId` union — which would

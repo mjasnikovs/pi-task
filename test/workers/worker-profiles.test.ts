@@ -40,7 +40,7 @@ import {SRC_ROOT, srcPath} from '../test-utils/src-tree.js'
  */
 const ADHOC: WorkerGuardPolicy = {
     guards: {
-        stalled: {afterMs: 180_000, probe: null},
+        stalled: {afterMs: 180_000, probe: null, restart: false},
         'command-timeout': 0,
         'stream-stall': 0,
         'worker-timeout': {timeoutMs: 240_000, progressCeilingMs: null, fanout: null},
@@ -50,6 +50,7 @@ const ADHOC: WorkerGuardPolicy = {
             progress: {limit: 8, churnFactor: 2}
         },
         'leaked-tool-call': null,
+        'empty-answer': false,
         aborted: null,
         exit: null
     },
@@ -129,7 +130,7 @@ describe('WORKER_PROFILES — the shipped policy of each worker child', () => {
      * Whole-object equality against ADHOC so the diff is a short list: two
      * config-driven ceilings, and nothing else moved.
      */
-    test('phase arms both config ceilings and departs from adhoc in nothing else', () => {
+    test('phase arms both config ceilings, retries a stall and an empty answer, and departs from adhoc in nothing else', () => {
         expect(
             workerPolicy('phase', {commandTimeoutMs: 900_000, streamInactivityMs: 600_000})
         ).toEqual({
@@ -137,14 +138,20 @@ describe('WORKER_PROFILES — the shipped policy of each worker child', () => {
                 ...ADHOC.guards,
                 'command-timeout': 900_000,
                 'stream-stall': 600_000,
-                // No wall clock, same as gate and adhoc. PHASE_CHILD_TIMEOUT_MS
-                // already settled that for a FIXED cap; the research row's
-                // progress-based ceiling is a different instrument and is not
-                // claimed here.
-                'worker-timeout': {timeoutMs: 0, progressCeilingMs: null, fanout: null}
+                // No wall clock, same as gate and adhoc: the row's `why` says
+                // a cap measures the model's speed, not its health.
+                'worker-timeout': {timeoutMs: 0, progressCeilingMs: null, fanout: null},
+                stalled: {afterMs: 180_000, probe: null, restart: true},
+                'empty-answer': true
             },
             carryForward: false
         })
+    })
+
+    test('phase: a caller-supplied wall clock lands on the worker-timeout row', () => {
+        // The one row a test can arm. Production hands none, so the cap is 0.
+        expect(workerPolicy('phase', {timeoutMs: 100}).guards['worker-timeout'].timeoutMs).toBe(100)
+        expect(workerPolicy('phase').guards['worker-timeout'].timeoutMs).toBe(0)
     })
 
     test('phase: a caller that hands no ceilings arms neither guard', () => {

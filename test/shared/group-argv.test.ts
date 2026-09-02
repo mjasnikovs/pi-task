@@ -22,7 +22,7 @@
 import {describe, expect, test} from 'bun:test'
 import {childBaseArgs} from '../../src/shared/child-extensions.js'
 import {CHILD_BASE_ARGS} from '../../src/shared/child-process.js'
-import {childArgs} from '../../src/task/child-runner.js'
+import {childArgs} from '../../src/workers/pi-worker-core.js'
 import {focusedChildArgs} from '../../src/workers/focused-extractor.js'
 import {DEFAULT_CONFIG} from '../../src/config/config.js'
 import {

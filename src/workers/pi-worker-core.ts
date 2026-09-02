@@ -15,9 +15,9 @@ import {
 export {commandCeilingForAttempt} from '../shared/command-watchdog.js'
 import {isGroundingRetrieval as isGrounding, workerChannel} from './worker-channels.js'
 import {childBaseArgs} from '../shared/child-extensions.js'
-import {LoopDetector, MAX_LOOP_RESTARTS} from '../task/loop-detector.js'
+import {LoopDetector, MAX_LOOP_RESTARTS, formatLoopHint} from '../task/loop-detector.js'
 import {StallDetector, formatStallHint} from '../task/stall-detector.js'
-import {formatLoopHint, isConnectionError, connectionRetryBackoffMs} from '../task/child-runner.js'
+import {isConnectionError, connectionRetryBackoffMs} from '../shared/connection-error.js'
 import {
     detectLeakedToolCall,
     leakedToolCallHint,
@@ -39,6 +39,38 @@ import {
 
 /** The tool whitelist a caller gets when it names none. */
 const DEFAULT_TOOLS = 'read,grep,find,ls'
+
+/**
+ * The argv of one model child.
+ *
+ * `--mode json` puts the child into the structured event stream the runner
+ * parses. Without it the child emits plain text, every line fails JSON.parse,
+ * finalText stays empty, and every caller fails with "produced no output". A
+ * refactor has dropped it once already; do not remove it again.
+ *
+ * An empty `tools` string means "no tools at all" — `--no-tools`, never
+ * `--tools ''`, which pi rejects. A no-tools child cannot make a tool call, so
+ * it carries no in-run guard extension either: the guards all hang off pi's
+ * `tool_call` hook.
+ *
+ * The prompt is NOT an argv element: it goes over stdin (getPiInvocation), so a
+ * large prompt cannot exceed the OS argv ceiling, which fails the spawn outright
+ * rather than truncating (`E2BIG` on this platform).
+ *
+ * `groupArgs` is the child's group fragment, `--model` then `--thinking`, either
+ * half possibly absent. Resolved by the CALLER: both are properties of the
+ * child's ROLE, and this function is handed tools, not a name. One field rather
+ * than a `model` beside a `thinking` so nothing composes the halves by hand.
+ */
+export function childArgs(
+    tools: string,
+    extensions: readonly string[] = [],
+    groupArgs: readonly string[] = []
+): string[] {
+    const toolFlags = tools === '' ? ['--no-tools'] : ['--tools', tools]
+    const internal = tools === '' ? [] : extensions
+    return [...childBaseArgs(internal), ...groupArgs, '--mode', 'json', ...toolFlags]
+}
 
 /**
  * The one place `'unknown'` becomes the 0 both consumers already treat as
@@ -181,10 +213,26 @@ export interface RunWorkerInput {
     cwd: string
     signal?: AbortSignal
     spawn?: SpawnFn
-    /** Comma-separated tool whitelist passed to `pi --tools`. Defaults to read,grep,find,ls. */
+    /**
+     * Comma-separated tool whitelist passed to `pi --tools`. Defaults to
+     * read,grep,find,ls; `''` means `--no-tools` (see childArgs).
+     */
     tools?: string
     /** Internal extension entry-point paths to load via `-e <path>` (see childBaseArgs). */
-    extensions?: string[]
+    extensions?: readonly string[]
+    /**
+     * ONE more attempt after the loop budget is spent, with different tools and
+     * a terminal hint, instead of returning the loop kill. It is not a retry:
+     * no restart rule runs on it, and its result is the run's result.
+     *
+     * For a child whose deliverable is a text rewrite that never strictly
+     * needed a read (refine): a model that thrashed re-reading files is stripped
+     * of its tools and ordered to emit from what it has, because a hard fail
+     * there kills a whole /task-auto run for a model that merely over-explored.
+     * A child whose output depends on real reads must NOT carry one — with no
+     * tools it would fabricate.
+     */
+    rescue?: {tools: string; hint: (hit: LoopHit) => string}
     /** Called for each tool execution start and text-writing event inside the worker. */
     onLine?: (line: string) => void
     /** Called when a tool call FINISHES, with its (truncatable) result — lets a caller
@@ -400,6 +448,13 @@ export interface WorkerRestart {
     workMs: number
     /** Reason-specific diagnosis: the looping call, the hung tool, the error text. */
     detail?: string
+    /** The hit itself on a `loop` restart, for a consumer that records the call. */
+    loopHit?: LoopHit
+    /**
+     * This attempt was discarded for the RESCUE, not a retry: the loop budget
+     * was spent, and what follows runs under `rescue`'s tools and hint.
+     */
+    rescue?: true
     /**
      * Characters of ANSWER TEXT this attempt had produced at the moment it was
      * thrown away.
@@ -528,7 +583,13 @@ export interface RunWorkerResult {
      *
      * Check BEFORE `aborted`, same reasoning as `stalled`: the kill aborts too.
      */
-    commandTimedOut?: {toolName: string; timeoutMs: number}
+    commandTimedOut?: CommandKill
+    /**
+     * The final attempt was the `rescue`. Its text is the run's answer; a
+     * rescue that produced none is honestly the loop kill it stood in for, and
+     * the caller reports it as one.
+     */
+    rescued?: true
     /**
      * Set when the stream watchdog killed the worker's FINAL attempt: the model
      * stream produced nothing for the configured window while no tool was running.
@@ -548,9 +609,16 @@ interface RestartState {
     loopHit?: LoopHit
     commandKill?: CommandKill
     streamStalled?: {idleMs: number}
+    stalled: boolean
+    /** The profile's `stalled.restart` switch. */
+    restartOnStalled: boolean
     timedOut: boolean
     modelError?: string
     leaked: string | null
+    /** A clean, complete run that answered with no text at all. */
+    empty: boolean
+    /** The profile's `empty-answer` switch. */
+    restartOnEmpty: boolean
     /** The cap this attempt actually died against, not the configured one:
      *  `extend`/`progress` can push the deadline out during the attempt. */
     effectiveCapMs: number
@@ -615,23 +683,24 @@ interface RestartRule {
  * `runWorker`, so a new failure mode is one row here and cannot be added without
  * becoming visible in `restarts`.
  */
+/**
+ * A stall hit carries no meaningful windowSize (rule 1 sets it to 0), so
+ * printing the loop shape would misname why the attempt died.
+ */
+function loopDetail(hit: LoopHit): string {
+    return hit.stall ?
+            `${hit.call.name} ${hit.stall} ×${hit.count}`
+        :   `${hit.call.name} ×${hit.count}/${hit.windowSize}`
+}
+
 export const RESTART_RULES: readonly RestartRule[] = [
     {
-        // A loop-kill gets the same restart-with-hint treatment every other phase
-        // already gets (runPhaseChild) — name the offending call so the
+        // A loop-kill is restarted with a hint naming the offending call so the
         // re-spawn avoids it. Bounded by the shared restart budget.
         reason: 'loop',
         detect: s =>
             s.loopHit && s.restartBudgetSpent < MAX_LOOP_RESTARTS ?
-                {
-                    // A stall hit carries no meaningful windowSize (rule 1 sets
-                    // it to 0), so printing the loop shape would misname why the
-                    // attempt died.
-                    detail:
-                        s.loopHit.stall ?
-                            `${s.loopHit.call.name} ${s.loopHit.stall} ×${s.loopHit.count}`
-                        :   `${s.loopHit.call.name} ×${s.loopHit.count}/${s.loopHit.windowSize}`
-                }
+                {detail: loopDetail(s.loopHit)}
             :   null,
         hint: s =>
             s.loopHit!.stall ? formatStallHint(s.loopHit!.stall) : formatLoopHint(s.loopHit!),
@@ -672,6 +741,22 @@ export const RESTART_RULES: readonly RestartRule[] = [
                 {detail: `idle ${s.streamStalled.idleMs}ms`}
             :   null,
         hint: s => streamStallHint(s.streamStalled!.idleMs),
+        counters: {shared: true}
+    },
+    {
+        // A dead-backend kill, for the profiles that would rather earn the
+        // verdict on every attempt than trust one probe sample. No hint: nothing
+        // the model did caused it, and a hint in flight must survive the retry.
+        reason: 'stalled',
+        detect: s =>
+            (
+                s.stalled
+                && !s.loopHit
+                && s.restartOnStalled
+                && s.restartBudgetSpent < MAX_LOOP_RESTARTS
+            ) ?
+                {detail: 'no output for the stall window and no endpoint answered'}
+            :   null,
         counters: {shared: true}
     },
     {
@@ -727,26 +812,24 @@ export const RESTART_RULES: readonly RestartRule[] = [
             :   null,
         hint: s => leakedToolCallHint(s.leaked!),
         counters: {leak: true}
+    },
+    {
+        // An empty completion on a clean run, for the profiles that treat it as
+        // a swallowed provider error rather than an answer. No hint: there is
+        // nothing to correct, and one already in flight must survive.
+        reason: 'empty-answer',
+        detect: s =>
+            s.empty && !s.loopHit && s.restartOnEmpty && s.restartBudgetSpent < MAX_LOOP_RESTARTS ?
+                {detail: 'no assistant text'}
+            :   null,
+        counters: {shared: true}
     }
 ]
 
 export async function runWorker(input: RunWorkerInput): Promise<RunWorkerResult> {
-    const tools = input.tools ?? DEFAULT_TOOLS
-    // `--mode json` makes pi emit structured events as they happen instead of
-    // buffering the assistant text and flushing on exit. Its print-mode source
-    // shows both halves: under `json` a session subscriber writes every event to
-    // stdout as it arrives, while under `text` NOTHING is written until after the
-    // prompt resolves, when the last assistant message is printed once. That is
-    // what makes the wait/work split real — onFirstByte would otherwise fire
-    // moments before close and leave workMs at nearly zero.
-    const baseArgs = [
-        ...childBaseArgs(input.extensions ?? []),
-        ...(input.groupArgs ?? []),
-        '--mode',
-        'json',
-        '--tools',
-        tools
-    ]
+    // Reassigned once at most, by the rescue.
+    let tools = input.tools ?? DEFAULT_TOOLS
+    let rescued = false
     // ONE resolution, before the first attempt. Every guard read below goes
     // through `policy`, so "which knobs is this child running" has exactly one
     // answer and it is observable (`onPolicy`) rather than inferable.
@@ -803,7 +886,14 @@ export async function runWorker(input: RunWorkerInput): Promise<RunWorkerResult>
         const prompt = [hint, carried, input.prompt]
             .filter((p): p is string => p !== null)
             .join('\n\n')
-        const invocation = getPiInvocation([...baseArgs], prompt)
+        // `--mode json` (childArgs) makes pi emit events as they happen instead
+        // of buffering the assistant text and flushing on exit, which is what
+        // makes the wait/work split below real — onFirstByte would otherwise
+        // fire moments before close and leave workMs at nearly zero.
+        const invocation = getPiInvocation(
+            childArgs(tools, input.extensions ?? [], input.groupArgs ?? []),
+            prompt
+        )
         const tAttemptStart = Date.now()
         let tFirstByte: number | null = null
         // loop === false turns the guard off entirely (detector is null and no
@@ -828,11 +918,6 @@ export async function runWorker(input: RunWorkerInput): Promise<RunWorkerResult>
         // context event at all, so waiting for one leaves the rule permanently
         // disarmed. The parent knows the window at spawn time.
         stallDetector?.noteContext(contextWindowTokens(input.contextWindow))
-        // Capture the hit the detector reports (it also returns it to the unified
-        // runner, which kills the child on a hit). Without capturing it here the
-        // SIGTERM that kill produces would surface as a bare non-zero exit the
-        // caller couldn't distinguish from a crash.
-        let loopHit: LoopHit | undefined
         // Reset EACH attempt: on a restart the previous attempt's calls are
         // discarded with its text, so the count must describe only the attempt
         // whose text this call returns.
@@ -893,11 +978,9 @@ export async function runWorker(input: RunWorkerInput): Promise<RunWorkerResult>
                         // Loop detector first: it names the offending call and its
                         // hint is the more specific one. The stall detector is the
                         // backstop for the thrash shapes a 20-call argument window
-                        // cannot see.
-                        const hit =
-                            loopDetector?.record(call) ?? stallDetector?.record(call) ?? null
-                        if (hit && !loopHit) loopHit = hit
-                        return hit
+                        // cannot see. A hit is returned to the runner, which kills
+                        // the child and reports it as `kill.by === 'loop'`.
+                        return loopDetector?.record(call) ?? stallDetector?.record(call) ?? null
                     },
                     // Output is the other half of "still working": a worker
                     // writing its answer is making progress even when it has no
@@ -939,7 +1022,11 @@ export async function runWorker(input: RunWorkerInput): Promise<RunWorkerResult>
         const workMs = tFirstByte === null ? 0 : tEnd - tFirstByte
         // Record + announce a discarded attempt. Called from every `continue`
         // branch below, so a restart cannot be added without becoming visible.
-        const noteRestart = (reason: WorkerRestartReason, detail?: string): void => {
+        const noteRestart = (
+            reason: WorkerRestartReason,
+            detail: string | undefined,
+            extra: Pick<WorkerRestart, 'loopHit' | 'rescue'> = {}
+        ): void => {
             const record: WorkerRestart = {
                 attempt: restarts.length + 1,
                 reason,
@@ -947,7 +1034,8 @@ export async function runWorker(input: RunWorkerInput): Promise<RunWorkerResult>
                 waitMs,
                 workMs,
                 partialChars: text.trim().length,
-                ...(detail ? {detail} : {})
+                ...(detail ? {detail} : {}),
+                ...extra
             }
             restarts.push(record)
             input.onRestart?.(record)
@@ -967,24 +1055,35 @@ export async function runWorker(input: RunWorkerInput): Promise<RunWorkerResult>
         }
         const text = result.text ?? ''
         const timedOut = timeout.timedOut()
-        const commandKill = cmdWatch?.killed()
-        const streamStalled = result.streamStalled
+        const kill = result.kill
+        const loopHit = kill?.by === 'loop' ? kill.hit : undefined
+        const commandKill = kill?.by === 'command-timeout' ? kill : undefined
+        const streamStalled = kill?.by === 'stream-stall' ? {idleMs: kill.idleMs} : undefined
+        const stalled = kill?.by === 'stalled'
 
         // Only treat output as a leak on a clean, complete run — a non-zero exit
         // or abort yields partial text the caller already handles, and detecting
         // there would just mislabel the real failure.
-        const leaked = result.exitCode === 0 && !result.aborted ? detectLeakedToolCall(text) : null
+        const clean = result.exitCode === 0 && !result.aborted
+        const leaked = clean ? detectLeakedToolCall(text) : null
 
         // THE RESTART LADDER. Precedence is RESTART_RULES' row order; this loop
         // owns the ritual every rule would otherwise repeat: budget, hint, counters,
         // record-and-announce, backoff, re-spawn.
+        //
+        // Not run on the rescue attempt, which is final by contract, nor after a
+        // cancel: a user who pressed ESC between attempts must not buy a spawn.
         const state: RestartState = {
             ...(loopHit ? {loopHit} : {}),
             ...(commandKill ? {commandKill} : {}),
             ...(streamStalled ? {streamStalled} : {}),
+            stalled,
+            restartOnStalled: guards.stalled !== false && guards.stalled.restart,
             timedOut,
             ...(result.modelError !== undefined ? {modelError: result.modelError} : {}),
             leaked,
+            empty: clean && result.modelError === undefined && text.trim().length === 0,
+            restartOnEmpty: guards['empty-answer'],
             effectiveCapMs,
             tools,
             restartBudgetSpent,
@@ -992,8 +1091,9 @@ export async function runWorker(input: RunWorkerInput): Promise<RunWorkerResult>
             connectionRetries: guards['connection-error'],
             leakRetries
         }
+        const ladderOpen = !rescued && input.signal?.aborted !== true
         let restarted = false
-        for (const rule of RESTART_RULES) {
+        for (const rule of ladderOpen ? RESTART_RULES : []) {
             const hit = rule.detect(state)
             if (!hit) continue
             if (rule.hint) hint = rule.hint(state)
@@ -1003,12 +1103,21 @@ export async function runWorker(input: RunWorkerInput): Promise<RunWorkerResult>
             if (rule.counters.connection) connRetries++
             // Noted BEFORE any backoff sleep, so the record's wallMs stays the
             // attempt's own clock; the sleep lands in totalWallMs, where it belongs.
-            noteRestart(rule.reason, hit.detail)
+            noteRestart(rule.reason, hit.detail, loopHit ? {loopHit} : {})
             if (rule.backoffMs) await (input.sleepFor ?? defaultSleep)(rule.backoffMs(state))
             restarted = true
             break
         }
         if (restarted) continue
+        // Reached only with the loop rule out of budget: the rules above all
+        // decline a loop-killed attempt once the shared budget is spent.
+        if (ladderOpen && loopHit && input.rescue) {
+            rescued = true
+            hint = input.rescue.hint(loopHit)
+            tools = input.rescue.tools
+            noteRestart('loop', loopDetail(loopHit), {loopHit, rescue: true})
+            continue
+        }
         // SALVAGE. Returning the LAST attempt's text unconditionally makes a
         // worker whose final attempt was killed early report nothing at all — even
         // when a discarded attempt produced a usable answer that was still in hand
@@ -1033,7 +1142,7 @@ export async function runWorker(input: RunWorkerInput): Promise<RunWorkerResult>
             exitCode: result.exitCode,
             aborted: result.aborted,
             timedOut,
-            ...(result.stalled === true ? {stalled: true} : {}),
+            ...(stalled ? {stalled: true} : {}),
             ...(loopHit ? {loopHit} : {}),
             ...(leaked ? {leakedToolCall: leaked} : {}),
             ...(commandKill ? {commandTimedOut: commandKill} : {}),
@@ -1066,16 +1175,18 @@ export async function runWorker(input: RunWorkerInput): Promise<RunWorkerResult>
             ...(leaked ? {leakedToolCall: leaked} : {}),
             ...(loopHit ? {loopHit} : {}),
             ...(timedOut ? {timedOut: true} : {}),
-            ...(result.stalled ? {stalled: true} : {}),
+            ...(stalled ? {stalled: true} : {}),
             ...(streamStalled ? {streamStalled} : {}),
             ...(commandKill ?
                 {
                     commandTimedOut: {
                         toolName: commandKill.toolName,
-                        timeoutMs: commandKill.timeoutMs
+                        timeoutMs: commandKill.timeoutMs,
+                        ...(commandKill.detail ? {detail: commandKill.detail} : {})
                     }
                 }
-            :   {})
+            :   {}),
+            ...(rescued ? {rescued: true} : {})
         }
     }
 }

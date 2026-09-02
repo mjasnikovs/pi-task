@@ -106,7 +106,7 @@ import {
     runWithEmphasisRetry,
     prependHint,
     USER_CANCELLED,
-    CommandTimeoutError,
+    ChildFailureError,
     type PhaseDeps,
     isFatalChildCause
 } from './child-runner.js'
@@ -458,7 +458,7 @@ export async function phaseVerifyTooling(deps: PhaseDeps, research: string): Pro
         // degrade for a child that merely failed. A hung command is different: it
         // cost the ceiling on every strike and says the SPEC named something
         // unbounded, so it is the one cause worth a trail line rather than silence.
-        if (e instanceof CommandTimeoutError) {
+        if (e instanceof ChildFailureError && e.failure.kind === 'command-timeout') {
             deps.logDebug?.(`verify-tooling: ${e.message} — shipping the list unverified`)
         }
         return replaceToolingWithVerified(research, commands)

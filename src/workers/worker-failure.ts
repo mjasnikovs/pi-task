@@ -43,7 +43,7 @@ export interface WorkerFailureInput {
     stalled?: boolean
     loopHit?: unknown
     leakedToolCall?: unknown
-    commandTimedOut?: {toolName: string; timeoutMs: number}
+    commandTimedOut?: {toolName: string; timeoutMs: number; detail?: string}
     streamStalled?: {idleMs: number}
 }
 
@@ -58,7 +58,7 @@ export interface WorkerFailureInput {
  */
 export type WorkerFailure =
     | {kind: 'stalled'}
-    | {kind: 'command-timeout'; toolName: string; timeoutMs: number}
+    | {kind: 'command-timeout'; toolName: string; timeoutMs: number; detail?: string}
     | {kind: 'stream-stall'; idleMs: number}
     | {kind: 'worker-timeout'}
     | {kind: 'loop'; hit: LoopHit}
@@ -117,7 +117,8 @@ export const FAILURE_RULES: ReadonlyArray<{
                 {
                     kind: 'command-timeout',
                     toolName: r.commandTimedOut.toolName,
-                    timeoutMs: r.commandTimedOut.timeoutMs
+                    timeoutMs: r.commandTimedOut.timeoutMs,
+                    ...(r.commandTimedOut.detail ? {detail: r.commandTimedOut.detail} : {})
                 }
             :   null
     },
