@@ -68,7 +68,7 @@ import {parseVerifyBlock} from './spec-validation.js'
 import {findDeliveryPhantoms, formatApiOverrideBanner} from '../workers/phantom-imports.js'
 import {titleForDisplay} from './parsers.js'
 import {USER_CANCELLED, type PhaseDeps, type PhaseSeams} from './child-runner.js'
-import {cancelCheckpoint} from './cancel-points.js'
+import {cancelCheckpoint, requestCancel} from './cancel-points.js'
 import type {ThinkingLevel} from '@earendil-works/pi-agent-core'
 import type {PiModel} from '../shared/model-resolve.js'
 import {
@@ -79,7 +79,7 @@ import {
     type ThinkingControl
 } from './implementation-hold.js'
 import {rearmCancelListener} from './cancel-input.js'
-import {takeHeldInput} from './mid-run-input.js'
+import {takeHeldInput, isRunActive} from './mid-run-input.js'
 import {withRun, announceTerminal} from './run-bracket.js'
 import {RUN_END_POLICY, runSucceeded, type RunEnd} from './run-end.js'
 import {formatTimings, type TimingEntry} from './timings.js'
@@ -471,6 +471,28 @@ export class TaskRunner {
             await setTaskSection(cwd, id, 'phase timings', formatTimings(this._timings))
             await setTaskSection(cwd, id, 'handoff', `handoff_at: ${new Date().toISOString()}`)
             await this._deliverSpec(ctx)
+            // SAFE CHECKPOINT (post implementation turn): every phase section is
+            // on disk and the turn has ENDED. Its edits are uncommitted, so a
+            // resume re-delivers the spec onto the partly-edited tree — the same
+            // ending the ESC-then-decline-steer path already produces. Front
+            // matter reads `phase: done`, and PHASE_INDEX.done is past every row,
+            // so the resumed run restores all five sections and falls straight
+            // through to _deliverSpec.
+            //
+            // This is also what makes /task-cancel work here at all: the turn
+            // runs in the host session, not as a child, so aborting this runner's
+            // signal never reached it. The command raises the cooperative flag
+            // and this is where the flag is read.
+            //
+            // On the fire-and-forget /task path there is no turn to have ended —
+            // _deliverSpec returns as soon as the spec is sent. The seam still
+            // holds, because what it promises is that the SPEC is durable, and it
+            // is; the host turn carrying on is what ESC is for. Skipping the poll
+            // there would put the cancel back where it started: unobserved.
+            if (cancelCheckpoint('impl:post-turn')) {
+                this._deps.logDebug?.('cancel: stopping after the implementation turn')
+                throw new Error(USER_CANCELLED)
+            }
             return {kind: 'completed'}
         } catch (err) {
             this._disposeWidget()
@@ -1017,12 +1039,29 @@ async function handleTaskResume(args: string, ctx: ExtensionCommandContext): Pro
 
 // eslint-disable-next-line @typescript-eslint/require-await
 async function handleTaskCancel(_args: string, ctx: ExtensionCommandContext): Promise<void> {
-    if (!activeTask) {
+    // `activeTask` covers the spec phases and the implementation turn — it is set
+    // in TaskRunner._run and cleared in that run's `finally`. The GATES run after
+    // that, so for the whole verify/autofix/enforce stretch there is no runner to
+    // abort and the honest answer is not "No task is running."
+    const runner = activeTask
+    if (!runner && !isRunActive()) {
         notifyBoth(ctx, 'No task is running.', 'info')
         return
     }
-    activeTask.cancel()
-    notifyBoth(ctx, `Cancelling ${activeTask.taskId}…`, 'warning')
+    // The cooperative flag is what gives the command one meaning wherever it is
+    // typed: stop at the next point the run can be resumed from. Without it a
+    // cancel during the gates, or during the implementation turn, had nothing to
+    // observe it. The run bracket scopes the flag to the run that raised it.
+    requestCancel()
+    if (!runner) {
+        notifyBoth(ctx, 'Stopping at the next safe checkpoint…', 'warning')
+        return
+    }
+    // Abort as well: during the spec phases this kills the running child outright
+    // instead of waiting out its remaining minutes, and the phase already on disk
+    // is what a resume starts from.
+    runner.cancel()
+    notifyBoth(ctx, `Cancelling ${runner.taskId}…`, 'warning')
 }
 
 // ─── Entry point ─────────────────────────────────────────────────────────────

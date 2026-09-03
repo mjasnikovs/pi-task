@@ -54,6 +54,7 @@ import {attributeEnforceFailure} from './enforce-attribution.js'
 // re-check-side parser (extractDeletedDebtPath) have to move together.
 import {crossTaskDeletionReason, type DebtOrigin} from './accept-debt.js'
 import {clampOutput} from './clamp-output.js'
+import {cancelCheckpoint} from './cancel-points.js'
 
 /**
  * The deps the gate sequence drives. A superset of these is built once per command
@@ -693,6 +694,16 @@ export async function resolveVerifyGate(
             // unattended branches already recorded themselves one line above, and a
             // trail that says "user chose" when nobody was asked is the same lie the
             // accept line used to tell.
+            // SAFE CHECKPOINT (before an autofix round): a round is a whole
+            // implementation re-run, so a cancel observed only INSIDE it buys one
+            // more of those first. Ahead of the trail line and the toast, so a
+            // stopped run never leaves a record of a round it did not run.
+            // Nothing is committed here, but the entry is still unchecked and its
+            // inner id is stamped, so a resume re-enters this task and the
+            // pre-task checkpoint commit folds in what the failed attempt left.
+            if (cancelCheckpoint('gate:pre-autofix')) {
+                return {stop: {kind: 'cancelled', ctx: active}}
+            }
             if (!autoFixNow && !yoloRescueNow) {
                 await rec('resolution: user chose AUTOFIX — re-running the implementation turn')
             }
@@ -1139,6 +1150,14 @@ export async function runGatesForTask(
         // infer that from the widget, and a toast is gone before they look.
         if (gitFailure) notifyRun(active, line, 'error')
         else notifyBoth(active, line, 'warning')
+    }
+    // SAFE CHECKPOINT (post task commit): the work verified, the parent entry is
+    // checked off and the snapshot is in HEAD. Only the enforce pass is skipped,
+    // and enforce is re-runnable. `cancelled` deliberately leaves the inner file
+    // alone — resume is driven by the parent checkbox, which is already ticked, so
+    // the run picks up at the NEXT task rather than redoing this one.
+    if (cancelCheckpoint('gate:post-commit')) {
+        return {kind: 'cancelled', ctx: active}
     }
     await runEnforcePass(active, deps, p, rec, routeRootCause, {cleanPass, commit})
     return {kind: 'done', ctx: active}

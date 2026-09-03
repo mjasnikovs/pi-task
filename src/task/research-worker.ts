@@ -24,6 +24,8 @@ import {classifyWorkerFailure} from '../workers/worker-failure.js'
 import {classifyContextSilence, countBullets} from './context-silence.js'
 import type {SpawnFn} from '../shared/child-process.js'
 import type {DebugLine} from './debug-log.js'
+import {cancelCheckpoint} from './cancel-points.js'
+import {USER_CANCELLED} from './child-runner.js'
 
 /**
  * One research worker's row. `section` is the heading its output is assembled
@@ -540,5 +542,14 @@ export async function runResearchWorker(
     // a truncated section can still carry a laundered claim.
     const sectionText = spec.postProcess ? spec.postProcess(rawText) : rawText
     await run.persistSection(cacheHeading, sectionText)
+    // SAFE CHECKPOINT: this worker's section is on disk and the cache read at the
+    // top of this function is what a resume uses to skip it, so stopping between
+    // workers repeats nothing. Research is the phase's long pole and the workers
+    // run serially, which is what makes this the one seam that costs nothing in
+    // either direction. USER_CANCELLED reuses the phase's existing cancel path.
+    if (cancelCheckpoint(`research:${spec.section}`)) {
+        run.logDebug?.(`cancel: stopping after research worker ${spec.section}`)
+        throw new Error(USER_CANCELLED)
+    }
     return {name: spec.section, text: sectionText}
 }

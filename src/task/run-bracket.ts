@@ -30,10 +30,11 @@
  */
 import type {ExtensionCommandContext} from '@earendil-works/pi-coding-agent'
 import {armCancelListener, disarmCancelListener} from './cancel-input.js'
-import {beginRun, endRun} from './mid-run-input.js'
+import {beginRun, endRun, isRunActive} from './mid-run-input.js'
 import {reportDroppedInput} from './dropped-input.js'
 import {publishLifecycleNotice} from '../remote/bridge.js'
 import {pushNotify} from '../remote/push.js'
+import {resetCancel} from './cancel-points.js'
 
 export interface RunBracketOptions {
     /**
@@ -58,12 +59,21 @@ export async function withRun<T>(
     opts: RunBracketOptions,
     fn: () => Promise<T>
 ): Promise<T> {
+    // A cancel is scoped to the run that was asked to stop. runAutoLoop already
+    // cleared the flag at both ends of its own loop; the bracket is what gives
+    // every OTHER entry point the same guarantee, so a /task-cancel raised on a
+    // bare /task cannot survive to stop the next run at its first phase.
+    // Outermost only: an inner bracket clearing it would drop the request the
+    // outer loop has not observed yet.
+    const outermost = !isRunActive()
+    if (outermost) resetCancel()
     beginRun()
     armCancelListener(ctx, opts.onCancel)
     try {
         return await fn()
     } finally {
         disarmCancelListener()
+        if (outermost) resetCancel()
         reportDroppedInput(endRun(), ctx)
     }
 }

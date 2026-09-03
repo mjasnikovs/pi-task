@@ -68,10 +68,10 @@ A whole plan — `/task-auto` splits it into an ordered task list and runs each 
 | `/task-plan <prompt>` | Plan one task with the model — it asks, you answer, ask it something back, or proceed — then run it through `/task`. |
 | `/task-list` | Open the task list in an editor dialog. |
 | `/task-resume [id]` | Resume the most recent (or named) unfinished task. |
-| `/task-cancel` | Cancel the running task (soft-terminal — still resumable). |
+| `/task-cancel` | Stop the running task at the next safe checkpoint (still resumable). Mid-phase it kills the running child; during the implementation turn it lets the turn finish and stops before the gates. |
 | `/task-auto <feature>` | Plan a feature into a task list and run each title through `/task` in order (resumable). |
 | `/task-auto-resume [--unattended]` | Resume the active `/task-auto` run at the next unfinished task. `--unattended` is the boot-hook form: in-flight runs only. |
-| `/task-auto-cancel` | Stop the `/task-auto` loop after the current task (still resumable). |
+| `/task-auto-cancel` | Stop the `/task-auto` loop at the next safe checkpoint — the end of the current phase, research worker, implementation turn or gate, not the end of the task (still resumable). During planning it abandons the plan, which is not yet written. |
 | `/task-config` | Toggle pi-task settings in an editor dialog: remote control, auto-commit, verify work, enforce guidelines, project tour, parallel research, research cache, search engine, command timeout, stuck reply retry, yolo mode, debug logs, one `watch:` toggle per live tool, and one `ext:` toggle per installed host extension. |
 | `/remote` | Show the QR code & URLs for the web view (`/remote stop` to stop). Answer grill questions, start tasks, and watch progress from your phone. |
 

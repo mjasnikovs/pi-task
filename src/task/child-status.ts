@@ -22,9 +22,10 @@
 
 import type {ExtensionCommandContext} from '@earendil-works/pi-coding-agent'
 import type {ContextSnapshot} from '../shared/child-process.js'
-import {runPhaseChild, type PhaseDeps} from './child-runner.js'
+import {runPhaseChild, USER_CANCELLED, type PhaseDeps} from './child-runner.js'
 import {resolveContextUsage} from './context-usage.js'
 import {startAutoLoader, type AutoLoaderState} from './widget.js'
+import {cancelCheckpoint} from './cancel-points.js'
 
 export interface ChildStatusDeps {
     /** The parent session's window — the last fallback for the context gauge. */
@@ -145,6 +146,17 @@ export async function runPlanningChild(opts: {
     loader: PlanningChildLoader
 }): Promise<string> {
     const {ctx, status, phaseDeps, name, tools, prompt, loader} = opts
+    // SAFE CHECKPOINT (planning): the one funnel every planning child goes through
+    // — orient, clarify, decompose, each coverage round, each grounded extraction,
+    // and /task-plan's children too. Safe by DISCARD rather than by writing:
+    // planning puts nothing on disk before planAuto's closing writeTaskFile, so
+    // there is no partial plan to resume and none to repair. Without it the flag
+    // was read only after planning RETURNED — measured at 13+ minutes of planning
+    // still running after the user asked to stop.
+    if (cancelCheckpoint(`plan:${name}`)) {
+        phaseDeps.logDebug?.(`cancel: abandoning the plan before ${name}`)
+        throw new Error(USER_CANCELLED)
+    }
     const startedAt = Date.now()
     return status.track(
         ctx,

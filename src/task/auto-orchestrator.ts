@@ -1920,7 +1920,16 @@ async function handleTaskAuto(args: string, ctx: ExtensionCommandContext): Promi
             } catch (err) {
                 const msg = err instanceof Error ? err.message : String(err)
                 if (msg === USER_CANCELLED) {
-                    announceDone(ctx, '/task-auto cancelled.', 'warning')
+                    // Say what was thrown away. Planning writes nothing until it
+                    // finishes, so there is no half-plan to resume and no
+                    // /task-auto-resume to offer — the user has to start over,
+                    // and a bare "cancelled" would leave them looking for one.
+                    announceDone(
+                        ctx,
+                        '/task-auto cancelled — the plan was discarded. Nothing was written; '
+                            + 'run /task-auto again to re-plan.',
+                        'warning'
+                    )
                     return
                 }
                 announceDone(ctx, `/task-auto planning failed: ${msg}`, 'error')
@@ -2010,8 +2019,17 @@ async function handleTaskAutoCancel(_args: string, ctx: ExtensionCommandContext)
  * promise "after the current task": the request is now honoured at the next safe
  * checkpoint (see cancel-points.ts), which mid-spec-pipeline is the end of the
  * current phase, not the end of the task.
+ *
+ * It names the seam set rather than the one seam the run happens to be between,
+ * because that seam is not knowable from here — the checkpoint trail says where
+ * the run has BEEN. Naming the set is what stops "next safe checkpoint" reading
+ * as "some time before the run ends", which is how a wait that is really one
+ * research worker gets mistaken for a wait of the whole task.
  */
-const CANCEL_ACK = 'Stopping /task-auto at the next safe checkpoint…'
+const CANCEL_ACK =
+    'Stopping /task-auto at the next safe checkpoint — the next planning child, or the '
+    + 'end of the current phase, research worker, implementation turn or gate. The model '
+    + 'call already in flight finishes first.'
 
 /**
  * Deliver a /task-auto-cancel typed in the terminal while a run owns the main
