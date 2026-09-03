@@ -14,6 +14,7 @@ import type {PlanEntry} from '../../src/task/plan-io.js'
 import {buildIdleSpec, type PlanOutcome} from '../../src/task/plan-session.js'
 import {writeTaskFile, readSection, readTaskFile, setTaskSection} from '../../src/task/task-io.js'
 import type {TaskFrontMatter} from '../../src/task/task-types.js'
+import {USER_CANCELLED} from '../../src/task/child-runner.js'
 import {makeFakeCtx} from '../test-utils/fake-ctx.js'
 import {isRunActive} from '../../src/task/mid-run-input.js'
 import type {ExtensionCommandContext} from '@earendil-works/pi-coding-agent'
@@ -245,6 +246,26 @@ describe('handleTaskPlan', () => {
         const {frontMatter} = await readTaskFile(cwd, PLAN_ID)
         expect(frontMatter.state).toBe('cancelled')
         expect(h.captured.notifies.some(n => n.msg.includes('cancelled'))).toBe(true)
+    })
+
+    /**
+     * The cancel checkpoint in runPlanningChild throws USER_CANCELLED out of a
+     * planning child, which lands on the same catch as a model fault. A user stop
+     * is not a fault and the sentinel is not a sentence, so it must not surface as
+     * a red "PLAN_0001 stopped — __user_cancelled__".
+     */
+    test('a cancelled planning child reads as a cancel, not a red fault', async () => {
+        const cwd = await freshRepo()
+        const h = makeFakeCtx(cwd)
+        const {deps, rec} = commandHarness(new Error(USER_CANCELLED))
+        await handleTaskPlan('add rate limiting', h.ctx, deps)
+        expect(rec.prompts).toHaveLength(0)
+        const {frontMatter} = await readTaskFile(cwd, PLAN_ID)
+        expect(frontMatter.state).toBe('cancelled')
+        const note = h.captured.notifies.find(n => n.msg.includes(PLAN_ID))
+        expect(note?.level).toBe('warning')
+        expect(note?.msg).not.toContain(USER_CANCELLED)
+        expect(note?.msg).toContain('cancelled')
     })
 
     test('a failed child leaves the plan file failed with the cause, and no handoff', async () => {

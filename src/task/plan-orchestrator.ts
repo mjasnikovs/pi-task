@@ -386,8 +386,17 @@ async function runPlanCommand(
         outcome = await commandDeps.run(commandDeps.session(ctx, cwd, planId, task, abort.signal))
     } catch (err) {
         const msg = err instanceof Error ? err.message : String(err)
+        // A user stop is not a fault, and the sentinel is not a sentence. The
+        // cancel checkpoint in runPlanningChild throws USER_CANCELLED here, so
+        // without this branch a /task-cancel during planning reads as a red
+        // "PLAN_0001 stopped — __user_cancelled__".
+        if (msg === USER_CANCELLED) {
+            await updateTaskFrontMatter(cwd, planId, {state: 'cancelled'}).catch(() => {})
+            announceTerminal(ctx, `${planId} cancelled.`, 'warning', {push: false})
+            return
+        }
         await updateTaskFrontMatter(cwd, planId, {
-            state: msg === USER_CANCELLED ? 'cancelled' : 'failed',
+            state: 'failed',
             reason: msg.slice(0, 200)
         }).catch(() => {})
         // No push: a plan is a conversation, not a task; the run it hands off

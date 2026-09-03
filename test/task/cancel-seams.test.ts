@@ -564,6 +564,44 @@ describe('seam research:<worker> — the section is on disk and a resume skips i
         expect(out).toEqual({name: 'CONTEXT', text: '- a real finding'})
     })
 
+    /**
+     * The unit tests above prove the seam throws. This proves the throw reaches
+     * the RUNNER as a cancel — through researchPhase, runPhaseRow and _run's
+     * catch, where classifyFailure has to read USER_CANCELLED as a user stop and
+     * not as a phase fault.
+     */
+    test('the throw ends the RUNNER as cancelled, not failed', async () => {
+        await withTmpTaskDir(async cwd => {
+            const {ctx} = makeFakeCtx(cwd)
+            only('research:FILES')
+            const base = happy()
+            // Raised from INSIDE the first worker, not before the run: withRun
+            // clears the flag at the outermost bracket, so a cancel set up front
+            // belongs to no run and is dropped by design.
+            const r = new TaskRunner({
+                ctx,
+                cwd,
+                rawPrompt: 'run lint',
+                sendSpec: () => Promise.resolve(),
+                seams: {
+                    ...base,
+                    runWorker: (label, input) => {
+                        if (label === 'worker:files') requestCancel()
+                        return base.runWorker!(label, input)
+                    }
+                }
+            })
+            const end = await r.run()
+            expect(end.kind).toBe('cancelled')
+            expect((await readTaskFile(cwd, r.taskId)).frontMatter.state).toBe('cancelled')
+            // The first worker's section is on disk under its cache heading, which
+            // is what a resume reads back to skip it.
+            expect(
+                (await readSection(cwd, r.taskId, 'research worker FILES'))?.length
+            ).toBeGreaterThan(0)
+        })
+    })
+
     test('CONTROL: with no seam live the worker returns its section', async () => {
         const h = harness()
         none()
