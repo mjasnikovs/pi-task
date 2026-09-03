@@ -34,6 +34,17 @@ export interface GuardableTool {
 const BUILTIN_SOURCE = 'builtin'
 
 /**
+ * pi-task's own tools whose child already carries the guard the host watchdog
+ * would duplicate — and duplicate WRONGLY. `pi-worker` runs the `adhoc` profile
+ * (workers/worker-profiles.ts): no wall clock by decision, bounded on model
+ * SILENCE via `stuck reply retry`, plus the loop, churn and dead-backend guards.
+ * A host wall clock on top killed healthy workers at the command ceiling while
+ * they were still reading. Never armed, never offered as a `watch:` row: the
+ * operator should not be handed a switch that is only ever correct one way.
+ */
+export const SELF_BOUNDED_TOOLS: ReadonlySet<string> = new Set(['pi-worker'])
+
+/**
  * Human provenance for a tool's source metadata. `source` is pi's own word for
  * where the owner came from ("builtin", "npm:...", "auto", "cli"); the two
  * discovery-shaped values are spelled out because "auto" tells the operator
@@ -63,7 +74,7 @@ export function toGuardableTools(
         // A duplicate name cannot be told apart by the watchdog (it only ever
         // sees `toolName`), so a second registration must not add a second row
         // that silently toggles the first one's guard.
-        if (seen.has(t.name)) continue
+        if (seen.has(t.name) || SELF_BOUNDED_TOOLS.has(t.name)) continue
         seen.add(t.name)
         const entry = {name: t.name, origin: toolOrigin(t.sourceInfo.source, t.sourceInfo.path)}
         ;(t.sourceInfo.source === BUILTIN_SOURCE ? builtins : rest).push(entry)

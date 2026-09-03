@@ -1,5 +1,6 @@
 import type {ExtensionAPI, ExtensionContext} from '@earendil-works/pi-coding-agent'
 import {getConfig} from '../config/config.js'
+import {SELF_BOUNDED_TOOLS} from '../config/tool-list.js'
 import {CommandWatchdog, realTimerDeps, reminderMessage} from '../shared/command-watchdog.js'
 
 /**
@@ -23,9 +24,10 @@ import {CommandWatchdog, realTimerDeps, reminderMessage} from '../shared/command
  *
  * Tool-agnostic by default: it arms on every tool except exact names listed in
  * `commandTimeoutExemptTools`, which /task-config fills from the live tool list
- * (config/tool-list.ts). Exemptions are for tools that already own a bounded
- * timeout and cancellation contract — the guard's whole justification is that
- * pi's bash has NO default timeout, which says nothing about a tool that does.
+ * (config/tool-list.ts), and pi-task's own SELF_BOUNDED_TOOLS, exempt in code.
+ * Exemptions are for tools that already own a bounded timeout and cancellation
+ * contract — the guard's whole justification is that pi's bash has NO default
+ * timeout, which says nothing about a tool that does.
  *
  * SCOPE — this covers the main session ONLY, which is where the implementation
  * turn runs (orchestrator hands the spec off via sendUserMessage). Gate
@@ -89,7 +91,9 @@ export function registerCommandWatchdog(pi: ExtensionAPI): void {
 
     const watchdog = new CommandWatchdog({
         getTimeoutMs: () => getConfig().requestTimeoutMs,
-        shouldWatch: toolName => !getConfig().commandTimeoutExemptTools.includes(toolName),
+        shouldWatch: toolName =>
+            !SELF_BOUNDED_TOOLS.has(toolName)
+            && !getConfig().commandTimeoutExemptTools.includes(toolName),
         ...realTimerDeps,
         onFire: (toolCallId, toolName, timeoutMs) => {
             const ctx = ctxByCall.get(toolCallId)

@@ -1,5 +1,9 @@
 import {describe, expect, test} from 'bun:test'
-import {listGuardableTools, toGuardableTools} from '../../src/config/tool-list.js'
+import {
+    SELF_BOUNDED_TOOLS,
+    listGuardableTools,
+    toGuardableTools
+} from '../../src/config/tool-list.js'
 
 /**
  * The two `sourceInfo` fields this module reads, with the `source` values pi
@@ -47,6 +51,15 @@ describe('toGuardableTools', () => {
 
     test('an empty session yields no rows', () => {
         expect(toGuardableTools([])).toEqual([])
+    })
+
+    test('a self-bounded tool is never offered a row — its guard is not a choice', () => {
+        const withWorker = [
+            ...LIVE_SAMPLE,
+            {name: 'pi-worker', sourceInfo: {source: 'auto', path: '/home/e/pi-task/dist/index.js'}}
+        ]
+        expect(SELF_BOUNDED_TOOLS.has('pi-worker')).toBe(true)
+        expect(toGuardableTools(withWorker).map(t => t.name)).not.toContain('pi-worker')
     })
 })
 

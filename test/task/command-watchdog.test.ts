@@ -365,6 +365,22 @@ describe('registerCommandWatchdog', () => {
         expect(sent).toEqual([])
     })
 
+    test('pi-worker never arms with an EMPTY exempt list — it owns a silence bound', async () => {
+        getConfig().commandTimeoutExemptTools = []
+        const {pi, handlers, sent} = fakePi()
+        const owner = fakeCtx()
+        registerCommandWatchdog(pi)
+
+        handlers.get('tool_execution_start')!(
+            {toolCallId: 'c1', toolName: 'pi-worker'} as never,
+            owner.ctx as never
+        )
+        await settle()
+
+        expect(owner.aborts).toBe(0)
+        expect(sent).toEqual([])
+    })
+
     test('a zero ceiling turns the guard off', async () => {
         getConfig().requestTimeoutMs = 0
         const {pi, handlers, sent} = fakePi()
