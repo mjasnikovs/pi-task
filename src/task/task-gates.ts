@@ -39,7 +39,7 @@ import {
     type ResolutionOutcome,
     type ResolutionChoice
 } from './verify-resolution.js'
-import {SessionUI, publishRunNotice} from '../remote/bridge.js'
+import {SessionUI, publishRunNotice, notifyBoth, notifyRun} from '../remote/bridge.js'
 import {isYoloMode, yoloVerifyResolution, YOLO_STAMP} from './yolo.js'
 import {
     extractFailingCommand,
@@ -445,7 +445,7 @@ export async function resolveVerifyGate(
     // accept-override leaves this false → enforce runs flag-only.
     let verifyCleanPass = false
     if (deps.verify) {
-        active.ui.notify(`${p.tag}: verifying "${p.title}"…`, 'info')
+        notifyBoth(active, `${p.tag}: verifying "${p.title}"…`, 'info')
         let verified = await deps.verify(active, p.cwd, p.title, p.taskId)
         await rec(verdictLine(verified))
         // A FAIL no longer dead-stops. When the research recommends AUTOFIX, pi
@@ -475,7 +475,8 @@ export async function resolveVerifyGate(
             const failClass = verifyFailClass(verified)
             if (!lintFixAttempted && deps.lintFix && failClass === 'repo-health') {
                 lintFixAttempted = true
-                active.ui.notify(
+                notifyRun(
+                    active,
                     `${p.tag}: static findings on "${p.title}" — attempting bounded lint fix…`,
                     'info'
                 )
@@ -612,7 +613,8 @@ export async function resolveVerifyGate(
                             + `budget unspent; one attempt, ${autoFixCount}/${MAX_AUTO_AUTOFIX})`
                     :   `resolution: auto-AUTOFIX (recommended, unattended ${autoFixCount}/${MAX_AUTO_AUTOFIX})`
                 )
-                active.ui.notify(
+                notifyRun(
+                    active,
                     `${p.tag}: verify FAIL on "${p.title}" — auto-fixing (${
                         yoloRescueNow ? `${YOLO_STAMP} one attempt before accepting` : 'recommended'
                     }, ${autoFixCount}/${MAX_AUTO_AUTOFIX})…`,
@@ -672,7 +674,8 @@ export async function resolveVerifyGate(
                         // recording must never break the gate sequence
                     }
                 }
-                active.ui.notify(
+                notifyRun(
+                    active,
                     `${p.tag}: accepted "${p.title}" despite verify FAIL (${failReason.slice(0, 120)}) — proceeding.${
                         byYolo ? ` ${YOLO_STAMP}` : ''
                     }`,
@@ -693,7 +696,7 @@ export async function resolveVerifyGate(
             if (!autoFixNow && !yoloRescueNow) {
                 await rec('resolution: user chose AUTOFIX — re-running the implementation turn')
             }
-            active.ui.notify(`${p.tag}: autofixing "${p.title}"…`, 'info')
+            notifyBoth(active, `${p.tag}: autofixing "${p.title}"…`, 'info')
             const diagnosis =
                 (
                     recOutcome.recommend === 'autofix'
@@ -803,7 +806,8 @@ export async function runEnforcePass(
                     await rec(
                         `enforce: frozen-path write DENIED — reverted ${reverted.length} spec-frozen file(s) the edit pass modified: ${reverted.join(', ')}`
                     )
-                    active.ui.notify(
+                    notifyRun(
+                        active,
                         `${p.tag}: guideline edits on "${p.title}" touched spec-frozen path(s) (${reverted.join(', ').slice(0, 120)}) — reverted before commit.`,
                         'warning'
                     )
@@ -820,7 +824,8 @@ export async function runEnforcePass(
             `enforce(${mode}): ${verdict.ok ? `clean${verdict.reason ? ` (${verdict.reason})` : ''}` : (verdict.reason ?? 'not clean')}${editsMade ? ' — edits in tree' : ''}`
         )
         if (!verdict.ok) {
-            active.ui.notify(
+            notifyRun(
+                active,
                 `${p.tag}: guideline ${mode === 'edit' ? 'enforcement' : 'review'} on "${p.title}" — ${verdict.reason ?? 'not clean'} — continuing.`,
                 'warning'
             )
@@ -861,7 +866,8 @@ export async function runEnforcePass(
                         `enforce: edits REGRESSED repo health pre-commit (${after.reason}) — no discard available, left uncommitted${outputTail}`
                     )
                 }
-                active.ui.notify(
+                notifyRun(
+                    active,
                     `${p.tag}: guideline edits on "${p.title}" regressed repo health (${after.reason.slice(0, 120)}) — discarded before commit.`,
                     'warning'
                 )
@@ -942,7 +948,8 @@ export async function runEnforcePass(
                         `enforce: re-verify FAILED (${afterReason.slice(0, 200)}) but the failure is attributed to a PRE-EXISTING defect in \`${rootCause.file}\` `
                             + `(${rootCause.owner}'s file, untouched by the ENFORCE COMMIT whose fate this differential decides) — edits KEPT, not reverted; repair task queued`
                     )
-                    active.ui.notify(
+                    notifyRun(
+                        active,
                         `${p.tag}: guideline fixes on "${p.title}" re-verified red on a pre-existing defect in ${rootCause.file} (${rootCause.owner}'s file) — keeping the fixes, queued a repair task.`,
                         'warning'
                     )
@@ -982,7 +989,8 @@ export async function runEnforcePass(
                             // queueing a repair must never break the gate sequence
                         }
                     }
-                    active.ui.notify(
+                    notifyRun(
+                        active,
                         `${p.tag}: guideline fixes on "${p.title}" re-verified red on ${attribution.file ?? 'a file'} — outside the enforce diff, so keeping the fixes and recording the defect.`,
                         'warning'
                     )
@@ -1012,13 +1020,15 @@ export async function runEnforcePass(
                         after.reason ?? 'enforce re-verify failed',
                         'enforce-revert'
                     )
-                    active.ui.notify(
+                    notifyRun(
+                        active,
                         `${p.tag}: guideline fixes regressed verification on "${p.title}" (${(after.reason ?? 'now fails').slice(0, 120)}) — ${deps.revert ? 'reverted them, kept the verified work' : 'left in place (no revert available)'}.`,
                         'warning'
                     )
                 } else {
                     await rec('enforce: fixes committed — re-verify PASS, kept')
-                    active.ui.notify(
+                    notifyRun(
+                        active,
                         `${p.tag}: committed guideline fixes for "${p.title}".`,
                         'info'
                     )
@@ -1112,7 +1122,7 @@ export async function runGatesForTask(
                     + `${commit.excluded.length > 8 ? `, +${commit.excluded.length - 8} more` : ''}`
             )
         }
-        active.ui.notify(`${p.tag}: committed "${p.title}".`, 'info')
+        notifyBoth(active, `${p.tag}: committed "${p.title}".`, 'info')
     } else {
         await rec(`commit: skipped (${commit.reason ?? 'unknown'})`)
         // A benign skip ("nothing to commit", auto-commit off) is a warning. A real

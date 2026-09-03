@@ -51,7 +51,14 @@ import {
 import {startWidget, type WidgetState} from './widget.js'
 import {setupImplWidget} from './impl-widget.js'
 import {enterImplementationTurn} from './implementation-scope.js'
-import {SessionUI, publishNotify, registerBridgeCommand, getBridge} from '../remote/bridge.js'
+import {
+    SessionUI,
+    publishNotify,
+    registerBridgeCommand,
+    getBridge,
+    notifyBoth,
+    isRemoteOrigin
+} from '../remote/bridge.js'
 import {pushNotify} from '../remote/push.js'
 import {getConfig} from '../config/config.js'
 import {gateDebugWriter} from './debug-log.js'
@@ -898,8 +905,10 @@ async function handleTask(args: string, ctx: ExtensionCommandContext): Promise<v
     const cwd = ctx.cwd
     const raw = args.trim()
     if (raw.length === 0) {
-        ctx.ui.setEditorText('/task ')
-        ctx.ui.notify('Type your prompt after /task (use @ for file completion).', 'info')
+        // Prefilling the composer answers a LOCAL user. From the browser it would
+        // type into a terminal nobody is sitting at; the notice is the answer there.
+        if (!isRemoteOrigin(ctx)) ctx.ui.setEditorText('/task ')
+        notifyBoth(ctx, 'Type your prompt after /task (use @ for file completion).', 'info')
         return
     }
     // When a gate is enabled, /task awaits the implementation and runs the same
@@ -913,7 +922,7 @@ async function handleTask(args: string, ctx: ExtensionCommandContext): Promise<v
     }
     const {end} = await runSingleTask(ctx, cwd, raw, {notifyFinish: true})
     if (end.kind === 'no-session') {
-        ctx.ui.notify('Could not start a fresh session for /task.', 'warning')
+        notifyBoth(ctx, 'Could not start a fresh session for /task.', 'warning')
     }
 }
 
@@ -966,7 +975,7 @@ async function handleTaskResume(args: string, ctx: ExtensionCommandContext): Pro
         try {
             await fsp.access(taskFilePath(cwd, id))
         } catch {
-            ctx.ui.notify(`${id} not found in .pi-tasks/`, 'error')
+            notifyBoth(ctx, `${id} not found in .pi-tasks/`, 'error')
             publishNotify(`${id} not found in .pi-tasks/`, 'error')
             return
         }
@@ -990,7 +999,7 @@ async function handleTaskResume(args: string, ctx: ExtensionCommandContext): Pro
         }
         candidates.sort((a, b) => b.mtime - a.mtime)
         if (candidates.length === 0) {
-            ctx.ui.notify('No resumable tasks.', 'info')
+            notifyBoth(ctx, 'No resumable tasks.', 'info')
             publishNotify('No resumable tasks.', 'info')
             return
         }
@@ -1004,19 +1013,19 @@ async function handleTaskResume(args: string, ctx: ExtensionCommandContext): Pro
     }
     const {end} = await runSingleTask(ctx, cwd, '', {resumeId: id, notifyFinish: true})
     if (end.kind === 'no-session') {
-        ctx.ui.notify('Could not start a fresh session for /task-resume.', 'warning')
+        notifyBoth(ctx, 'Could not start a fresh session for /task-resume.', 'warning')
     }
 }
 
 // eslint-disable-next-line @typescript-eslint/require-await
 async function handleTaskCancel(_args: string, ctx: ExtensionCommandContext): Promise<void> {
     if (!activeTask) {
-        ctx.ui.notify('No task is running.', 'info')
+        notifyBoth(ctx, 'No task is running.', 'info')
         publishNotify('No task is running.', 'info')
         return
     }
     activeTask.cancel()
-    ctx.ui.notify(`Cancelling ${activeTask.taskId}…`, 'warning')
+    notifyBoth(ctx, `Cancelling ${activeTask.taskId}…`, 'warning')
     publishNotify(`Cancelling ${activeTask.taskId}…`, 'warning')
 }
 

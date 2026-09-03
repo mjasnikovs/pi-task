@@ -33,7 +33,7 @@ import type {FinalGateFixFn} from './gate-deps.js'
 import {AutofixLedger} from './autofix-ledger.js'
 import {describeDebt, recordDebt, type AcceptDebt, type DebtOrigin} from './accept-debt.js'
 import {cancelCheckpoint} from './cancel-points.js'
-import {SessionUI} from '../remote/bridge.js'
+import {SessionUI, notifyBoth, notifyRun} from '../remote/bridge.js'
 import {isYoloMode, yoloFinalGateChoice, YOLO_STAMP} from './yolo.js'
 import {ignoredWriteTrailLine, ignoredWriteDebtReason} from './write-guard.js'
 import {readOwnedRequirements, type OwnedRequirement} from './requirements.js'
@@ -228,7 +228,7 @@ export async function runFinalGateStage(
     // Set when the gate finished having observed NOTHING dynamic. Declared out here so
     // the run-completion announcement can say so.
     let unobservedNote: string | null = null
-    active.ui.notify(`${id}: running final integration gate…`, 'info')
+    notifyBoth(active, `${id}: running final integration gate…`, 'info')
     // Run-level gate trail on the parent task file — same durable auditability
     // contract as the per-task `## gates` records.
     const recGate = async (line: string): Promise<void> => {
@@ -264,7 +264,8 @@ export async function runFinalGateStage(
         unobservedNote = fin.unobserved
         await recGate(`final-gate: UNOBSERVED — ${fin.reason.slice(0, 300)}`)
         await carryDebt(fin.unobserved)
-        active.ui.notify(
+        notifyRun(
+            active,
             `${id}: the final integration gate observed NOTHING dynamic — `
                 + 'the run completed on static checks alone. Nothing verified '
                 + 'that the assembled product builds, boots or works.',
@@ -289,7 +290,8 @@ export async function runFinalGateStage(
                 }`
             )
         }
-        active.ui.notify(
+        notifyRun(
+            active,
             `${id}: ${debts.length} recorded verify-FAIL defect(s) are STILL unresolved at run end — see the gate trail.`,
             'warning'
         )
@@ -313,7 +315,8 @@ export async function runFinalGateStage(
         )
     }
     if (unclaimed.length > 0) {
-        active.ui.notify(
+        notifyRun(
+            active,
             `${id}: ${unclaimed.length} authoritative design requirement(s) ended the run`
                 + ' owned by NO task — the task they were mapped to could not touch the'
                 + ' file, and nothing else claimed it. See the gate trail.',
@@ -491,7 +494,8 @@ export async function runFinalGateStage(
             // commit — the ACCEPT is a decision about the FAILING gate, never an
             // instruction to throw away work.
             await commitStranded('accepted')
-            active.ui.notify(
+            notifyRun(
+                active,
                 `${id}: final integration gate FAIL accepted by user — completing.`
                     + (ledger.stranded().length > 0 ?
                         ` ${ledger.stranded().length} uncommitted fix-pass change(s) committed separately.`
@@ -505,7 +509,8 @@ export async function runFinalGateStage(
             await recGate(
                 `final-gate: user chose AUTOFIX (attempt ${attempt}/${MAX_FINAL_GATE_AUTOFIX})`
             )
-            active.ui.notify(
+            notifyRun(
+                active,
                 `${id}: final-gate autofix (${attempt}/${MAX_FINAL_GATE_AUTOFIX}) — bounded fix pass, then the gate re-runs…`,
                 'info'
             )
@@ -542,7 +547,8 @@ export async function runFinalGateStage(
                 await recGate(
                     `final-gate: autofix ${fix.unobserved ? 'ended UNOBSERVED' : 'converged'} — ${fix.reason.slice(0, 200)}`
                 )
-                active.ui.notify(
+                notifyRun(
+                    active,
                     `${id}: final integration gate ${fix.unobserved ? 'is UNOBSERVED' : 'PASSES'} after autofix — ${fix.reason.slice(0, 140)}`,
                     fix.unobserved ? 'warning' : 'info'
                 )
@@ -574,7 +580,8 @@ export async function runFinalGateStage(
                         + `uncommitted change(s) — ${ledger.stranded().slice(0, 8).join(', ')}`
                 )
             }
-            active.ui.notify(
+            notifyRun(
+                active,
                 `${id}: final-gate autofix did not converge — ${fix.reason.slice(0, 140)}`,
                 'warning'
             )
@@ -598,7 +605,8 @@ export async function runFinalGateStage(
                         + `attempts returned an identical failure — carried as debt (origin final-gate) `
                         + `and re-checked by the next run's gate: ${verdict.detail!.slice(0, 240)}`
                 )
-                active.ui.notify(
+                notifyRun(
+                    active,
                     `${id}: final-gate check is unfalsifiable in this environment — carried as debt; `
                         + 'the remaining checks decide convergence.',
                     'warning'
@@ -615,7 +623,8 @@ export async function runFinalGateStage(
                         `converged on all remaining checks; ${ledger.demotedCount()} check(s) `
                         + 'carried as UNOBSERVED debt (unfalsifiable in this environment)'
                     await recGate(`final-gate: ${converged}`)
-                    active.ui.notify(
+                    notifyRun(
+                        active,
                         `${id}: final integration gate converged — ${converged}.`,
                         'warning'
                     )

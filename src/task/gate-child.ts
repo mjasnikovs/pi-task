@@ -31,6 +31,7 @@ import type {GitStateSnapshot, ReconcileResult} from './git-state-guard.js'
 import type {ChildStatus} from './child-status.js'
 import {formatLoopHint} from './loop-detector.js'
 import {classifyEnforceChildFailure} from './enforce-guidelines.js'
+import {notifyRun} from '../remote/bridge.js'
 
 /** Which gate child this is. */
 export type GateChildKind = 'verify' | 'recommend' | 'lint-fix' | 'final-fix' | 'enforce'
@@ -252,7 +253,8 @@ export function makeGateChild(
                                 + `restored: ${rec.actions.join('; ')} ===`
                         )
                         if (rec.verdictTainted) {
-                            deps.ctx.ui.notify(
+                            notifyRun(
+                                deps.ctx,
                                 `${deps.taskTitle}: ${deps.kind} child mutated repo state — `
                                     + `restored (${rec.actions.join('; ').slice(0, 140)}).`,
                                 'warning'
@@ -266,7 +268,8 @@ export function makeGateChild(
             // only thing that can block.
             if (r.loopHit) {
                 log(`=== ${deps.kind} LOOP WARNING — ${formatLoopHint(r.loopHit)} ===`)
-                deps.ctx.ui.notify(
+                notifyRun(
+                    deps.ctx,
                     `${deps.taskTitle}: ${deps.kind} worker looped past the nudges — `
                         + 'continuing (not blocked).',
                     'warning'

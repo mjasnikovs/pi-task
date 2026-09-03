@@ -63,7 +63,13 @@ import {deriveTitle} from './parsers.js'
 import {renderInlineMarkdown} from './inline-markdown.js'
 import {expandFeatureMentions} from './auto-orchestrator.js'
 import {runSingleTask, runGatedTask} from './orchestrator.js'
-import {SessionUI, publishLifecycleNotice, registerBridgeCommand} from '../remote/bridge.js'
+import {
+    SessionUI,
+    registerBridgeCommand,
+    notifyBoth,
+    notifyRun,
+    isRemoteOrigin
+} from '../remote/bridge.js'
 import {withRun, announceTerminal} from './run-bracket.js'
 import {getConfig} from '../config/config.js'
 import {isYoloMode} from './yolo.js'
@@ -201,12 +207,7 @@ async function reportReadOnlyViolation(
 ): Promise<void> {
     const line = formatReadOnlyViolation(step, touched)
     logDebug?.(line)
-    try {
-        ctx.ui.notify(line, 'error')
-    } catch {
-        /* stale ctx — the record below is what matters */
-    }
-    publishLifecycleNotice(line, 'error')
+    notifyRun(ctx, line, 'error')
     try {
         const existing = (await readSection(cwd, planId, 'read-only violations')) ?? ''
         await setTaskSection(
@@ -286,7 +287,7 @@ async function defaultHandoff(
     }
     const {taskId, end} = await runSingleTask(ctx, cwd, prompt, {notifyFinish: true})
     if (end.kind === 'no-session') {
-        ctx.ui.notify('Could not start a fresh session for /task-plan.', 'warning')
+        notifyBoth(ctx, 'Could not start a fresh session for /task-plan.', 'warning')
         return undefined
     }
     return taskId || undefined
@@ -335,8 +336,10 @@ export async function handleTaskPlan(
     const cwd = ctx.cwd
     const raw = args.trim()
     if (raw.length === 0) {
-        ctx.ui.setEditorText('/task-plan ')
-        ctx.ui.notify('Describe the task after /task-plan (use @ for file completion).', 'info')
+        // Prefilling the composer answers a LOCAL user. From the browser it would
+        // type into a terminal nobody is sitting at; the notice is the answer there.
+        if (!isRemoteOrigin(ctx)) ctx.ui.setEditorText('/task-plan ')
+        notifyBoth(ctx, 'Describe the task after /task-plan (use @ for file completion).', 'info')
         return
     }
 

@@ -115,7 +115,7 @@ import {
     researchWorkerCacheHeading,
     type ResearchWorkerSpec
 } from './research-worker.js'
-import {SessionUI} from '../remote/bridge.js'
+import {SessionUI, notifyRun} from '../remote/bridge.js'
 import {isYoloMode, yoloPickAutoAnswer} from './yolo.js'
 import {QaTranscript, GRILL_QA_POLICY} from './qa-transcript.js'
 
@@ -1442,7 +1442,8 @@ export async function critiqueWithFallback(d: PhaseDeps, p: PhaseContext): Promi
         // carries the SAME defect the rewrite failed to fix is still delivered —
         // it is the validated-shape fallback, and failing the run costs more.
         if (parseVerifyBlock(p.spec) === null) throw err
-        p.ctx.ui.notify(
+        notifyRun(
+            p.ctx,
             msg === 'verify_grep_theater' ?
                 'Critique rewrite kept a grep-only VERIFY — using compose draft. Consider adding a command that RUNS the deliverable.'
             :   "Critique couldn't produce a VERIFY block — using compose draft. Edit the spec manually if needed.",

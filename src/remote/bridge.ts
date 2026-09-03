@@ -301,6 +301,39 @@ export function publishLifecycleNotice(message: string, level: 'info' | 'warning
 }
 
 /**
+ * Say it on BOTH surfaces. The local notify is attempted first and its failure
+ * absorbed — a stale ctx must not cost the remote the message, which is the one
+ * surface still there when nobody is at the terminal.
+ */
+export function notifyBoth(
+    ctx: Pick<ExtensionCommandContext, 'ui'>,
+    message: string,
+    level: 'info' | 'warning' | 'error'
+): void {
+    try {
+        ctx.ui.notify(message, level)
+    } catch {
+        /* stale ctx — the remote half below is what matters */
+    }
+    publishLifecycleNotice(message, level)
+}
+
+/** {@link notifyBoth} for something that must outlive a toast — see
+ *  {@link publishRunNotice}. */
+export function notifyRun(
+    ctx: Pick<ExtensionCommandContext, 'ui'>,
+    message: string,
+    level: 'info' | 'warning' | 'error'
+): void {
+    try {
+        ctx.ui.notify(message, level)
+    } catch {
+        /* stale ctx — the remote half below is what matters */
+    }
+    publishRunNotice(message, level)
+}
+
+/**
  * A run outcome the remote must still have later: what a gate decided, what a
  * commit failed to do, what a resume refused. Unlike publishLifecycleNotice it
  * persists at EVERY level, because "still there in the morning" is the reason

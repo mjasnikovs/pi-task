@@ -6,7 +6,7 @@
 import type {ExtensionCommandContext} from '@earendil-works/pi-coding-agent'
 import {updateTaskFrontMatter} from './task-io.js'
 import {flashTerminalWidget} from './widget.js'
-import {publishLifecycleNotice} from '../remote/bridge.js'
+import {notifyRun} from '../remote/bridge.js'
 import {ChildFailureError, USER_CANCELLED} from './child-runner.js'
 import {streamStallCause} from '../shared/stream-watchdog.js'
 
@@ -142,9 +142,8 @@ export async function handleFailure(
     const c = classifyFailure(err, aborted)
     await updateTaskFrontMatter(cwd, id, {state: c.state, reason: c.reason})
     flashTerminalWidget(ctx, c.state, id, c.flash)
-    ctx.ui.notify(`${id} ${c.notify}`, c.level)
-    // Mirror to remote viewers. `ctx.ui.notify` reaches the terminal UI only, so
-    // without this call the remote view shows nothing when a task fails.
-    publishLifecycleNotice(`${id} ${c.notify}`, c.level)
+    // How the run ENDED. Durable on the remote: a toast is gone before an absent
+    // user looks, and this is the one line that says the task did not finish.
+    notifyRun(ctx, `${id} ${c.notify}`, c.level)
     return c
 }

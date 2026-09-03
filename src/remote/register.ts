@@ -9,7 +9,8 @@ import {
     registerBridgeCommand,
     registerRemoteOnlyCommand,
     publishNotify,
-    cancelPendingPrompts
+    cancelPendingPrompts,
+    notifyBoth
 } from './bridge.js'
 import {setupEvents} from './events.js'
 import {reset, addUserTurn, setHeld, getState} from './session-state.js'
@@ -137,7 +138,7 @@ export function registerRemote(pi: ExtensionAPI): void {
             // Optional feature: a bind failure must never take pi down. Degrade
             // to a one-line warning and keep the agent running without remote.
             void ensureServer().catch(err =>
-                ctx.ui.notify(`Remote UI unavailable: ${(err as Error).message}`, 'warning')
+                notifyBoth(ctx, `Remote UI unavailable: ${(err as Error).message}`, 'warning')
             )
         }
     })
@@ -176,7 +177,7 @@ export function registerRemote(pi: ExtensionAPI): void {
         description: 'Show the remote QR code & URLs.',
         handler: async (args, ctx) => {
             if (!getConfig().remote) {
-                ctx.ui.notify('Remote is disabled — enable it in /task-config.', 'info')
+                notifyBoth(ctx, 'Remote is disabled — enable it in /task-config.', 'info')
                 return
             }
             if (args.trim() === 'stop') {
@@ -186,9 +187,9 @@ export function registerRemote(pi: ExtensionAPI): void {
                     S.server = null
                     S.serveResult = null
                     void teardownTailscaleServe(port).catch(() => {})
-                    ctx.ui.notify('Remote server stopped', 'info')
+                    notifyBoth(ctx, 'Remote server stopped', 'info')
                 } else {
-                    ctx.ui.notify('Remote server is not running', 'warning')
+                    notifyBoth(ctx, 'Remote server is not running', 'warning')
                 }
                 return
             }
@@ -255,9 +256,9 @@ export function registerRemote(pi: ExtensionAPI): void {
                         .catch(() => {})
                 }
 
-                ctx.ui.notify(`Remote running at ${primaryUrl}`, 'info')
+                notifyBoth(ctx, `Remote running at ${primaryUrl}`, 'info')
             } catch (err) {
-                ctx.ui.notify(`Remote UI unavailable: ${(err as Error).message}`, 'error')
+                notifyBoth(ctx, `Remote UI unavailable: ${(err as Error).message}`, 'error')
             }
         }
     })

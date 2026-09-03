@@ -61,7 +61,10 @@ import {
     SessionUI,
     registerBridgeCommand,
     publishLifecycleNotice,
-    publishRunNotice
+    publishRunNotice,
+    notifyBoth,
+    notifyRun,
+    isRemoteOrigin
 } from '../remote/bridge.js'
 import {getParentContextWindow} from './context-usage.js'
 import {ChildStatus, runPlanningChild, statusCallbacks} from './child-status.js'
@@ -569,7 +572,8 @@ async function schedulePendingRepairs(
                 id,
                 `plan: inserted scoped repair step after step ${afterIndex + 1} — ${title}`
             )
-            ctx.ui.notify(
+            notifyRun(
+                ctx,
                 `${id}: queued a scoped repair for ${repair.file} (${repair.owner}'s file — root cause of ${repair.blamed.join(', ')}).`,
                 'warning'
             )
@@ -837,7 +841,7 @@ export async function elicitClarifications(
         }
     }
     if (transcript.length === 0) {
-        ctx.ui.notify('No clarifying questions needed — planning tasks…', 'info')
+        notifyBoth(ctx, 'No clarifying questions needed — planning tasks…', 'info')
     }
     return transcript.forRecord()
 }
@@ -1150,7 +1154,8 @@ export async function coverPlan(
             // mode (bare verdict, indistinguishable from a real one). The plan still
             // ships — the floor never rejects on count — but never silently.
             if (best.suspect) {
-                ctx.ui.notify(
+                notifyRun(
+                    ctx,
                     `/task-auto: only ${best.plan.titles.length} task(s) planned for a large spec`
                         + ' and the regeneration did not grow the list — review the plan before running.',
                     'warning'
@@ -1214,7 +1219,8 @@ export async function coverPlan(
             `decompose-coverage exhausted ${round} round(s) still INCOMPLETE — missing: `
                 + unresolvedMissing.join('; ').slice(0, 300)
         )
-        ctx.ui.notify(
+        notifyRun(
+            ctx,
             `/task-auto: no task fully owns — ${unresolvedMissing.join('; ').slice(0, 200)}. `
                 + 'Carried into every task via .pi-tasks/requirements.md, but not as a dedicated '
                 + 'task. To give it one, stop now and add it to the plan in .pi-tasks/; otherwise '
@@ -1322,7 +1328,8 @@ export async function planAuto(
             carriedJudge.length > 0 ? `${carriedJudge.length} judge-flagged` : '',
             carriedDangling.length > 0 ? `${carriedDangling.length} dangling-artifact` : ''
         ].filter(p => p.length > 0)
-        ctx.ui.notify(
+        notifyRun(
+            ctx,
             `/task-auto: carrying ${parts.join(', ')} requirement(s) into every task`
                 + ' — see .pi-tasks/requirements.md.',
             'info'
@@ -1597,7 +1604,8 @@ async function reportStashDrift(
     try {
         const after = await deps.stashRef(cwd)
         if (after === before) return
-        active.ui.notify(
+        notifyRun(
+            active,
             `${id}: the git stash stack changed during "${title}" and was left that way — `
                 + 'inspect `git stash list`; an orphan stash later pops as an unresolvable conflict.',
             'warning'
@@ -1692,8 +1700,7 @@ export async function runAutoLoop(
             // never learns how far the run has gotten — mirror it into the session
             // view too (transient toast, same as announceDone's info path).
             const progressMsg = `${id}: task ${next.index + 1}/${entries.length} — ${next.title}`
-            active.ui.notify(progressMsg, 'info')
-            publishLifecycleNotice(progressMsg, 'info')
+            notifyBoth(active, progressMsg, 'info')
             // If this entry already has a stamped inner id, it was started in a
             // previous (interrupted) run — resume it from its saved phase rather
             // than spawning a fresh task. But the stamped inner file can be gone
@@ -1720,7 +1727,8 @@ export async function runAutoLoop(
             // half. Only the success path is announced to keep the common no-op quiet.
             const checkpoint = await deps.commit(cwd, `chore: checkpoint before "${next.title}"`)
             if (checkpoint.committed) {
-                active.ui.notify(
+                notifyRun(
+                    active,
                     `${id}: checkpointed uncommitted work before "${next.title}".`,
                     'info'
                 )
@@ -1884,8 +1892,14 @@ async function handleTaskAuto(args: string, ctx: ExtensionCommandContext): Promi
     const cwd = ctx.cwd
     const raw = args.trim()
     if (raw.length === 0) {
-        ctx.ui.setEditorText('/task-auto ')
-        ctx.ui.notify('Describe the feature after /task-auto (use @ for file completion).', 'info')
+        // Prefilling the composer answers a LOCAL user. From the browser it would
+        // type into a terminal nobody is sitting at; the notice is the answer there.
+        if (!isRemoteOrigin(ctx)) ctx.ui.setEditorText('/task-auto ')
+        notifyBoth(
+            ctx,
+            'Describe the feature after /task-auto (use @ for file completion).',
+            'info'
+        )
         return
     }
     autoRunning = true

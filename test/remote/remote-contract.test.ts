@@ -57,8 +57,13 @@ function tmpRepo(): string {
 
 /** Every local dialog blocks forever — the state a host terminal is really in.
  *  `opened` records which of them the handler reached. */
-function blockingCtx(cwd: string): {ctx: ExtensionCommandContext; opened: string[]} {
+function blockingCtx(cwd: string): {
+    ctx: ExtensionCommandContext
+    opened: string[]
+    typedIntoComposer: string[]
+} {
     const opened: string[] = []
+    const typedIntoComposer: string[] = []
     const never = (what: string) => () => {
         opened.push(what)
         return new Promise<never>(() => {})
@@ -79,12 +84,12 @@ function blockingCtx(cwd: string): {ctx: ExtensionCommandContext; opened: string
             select: never('select'),
             notify: () => {},
             setWidget: () => {},
-            setEditorText: () => {}
+            setEditorText: (t: string) => typedIntoComposer.push(t)
         },
         waitForIdle: async () => {},
         isIdle: () => true
     } as unknown as ExtensionCommandContext
-    return {ctx, opened}
+    return {ctx, opened, typedIntoComposer}
 }
 
 afterEach(() => {
@@ -232,6 +237,23 @@ describe('what the terminal is told, the browser is told', () => {
         // The terminal-stdin path for the same action already mirrors; the
         // browser path is the one that needs it.
         expect(JSON.stringify(frames)).toContain('No /task-auto loop is running')
+    })
+
+    test('a bare /task from the browser answers the browser, not the host composer', async () => {
+        const cwd = tmpRepo()
+        const frames = captureFrames()
+        const table = commandTable(registerTask)
+        const b = getBridge()
+        const host = blockingCtx(cwd)
+        b.commands.set('task', table.get('task')!)
+        b.currentCtx = host.ctx
+
+        dispatchRemoteLine('/task', {onPlain: () => {}})
+        await new Promise(r => setTimeout(r, 20))
+
+        expect(JSON.stringify(frames)).toContain('Type your prompt after /task')
+        // Prefilling the composer would type into a terminal nobody is at.
+        expect(host.typedIntoComposer).toEqual([])
     })
 
     test('the task widget reaches the browser on a host with no local TUI', () => {
