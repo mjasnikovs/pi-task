@@ -51,7 +51,7 @@ describe('html()', () => {
         expect(out).toContain("case 'prompt_resolved'")
         expect(out).toContain("case 'widget'")
         expect(out).toContain("case 'notify'")
-        expect(out).toContain("case 'viewer'")
+        expect(out).toContain("case 'prompt'")
         expect(out).toContain("case 'context'")
         expect(out).toContain('prompt_answer')
         expect(out).toContain('id="prompt-card"')

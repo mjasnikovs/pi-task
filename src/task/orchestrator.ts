@@ -51,7 +51,7 @@ import {
 import {startWidget, type WidgetState} from './widget.js'
 import {setupImplWidget} from './impl-widget.js'
 import {enterImplementationTurn} from './implementation-scope.js'
-import {publishViewer, publishNotify, registerBridgeCommand, getBridge} from '../remote/bridge.js'
+import {SessionUI, publishNotify, registerBridgeCommand, getBridge} from '../remote/bridge.js'
 import {pushNotify} from '../remote/push.js'
 import {getConfig} from '../config/config.js'
 import {gateDebugWriter} from './debug-log.js'
@@ -949,8 +949,12 @@ async function handleTaskList(_args: string, ctx: ExtensionCommandContext): Prom
         '',
         'resume: /task-resume <id>   (eligible: in_progress, pending, cancelled, failed)'
     )
-    publishViewer('Tasks', lines.join('\n'))
-    await ctx.ui.editor('Tasks', lines.join('\n'))
+    await new SessionUI(ctx).show({
+        localTitle: 'Tasks',
+        localText: lines.join('\n'),
+        question: 'Tasks',
+        body: lines.join('\n')
+    })
 }
 
 async function handleTaskResume(args: string, ctx: ExtensionCommandContext): Promise<void> {

@@ -5,14 +5,14 @@ import {
     SessionUI,
     publishNotify,
     publishLifecycleNotice,
-    publishViewer,
+    publishNote,
     registerBridgeCommand,
     dispatchRemoteLine,
     dispatchRemoteNewSession,
     makeShimmedCtx
 } from '../../src/remote/bridge.js'
 import {broadcast as wsBroadcast} from '../../src/remote/broadcast.js'
-import {getState, _setSink, reset} from '../../src/remote/session-state.js'
+import {getState, _setSink, reset, snapshot} from '../../src/remote/session-state.js'
 
 // Reset the singletons between tests.
 afterEach(() => {
@@ -310,15 +310,17 @@ test('publishLifecycleNotice: a non-error is a transient toast', () => {
     })
 })
 
-test('publishViewer broadcasts a viewer message', () => {
+test('publishNote commits to the transcript, so it survives a reconnect', () => {
     const b = getBridge()
-    b.broadcast = msg => b.sent.push(msg)
-    publishViewer('Tasks', 'TASK_0001 completed\nTASK_0002 pending')
-    expect(b.sent).toContainEqual({
-        type: 'viewer',
-        title: 'Tasks',
+    _setSink(msg => b.sent.push(msg as never))
+    publishNote('TASK_0001 completed\nTASK_0002 pending')
+    // system_note is one of the 11 live-delta types that reach the sink but are
+    // not in the ServerMessage union, so this cannot use toContainEqual.
+    expect(b.sent as unknown[]).toContainEqual({
+        type: 'system_note',
         text: 'TASK_0001 completed\nTASK_0002 pending'
     })
+    expect(JSON.stringify(snapshot())).toContain('TASK_0002 pending')
 })
 
 test('dispatchRemoteLine routes a registered slash command to its handler', () => {

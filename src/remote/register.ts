@@ -8,7 +8,8 @@ import {
     interruptAgent,
     registerBridgeCommand,
     registerRemoteOnlyCommand,
-    publishNotify
+    publishNotify,
+    cancelPendingPrompts
 } from './bridge.js'
 import {setupEvents} from './events.js'
 import {reset, addUserTurn, setHeld, getState} from './session-state.js'
@@ -113,6 +114,9 @@ export function registerRemote(pi: ExtensionAPI): void {
         // state and tell connected clients to clear.
         const bridge = getBridge()
         reset()
+        // Paired with the reset: it clears the browser's prompt card, so any ask
+        // still parked on the bridge has lost its last surface.
+        cancelPendingPrompts()
         setupEvents(pi)
         // Mirror held mid-run input into the browser composer.
         setHeldInputListener(() => setHeld(heldInput(), isRunActive()))

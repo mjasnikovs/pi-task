@@ -66,7 +66,11 @@ function blockingCtx(cwd: string): {ctx: ExtensionCommandContext; opened: string
         hasUI: true,
         mode: 'tui',
         ui: {
-            theme: {fg: (_c: string, s: string) => s, bold: (s: string) => s, dim: (s: string) => s},
+            theme: {
+                fg: (_c: string, s: string) => s,
+                bold: (s: string) => s,
+                dim: (s: string) => s
+            },
             input: never('input'),
             custom: never('custom'),
             editor: never('editor'),

@@ -266,7 +266,11 @@ export function setPrompt(prompt: PromptMessage): void {
 
 export function clearPrompt(id: string): void {
     const s = getState()
-    s.prompt = null
+    // Only the prompt that is actually on screen. Two asks can be live at once —
+    // dispatchRemoteLine starts a command whatever else is running — and the slot
+    // holds one, so clearing unconditionally would drop the survivor out of the
+    // snapshot and leave a reconnecting browser unable to answer it.
+    if (s.prompt?.id === id) s.prompt = null
     s.sink({type: 'prompt_resolved', id})
 }
 

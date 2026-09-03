@@ -9,7 +9,7 @@ import {
 import {resolveModel, specOf, type PiModel} from '../shared/model-resolve.js'
 import {MODEL_INHERIT} from './group-models.js'
 import {PairPicker, type PairOptions} from './option-picker.js'
-import {registerBridgeCommand} from '../remote/bridge.js'
+import {registerBridgeCommand, isRemoteOrigin, publishNote} from '../remote/bridge.js'
 import {readPkgVersion} from '../shared/pkg-version.js'
 import {
     SEARCH_PROVIDERS,
@@ -1145,7 +1145,10 @@ async function handleTaskConfig(
     const tools = getTools()
     const catalog = liveCatalog(ctx)
 
-    if (ctx.mode !== 'tui') {
+    // The panel is a TUI component. A browser caller has no way to draw it and no
+    // way to close it, so awaiting it there parks the remote on the host's
+    // terminal — the failure issue #1 fixed for /task-plan.
+    if (ctx.mode !== 'tui' || isRemoteOrigin(ctx)) {
         // Built from panelItems and reading the SAME `format` the panel does,
         // so the two renderings cannot disagree about what a setting says. A
         // second walk of the same tables is the one place nobody would notice
@@ -1161,6 +1164,9 @@ async function handleTaskConfig(
                 :   `${(i.headlessLabel ?? i.label).padEnd(22)} ${i.currentValue}`
             )
         ctx.ui.notify(lines.join('  |  '), 'info')
+        // One row per line: the `|`-joined form is for a terminal that has one
+        // line to spare, and the browser has a whole transcript.
+        publishNote(lines.join('\n'))
         return
     }
 

@@ -84,7 +84,6 @@ ${STYLES}
     <textarea id="prompt-input" rows="3" placeholder="Type your answer…" style="display:none"></textarea>
     <div class="row" id="prompt-buttons"></div>
   </div>
-  <div id="viewer"><span class="close" id="viewer-close">&#x2715;</span><div id="viewer-body"></div></div>
   <script>
 ${renderModule()}
 ${highlightModule()}

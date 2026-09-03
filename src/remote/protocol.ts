@@ -20,7 +20,7 @@ export interface PromptMessage {
      * collapse to a single Close that answers with an empty string. Its one
      * producer is /task-plan's answer to a question the USER asked, which needs
      * dismissing rather than answering — and which needs to be a prompt, not a
-     * `viewer`, because only a prompt is in the reconnect snapshot.
+     * broadcast-only frame, because only a prompt is in the reconnect snapshot.
      */
     dismissOnly?: boolean
     allowSkip: boolean
@@ -73,12 +73,6 @@ export interface HeldMessage {
     runActive: boolean
 }
 
-export interface ViewerMessage {
-    type: 'viewer'
-    title: string
-    text: string
-}
-
 export interface ContextUsage {
     tokens?: number
     contextWindow?: number
@@ -112,7 +106,6 @@ export type ServerMessage =
     | PromptResolvedMessage
     | WidgetMessage
     | NotifyMessage
-    | ViewerMessage
     | HeldMessage
     | ContextMessage
     | ResetMessage

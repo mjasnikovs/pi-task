@@ -101,9 +101,6 @@ export function clientScript(wsUrl: string): string {
     const promptRecText = document.getElementById('prompt-rec-text');
     const promptInput = document.getElementById('prompt-input');
     const promptButtons = document.getElementById('prompt-buttons');
-    const viewer = document.getElementById('viewer');
-    const viewerBody = document.getElementById('viewer-body');
-    document.getElementById('viewer-close').onclick = function () { viewer.style.display = 'none'; };
     let activePromptId = null;
     let activeRecommended = '';
     let activeRecommended2 = '';
@@ -1095,10 +1092,6 @@ export function clientScript(wsUrl: string): string {
           break;
         case 'notify':
           showToast(msg.message, msg.level);
-          break;
-        case 'viewer':
-          viewerBody.textContent = msg.text;
-          viewer.style.display = 'block';
           break;
         case 'reset':
           // A new session started — wipe the previous session's transcript.

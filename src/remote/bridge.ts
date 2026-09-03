@@ -5,7 +5,7 @@ import type {
 } from '@earendil-works/pi-coding-agent'
 import {broadcast as wsBroadcast} from './broadcast.js'
 import {pushNotify} from './push.js'
-import {setPrompt, clearPrompt, addError} from './session-state.js'
+import {setPrompt, clearPrompt, addError, addSystemNote} from './session-state.js'
 import type {PromptMessage, ServerMessage} from './protocol.js'
 import {askQuestionBox} from '../task/question-box.js'
 
@@ -47,6 +47,18 @@ export function answerPrompt(id: string, value: string | undefined): void {
     if (!settle) return
     b.pending.delete(id)
     settle(value)
+}
+
+/**
+ * Settle every parked ask with undefined. Its one caller is the `session_start`
+ * that follows a remote `/new`: the reset wipes the prompt slot and tells the
+ * browser to close its card, which leaves the resolver here with no surface on
+ * any device — and, on a host with no TUI, no local half either.
+ */
+export function cancelPendingPrompts(): void {
+    const b = getBridge()
+    for (const settle of b.pending.values()) settle(undefined)
+    b.pending.clear()
 }
 
 export interface AskSpec {
@@ -288,13 +300,26 @@ export function publishLifecycleNotice(message: string, level: 'info' | 'warning
     else publishNotify(message, level)
 }
 
-export function publishViewer(title: string, text: string): void {
-    getBridge().broadcast({type: 'viewer', title, text})
+/** Commit text to the remote transcript. Unlike a notify it is in the reconnect
+ *  snapshot, so it is still there after a refresh. */
+export function publishNote(text: string): void {
+    addSystemNote(text)
 }
 
 // ─── Shimmed ctx ─────────────────────────────────────────────────────────────
 
 const SHIMMED_MARKER = '__piRemoteShimmed'
+const REMOTE_ORIGIN_MARKER = '__piRemoteOrigin'
+
+/**
+ * True when this ctx reached the handler through the browser rather than the
+ * terminal. A command that can only draw itself on the host TUI must check it:
+ * awaiting a local overlay for a remote caller parks the browser on a dialog
+ * nobody is sitting in front of.
+ */
+export function isRemoteOrigin(ctx: ExtensionCommandContext): boolean {
+    return (ctx as unknown as Record<string, unknown>)[REMOTE_ORIGIN_MARKER] === true
+}
 
 /**
  * Wraps an event-scoped ExtensionContext so it can be used as a command ctx
@@ -416,8 +441,12 @@ export function dispatchRemoteLine(text: string, opts: {onPlain: (text: string) 
     // as a toast instead of crashing or becoming an unhandled rejection.
     const toastErr = (err: unknown) =>
         publishNotify(`/${name} failed: ${(err as Error).message}`, 'error')
+    // A prototype clone rather than the ctx itself: the marker must not leak onto
+    // the shared currentCtx and make the NEXT terminal invocation look remote.
+    const remoteCtx = Object.create(b.currentCtx) as ExtensionCommandContext
+    ;(remoteCtx as unknown as Record<string, unknown>)[REMOTE_ORIGIN_MARKER] = true
     try {
-        const result = handler(args, b.currentCtx)
+        const result = handler(args, remoteCtx)
         if (result instanceof Promise) result.catch(toastErr)
     } catch (err) {
         toastErr(err)

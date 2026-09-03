@@ -414,10 +414,6 @@ export const STYLES = `    :root {
       background: var(--surface1); color: var(--text); z-index: 60; }
     .toast.warning { background: var(--peach); color: var(--crust); }
     .toast.error { background: var(--red); color: var(--crust); }
-    #viewer { position: fixed; inset: 24px; background: var(--mantle); border: 1px solid var(--surface2);
-      border-radius: 8px; padding: 16px; overflow: auto; white-space: pre-wrap;
-      overflow-wrap: anywhere; word-break: break-word; display: none; z-index: 70; }
-    #viewer .close { position: absolute; top: 8px; right: 12px; cursor: pointer; color: var(--subtext0); }
     /* Desktop: center the transcript/status/input in a readable column instead of
        hugging the left edge. The scrollbar stays at the true window edge; only the
        content is inset. Mobile (below 960px) is unchanged. */
