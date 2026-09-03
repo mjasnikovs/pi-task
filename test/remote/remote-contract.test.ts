@@ -29,6 +29,8 @@ import {
     snapshot
 } from '../../src/remote/session-state.js'
 import {registerTask} from '../../src/task/orchestrator.js'
+import {registerTaskAuto} from '../../src/task/auto-orchestrator.js'
+import {startWidget} from '../../src/task/widget.js'
 import {registerConfig} from '../../src/config/register.js'
 
 type Handler = (args: string, ctx: ExtensionCommandContext) => Promise<void> | void
@@ -207,5 +209,45 @@ describe('a new session releases parked prompts', () => {
         expect(await asked).toBeUndefined()
         expect(settled).toBe(true)
         expect(b.pending.size).toBe(0)
+    })
+})
+
+/**
+ * The blind half of the class: the terminal is told, the browser is not. None of
+ * these hang anyone — they leave a remote user unable to see what the run did.
+ */
+describe('what the terminal is told, the browser is told', () => {
+    test('/task-auto-cancel answers a browser caller, not just the host', async () => {
+        const cwd = tmpRepo()
+        const frames = captureFrames()
+        const table = commandTable(registerTaskAuto)
+        const b = getBridge()
+        const host = blockingCtx(cwd)
+        b.commands.set('task-auto-cancel', table.get('task-auto-cancel')!)
+        b.currentCtx = host.ctx
+
+        dispatchRemoteLine('/task-auto-cancel', {onPlain: () => {}})
+        await new Promise(r => setTimeout(r, 20))
+
+        // The terminal-stdin path for the same action already mirrors; the
+        // browser path is the one that needs it.
+        expect(JSON.stringify(frames)).toContain('No /task-auto loop is running')
+    })
+
+    test('the task widget reaches the browser on a host with no local TUI', () => {
+        captureFrames()
+        const ctx = {hasUI: false, ui: {}} as unknown as ExtensionCommandContext
+        const stop = startWidget(ctx, () => ({
+            taskId: 'TASK_0007',
+            title: 'auth routes',
+            phase: 'implementing',
+            startedAt: Date.now()
+        }))
+        try {
+            expect(getState().taskWidget).not.toBeNull()
+            expect(JSON.stringify(snapshot())).toContain('TASK_0007')
+        } finally {
+            stop()
+        }
     })
 })

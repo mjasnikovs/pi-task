@@ -21,6 +21,9 @@ import {registerTask} from '../../src/task/orchestrator.js'
 import {registerTaskAuto} from '../../src/task/auto-orchestrator.js'
 import {makeFakeCtx, type FakeCtxHandle} from '../test-utils/fake-ctx.js'
 import {getConfig} from '../../src/config/config.js'
+import {getBridge} from '../../src/remote/bridge.js'
+import {broadcast as wsBroadcast} from '../../src/remote/broadcast.js'
+import {_setSink, reset as resetSessionState, snapshot} from '../../src/remote/session-state.js'
 
 type Handler = (args: string, ctx: ExtensionCommandContext) => Promise<void> | void
 
@@ -201,5 +204,25 @@ describe('/task-auto', () => {
 
         expect(fake.captured.sentMessages).toEqual([])
         expect(fake.captured.notifies.length).toBe(1)
+    })
+
+    test('an unattended refusal is still on the remote in the morning', async () => {
+        const b = getBridge()
+        _setSink(msg => b.sent.push(msg as never))
+        try {
+            writeTask(cwd, 'TASK_0001', {...TASK('TASK_0001', 'failed'), kind: 'auto'})
+
+            await cmd('task-auto-resume')('--unattended', fake.ctx)
+
+            // Nobody was watching the terminal. A toast is dropped after 4s and is
+            // absent from the reconnect snapshot, which is the whole point of
+            // mirroring this one.
+            expect(JSON.stringify(snapshot())).toContain('TASK_0001')
+        } finally {
+            b.pending.clear()
+            b.sent.length = 0
+            resetSessionState()
+            _setSink(wsBroadcast)
+        }
     })
 })

@@ -14,6 +14,9 @@ import {ACCEPT_LABEL} from '../../src/task/verify-resolution.js'
 import {crossTaskDeletionReason, type DebtOrigin} from '../../src/task/accept-debt.js'
 import {getConfig} from '../../src/config/config.js'
 import {YOLO_STAMP} from '../../src/task/yolo.js'
+import {getBridge} from '../../src/remote/bridge.js'
+import {broadcast as wsBroadcast} from '../../src/remote/broadcast.js'
+import {_setSink, reset as resetSessionState, snapshot} from '../../src/remote/session-state.js'
 
 /** A GateDeps whose runTask/commit always succeed; override per test. */
 function makeDeps(over: Partial<GateDeps> = {}): GateDeps {
@@ -475,6 +478,31 @@ test('runGatesForTask: an empty commit warns but still completes', async () => {
         const r = await runGatesForTask(ctx, deps, baseParams({cwd: dir}))
         expect(r.kind).toBe('done')
         expect(captured.notifies.some(n => /not committed/.test(n.msg))).toBe(true)
+    })
+})
+
+test('runGatesForTask: a git COMMIT FAILURE reaches the browser, not just the terminal', async () => {
+    await withTmpTaskDir(async dir => {
+        const b = getBridge()
+        _setSink(msg => b.sent.push(msg as never))
+        try {
+            const {ctx, captured} = makeFakeCtx(dir)
+            const deps = makeDeps({
+                commit: () => Promise.resolve({committed: false, reason: 'git commit failed'}),
+                enforce: () => Promise.reject(new Error('enforce should not run without a commit'))
+            })
+            await runGatesForTask(ctx, deps, baseParams({cwd: dir}))
+
+            expect(captured.notifies.some(n => /COMMIT FAILED/.test(n.msg))).toBe(true)
+            // It disables enforce and every commit-based guard for the whole task.
+            // A remote user who cannot see that has no idea the run went unguarded.
+            expect(JSON.stringify(snapshot())).toContain('COMMIT FAILED')
+        } finally {
+            b.pending.clear()
+            b.sent.length = 0
+            resetSessionState()
+            _setSink(wsBroadcast)
+        }
     })
 })
 
