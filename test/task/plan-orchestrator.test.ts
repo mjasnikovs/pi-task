@@ -1,4 +1,4 @@
-import {describe, expect, test} from 'bun:test'
+import {afterEach, describe, expect, test} from 'bun:test'
 import * as fsp from 'node:fs/promises'
 import * as os from 'node:os'
 import * as path from 'node:path'
@@ -16,6 +16,10 @@ import {writeTaskFile, readSection, readTaskFile, setTaskSection} from '../../sr
 import type {TaskFrontMatter} from '../../src/task/task-types.js'
 import {makeFakeCtx} from '../test-utils/fake-ctx.js'
 import {isRunActive} from '../../src/task/mid-run-input.js'
+import type {ExtensionCommandContext} from '@earendil-works/pi-coding-agent'
+import {answerPrompt, getBridge} from '../../src/remote/bridge.js'
+import {broadcast as wsBroadcast} from '../../src/remote/broadcast.js'
+import {_setSink, getState, reset as resetSessionState, snapshot} from '../../src/remote/session-state.js'
 
 const PLAN_ID = 'TASK_PLAN_0001'
 
@@ -319,5 +323,112 @@ describe('the read-only contract', () => {
         await fsp.writeFile(log, 'x\n')
         await discardEmptyPlanFile(cwd, PLAN_ID)
         await expect(fsp.access(log)).rejects.toThrow()
+    })
+})
+
+/**
+ * Issue #1: the answer to "ask the model a question" was shown with a bare
+ * `ctx.ui.editor`, which only a local Enter/Escape can close. Driven remotely
+ * the plan stopped there for good — the browser got a `viewer` broadcast with no
+ * reply channel, and nothing on the bridge could settle the call.
+ *
+ * The fake ctx used here has an editor that never resolves, which is what the
+ * real TUI editor does until the user acts on the host terminal. Anything these
+ * tests prove therefore holds with the local half wide open.
+ */
+describe('showAnswer is answerable from the browser (issue #1)', () => {
+    afterEach(() => {
+        const b = getBridge()
+        b.pending.clear()
+        b.sent.length = 0
+        b.nextId = 0
+        b.broadcast = msg => wsBroadcast(msg)
+        b.commands.clear()
+        b.currentCtx = null
+        resetSessionState()
+        _setSink(wsBroadcast)
+    })
+
+    function blockingEditorCtx(): {
+        ctx: ExtensionCommandContext
+        editors: Array<{title: string; content: string}>
+    } {
+        const editors: Array<{title: string; content: string}> = []
+        const ctx = {
+            hasUI: true,
+            ui: {
+                theme: {
+                    fg: (_c: string, s: string) => s,
+                    bold: (s: string) => s,
+                    dim: (s: string) => s
+                },
+                input: () => new Promise<string | undefined>(() => {}),
+                custom: () => new Promise<string | undefined>(() => {}),
+                notify: () => {},
+                setWidget: () => {},
+                editor: (title: string, content: string) => {
+                    editors.push({title, content})
+                    return new Promise<string | undefined>(() => {})
+                }
+            }
+        } as unknown as ExtensionCommandContext
+        return {ctx, editors}
+    }
+
+    function planDeps(ctx: ExtensionCommandContext, cwd: string) {
+        return buildPlanDeps(ctx, cwd, PLAN_ID, 'add rate limiting', new AbortController().signal)
+    }
+
+    test('a remote dismissal releases the plan while the local editor is still open', async () => {
+        const cwd = await seededRepo()
+        const b = getBridge()
+        _setSink(msg => b.sent.push(msg as never))
+        const {ctx, editors} = blockingEditorCtx()
+
+        let released = false
+        const shown = Promise.resolve(
+            planDeps(ctx, cwd).showAnswer('which providers exist?', 'exa, ddg and brave')
+        ).then(() => {
+            released = true
+        })
+
+        await Promise.resolve()
+        expect(editors).toHaveLength(1)
+        expect(released).toBe(false)
+
+        const open = getState().prompt
+        expect(open).not.toBeNull()
+        answerPrompt(open!.id, '')
+
+        await shown
+        expect(released).toBe(true)
+    })
+
+    test('the answer text survives a reconnect, so a refresh does not lose it', async () => {
+        const cwd = await seededRepo()
+        const b = getBridge()
+        _setSink(msg => b.sent.push(msg as never))
+        const {ctx} = blockingEditorCtx()
+
+        void Promise.resolve(planDeps(ctx, cwd).showAnswer('which providers exist?', 'exa, ddg'))
+        await Promise.resolve()
+
+        const snap = snapshot()
+        expect(JSON.stringify(snap)).toContain('exa, ddg')
+    })
+
+    test('the local editor still gets the full answer', async () => {
+        const cwd = await seededRepo()
+        const b = getBridge()
+        _setSink(msg => b.sent.push(msg as never))
+        const {ctx, editors} = blockingEditorCtx()
+
+        void Promise.resolve(
+            planDeps(ctx, cwd).showAnswer('which providers exist?', 'exa, ddg and brave')
+        )
+        await Promise.resolve()
+
+        expect(editors[0].content).toContain('which providers exist?')
+        expect(editors[0].content).toContain('exa, ddg and brave')
     })
 })
