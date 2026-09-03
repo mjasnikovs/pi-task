@@ -55,6 +55,7 @@ import {attributeEnforceFailure} from './enforce-attribution.js'
 import {crossTaskDeletionReason, type DebtOrigin} from './accept-debt.js'
 import {clampOutput} from './clamp-output.js'
 import {cancelCheckpoint} from './cancel-points.js'
+import {updateTaskFrontMatter} from './task-io.js'
 
 /**
  * The deps the gate sequence drives. A superset of these is built once per command
@@ -468,6 +469,24 @@ export async function resolveVerifyGate(
         // YOLO only: has the one-attempt rescue below already been spent on this task?
         let yoloRescueUsed = false
         while (!verified.ok) {
+            // SAFE CHECKPOINT (before a resolution round): a round is a bounded
+            // lint fix, a research child and possibly a whole implementation
+            // re-run, so a cancel observed only INSIDE one buys all of that
+            // first. At the TOP of the loop because every later position is past
+            // something that already recorded itself — the unattended branch
+            // increments the counter, writes its `## gates` line and toasts
+            // "auto-fixing…" before it reaches any code below.
+            //
+            // The task file still reads `completed` here, written at spec handoff
+            // before any of this ran, and `completed` is not in RESUMABLE_STATES.
+            // Returning `cancelled` without this write would leave the announced
+            // "resume with /task-resume" pointing at a file /task-resume skips —
+            // the work is unverified AND uncommitted at this point, so that is the
+            // one place in the gate where a missed demotion loses it.
+            if (cancelCheckpoint('gate:pre-resolution')) {
+                await updateTaskFrontMatter(p.cwd, p.taskId, {state: 'cancelled'}).catch(() => {})
+                return {stop: {kind: 'cancelled', ctx: active}}
+            }
             const failReason = verified.reason ?? 'did not verify'
             // GRADUATED resolution: a repo-health FAIL (pure static findings) gets ONE
             // bounded fix attempt before the picker — smallest tool first. Applied →
@@ -694,16 +713,6 @@ export async function resolveVerifyGate(
             // unattended branches already recorded themselves one line above, and a
             // trail that says "user chose" when nobody was asked is the same lie the
             // accept line used to tell.
-            // SAFE CHECKPOINT (before an autofix round): a round is a whole
-            // implementation re-run, so a cancel observed only INSIDE it buys one
-            // more of those first. Ahead of the trail line and the toast, so a
-            // stopped run never leaves a record of a round it did not run.
-            // Nothing is committed here, but the entry is still unchecked and its
-            // inner id is stamped, so a resume re-enters this task and the
-            // pre-task checkpoint commit folds in what the failed attempt left.
-            if (cancelCheckpoint('gate:pre-autofix')) {
-                return {stop: {kind: 'cancelled', ctx: active}}
-            }
             if (!autoFixNow && !yoloRescueNow) {
                 await rec('resolution: user chose AUTOFIX — re-running the implementation turn')
             }
@@ -1153,11 +1162,17 @@ export async function runGatesForTask(
     }
     // SAFE CHECKPOINT (post task commit): the work verified, the parent entry is
     // checked off and the snapshot is in HEAD. Only the enforce pass is skipped,
-    // and enforce is re-runnable. `cancelled` deliberately leaves the inner file
-    // alone — resume is driven by the parent checkbox, which is already ticked, so
-    // the run picks up at the NEXT task rather than redoing this one.
+    // and enforce is re-runnable.
+    //
+    // Returns `done`, not `cancelled`: this task IS done, and `cancelled` would
+    // announce "resume with /task-resume" over a task whose work is already
+    // committed — a resume there re-runs the whole spec pipeline to redo it. The
+    // flag stays raised, so /task-auto stops one step later at loop-top with the
+    // right wording and a ticked checkbox, and a bare /task simply ends. The trail
+    // line is what keeps the skip from being silent.
     if (cancelCheckpoint('gate:post-commit')) {
-        return {kind: 'cancelled', ctx: active}
+        await rec('enforce: skipped — cancel requested after the task snapshot committed')
+        return {kind: 'done', ctx: active}
     }
     await runEnforcePass(active, deps, p, rec, routeRootCause, {cleanPass, commit})
     return {kind: 'done', ctx: active}

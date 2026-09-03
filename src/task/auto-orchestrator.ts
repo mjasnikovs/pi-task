@@ -1066,7 +1066,8 @@ export async function coverPlan(
                     DECOMPOSE_COVERAGE_PROMPT(featureForModel, clarifications, titles)
                 )
             )
-        } catch {
+        } catch (err) {
+            rethrowIfCancelled(err)
             verdict = null
         }
         const verdictMissing = verdict?.kind === 'incomplete' ? verdict.missing : []
@@ -1103,7 +1104,8 @@ export async function coverPlan(
                         + `${acc.crossCutting.length} cross-cutting, ${acc.unmapped.length} unmapped; `
                         + `${covered.size} requirement(s) title-grounded`
                 )
-            } catch {
+            } catch (err) {
+                rethrowIfCancelled(err)
                 // mapping fault — Fix A accounting degrades; the grounded owned-set
                 // above still guards against drops.
             }
@@ -1457,7 +1459,7 @@ export async function planAuto(
  * output twice — once for the artifact and once for the log count — because the
  * duplication made the second parse easy to miss.
  */
-async function runGroundedExtraction<T>(row: {
+export async function runGroundedExtraction<T>(row: {
     cwd: string
     runChild: (name: string, tools: string, prompt: string) => Promise<string>
     /** Child name — also the key AUTO_PLAN_STEPS renders in the loader. */
@@ -1481,9 +1483,31 @@ async function runGroundedExtraction<T>(row: {
                 + ` from ${emitted.length} emitted`
         )
         await row.append(row.cwd, grounded)
-    } catch {
+    } catch (err) {
+        rethrowIfCancelled(err)
         // best-effort artifact — never a planning blocker
     }
+}
+
+/**
+ * Let a cancel through a best-effort catch.
+ *
+ * Planning's degrade-quietly catches exist so one weak child cannot sink a plan,
+ * and every one of them predates the `plan:` checkpoint. That checkpoint throws
+ * USER_CANCELLED from inside `runPlanningChild`, so without this the throw reads
+ * as "that extraction failed": planning carries on, writes the AUTO file, and
+ * leaves a resumable run whose contracts silently lost the entries the cancelled
+ * child would have grounded. Cancel means abandon the plan, so it is not a
+ * degradable fault.
+ *
+ * The requirement-extraction catch already gets this right through
+ * `isFatalChildCause`, which covers USER_CANCELLED as well as the fatal kills.
+ * This is the narrow half of the same rule for the catches that guard only an
+ * optional artifact, where promoting every fatal kill would be a behaviour change
+ * this fix has no evidence for.
+ */
+function rethrowIfCancelled(err: unknown): void {
+    if (err instanceof Error && err.message === USER_CANCELLED) throw err
 }
 
 /** The two feature-level planning children, shown as steps in the loader. */

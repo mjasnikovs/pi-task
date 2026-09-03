@@ -484,12 +484,15 @@ export class TaskRunner {
             // signal never reached it. The command raises the cooperative flag
             // and this is where the flag is read.
             //
-            // On the fire-and-forget /task path there is no turn to have ended —
-            // _deliverSpec returns as soon as the spec is sent. The seam still
-            // holds, because what it promises is that the SPEC is durable, and it
-            // is; the host turn carrying on is what ESC is for. Skipping the poll
-            // there would put the cancel back where it started: unobserved.
-            if (cancelCheckpoint('impl:post-turn')) {
+            // AWAITED ONLY. On the fire-and-forget /task path _deliverSpec returns
+            // as soon as the spec is sent, so the turn is STARTING, not finished,
+            // and firing here would write `cancelled` over a task the agent then
+            // goes on to implement in full — reported and recorded as stopped
+            // while it runs, and left in a resumable state that re-delivers the
+            // same spec on top of the finished work. Nothing is lost by staying
+            // out: that path has no gates and no loop to stop, the run just ends,
+            // and ESC is what interrupts the turn itself.
+            if (this._implAwaited && cancelCheckpoint('impl:post-turn')) {
                 this._deps.logDebug?.('cancel: stopping after the implementation turn')
                 throw new Error(USER_CANCELLED)
             }

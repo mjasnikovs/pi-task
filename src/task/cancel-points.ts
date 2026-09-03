@@ -47,8 +47,11 @@
  *   gate:post-commit  (task-gates) the task is checked off and its snapshot is in
  *                  HEAD. Only the enforce pass is skipped, and enforce is
  *                  re-runnable.
- *   gate:pre-autofix  (task-gates) between autofix rounds. The previous round's
- *                  tree is whatever it is and the next round has not started.
+ *   gate:pre-resolution (task-gates) at the top of the verify-resolution loop, before
+ *                  a round spends a lint fix, a research child or a whole
+ *                  implementation re-run. The task file is demoted there: it
+ *                  still reads `completed` from spec handoff, and the work is
+ *                  neither verified nor committed.
  *
  * DELIBERATELY NOT a checkpoint — stopping here is not safe:
  *   - mid implementation turn. The turn is a host-session turn, not a child, so
@@ -66,7 +69,7 @@ export type CancelCheckpoint =
     | 'pre-final-gate'
     | 'impl:post-turn'
     | 'gate:post-commit'
-    | 'gate:pre-autofix'
+    | 'gate:pre-resolution'
     | `phase:${string}`
     | `plan:${string}`
     | `research:${string}`

@@ -25,11 +25,17 @@ import {
     resetCancel,
     resetCheckpointTrail,
     checkpointsCrossed,
+    isCancelRequested,
     onlyCheckpoints,
     clearCheckpointSuppression,
     type CancelCheckpoint
 } from '../../src/task/cancel-points.js'
-import {runAutoLoop, requestAutoCancel, type AutoDeps} from '../../src/task/auto-orchestrator.js'
+import {
+    runAutoLoop,
+    requestAutoCancel,
+    runGroundedExtraction,
+    type AutoDeps
+} from '../../src/task/auto-orchestrator.js'
 
 import {runGatesForTask, type GateDeps, type GateParams} from '../../src/task/task-gates.js'
 import {
@@ -46,13 +52,19 @@ import {withTmpTaskDir} from '../test-utils/tmp-task-dir.js'
 import {makeFakeCtx} from '../test-utils/fake-ctx.js'
 import {happy} from '../test-utils/happy-phases.js'
 import {USER_CANCELLED} from '../../src/task/child-runner.js'
-import type {TaskFrontMatter} from '../../src/task/task-types.js'
+import {RESUMABLE_STATES, type TaskFrontMatter} from '../../src/task/task-types.js'
 import type {PhaseDeps, PhaseSeams} from '../../src/task/child-runner.js'
 import type {RunWorkerResult} from '../../src/workers/pi-worker-core.js'
 
 function autoFm(id: string): TaskFrontMatter {
     const now = new Date().toISOString()
     return {id, state: 'in_progress', phase: 'done', created_at: now, updated_at: now, title: 't'}
+}
+
+/** An inner task file as the runner leaves it at spec handoff. */
+function innerFm(id: string, state: TaskFrontMatter['state']): TaskFrontMatter {
+    const now = new Date().toISOString()
+    return {id, state, phase: 'done', created_at: now, updated_at: now, title: 'A'}
 }
 
 function autoBody(titles: string[]): string {
@@ -295,6 +307,10 @@ describe('seam impl:post-turn — the implementation turn has ended', () => {
             ctx,
             cwd,
             rawPrompt: 'run lint',
+            // implAwaited: the /task-auto shape, where sendSpec really does wait
+            // out the turn. The seam is deliberately inert on the fire-and-forget
+            // /task path, where the turn is only just starting when it returns.
+            implAwaited: true,
             sendSpec: async s => {
                 sent.push(s)
                 if (cancelDuringTurn) requestCancel()
@@ -367,6 +383,34 @@ describe('seam impl:post-turn — the implementation turn has ended', () => {
         })
     })
 
+    /**
+     * The fire-and-forget /task path returns from _deliverSpec the moment the spec
+     * is sent, so the turn is STARTING, not finished. Firing here would record a
+     * task as cancelled that the agent then implements in full, and leave it
+     * resumable so a later /task-resume re-delivers the same spec over the
+     * finished work.
+     */
+    test('does NOT fire on the fire-and-forget path, where the turn has not ended', async () => {
+        await withTmpTaskDir(async cwd => {
+            const {ctx} = makeFakeCtx(cwd)
+            only('impl:post-turn')
+            const r = new TaskRunner({
+                ctx,
+                cwd,
+                rawPrompt: 'run lint',
+                // No implAwaited: /task hands the spec over and returns.
+                sendSpec: () => {
+                    requestCancel()
+                    return Promise.resolve()
+                },
+                seams: happy()
+            })
+            const end = await r.run()
+            expect(end.kind).toBe('completed')
+            expect((await readTaskFile(cwd, r.taskId)).frontMatter.state).toBe('completed')
+        })
+    })
+
     test('CONTROL: with no seam live the same run completes', async () => {
         await withTmpTaskDir(async cwd => {
             const {ctx} = makeFakeCtx(cwd)
@@ -424,7 +468,10 @@ describe('seam gate:post-commit — task checked off and snapshot in HEAD', () =
                     }
                 })
             )
-            expect(r.kind).toBe('cancelled')
+            // `done`, not `cancelled`: this task IS finished. Announcing a cancel
+            // here would advertise "resume with /task-resume" over work that is
+            // already committed, and that resume re-runs the whole spec pipeline.
+            expect(r.kind).toBe('done')
             // The seam sits AFTER the check-off and the commit, so both happened.
             expect(verified).toBe(true)
             expect(enforced.value).toBe(false)
@@ -444,7 +491,7 @@ describe('seam gate:post-commit — task checked off and snapshot in HEAD', () =
     })
 })
 
-describe('seam gate:pre-autofix — between autofix rounds', () => {
+describe('seam gate:pre-resolution — before a resolution round', () => {
     /** Verify keeps failing, so without a seam this buys three whole re-runs. */
     const deps = (fixRuns: string[]): GateDeps =>
         gateDeps({
@@ -460,12 +507,20 @@ describe('seam gate:pre-autofix — between autofix rounds', () => {
     test('STOPS before buying another implementation re-run', async () => {
         await withTmpTaskDir(async dir => {
             const {ctx} = makeFakeCtx(dir)
-            only('gate:pre-autofix')
+            only('gate:pre-resolution')
             requestCancel()
             const fixRuns: string[] = []
+            await writeTaskFile(dir, innerFm('TASK_0006', 'completed'), '\n')
             const r = await runGatesForTask(ctx, deps(fixRuns), gateParams({cwd: dir}))
             expect(r.kind).toBe('cancelled')
             expect(fixRuns).toEqual([])
+            // The file read `completed` from spec handoff, and `completed` is not
+            // in RESUMABLE_STATES — TERMINAL_OUTCOMES.cancelled does not demote it,
+            // so without the seam's own write the announced "resume with
+            // /task-resume" would point at a file /task-resume skips, stranding
+            // work that is neither verified nor committed.
+            expect((await readTaskFile(dir, 'TASK_0006')).frontMatter.state).toBe('cancelled')
+            expect(RESUMABLE_STATES).toContain('cancelled')
         })
     })
 
@@ -665,13 +720,18 @@ describe('seam phase:<name> — the phase output is on disk', () => {
 // ─── plan:<child> ────────────────────────────────────────────────────────────
 
 describe('seam plan:<child> — safe by DISCARD, not by writing', () => {
-    const call = (spawned: string[]): Promise<string> => {
+    const call = (
+        spawned: string[],
+        name = 'auto-decompose',
+        tools = 'read',
+        prompt = 'p'
+    ): Promise<string> => {
         const deps = {
             cwd: '/nowhere',
             taskId: '',
             signal: new AbortController().signal,
-            runChild: (name: string) => {
-                spawned.push(name)
+            runChild: (child: string) => {
+                spawned.push(child)
                 return Promise.resolve('a plan')
             }
         } as unknown as PhaseDeps
@@ -679,9 +739,9 @@ describe('seam plan:<child> — safe by DISCARD, not by writing', () => {
             ctx: makeFakeCtx('/nowhere').ctx,
             status: new ChildStatus({parentContextWindow: 200_000}),
             phaseDeps: deps,
-            name: 'auto-decompose',
-            tools: 'read',
-            prompt: 'p',
+            name,
+            tools,
+            prompt,
             loader: {title: 't', step: (n: string) => ({step: n, stepNum: 1, stepTotal: 2})}
         })
     }
@@ -696,6 +756,39 @@ describe('seam plan:<child> — safe by DISCARD, not by writing', () => {
         // the planning phase, so the seam has to come before one starts.
         expect(spawned).toEqual([])
         expect(checkpointsCrossed()).toContain('plan:auto-decompose')
+    })
+
+    /**
+     * Planning's degrade-quietly catches are older than the seam, and each one
+     * turns a throw into "that optional artifact failed". A cancel read that way
+     * does not abandon the plan: planning runs on and writes the AUTO file, so
+     * the run stays resumable while the cancelled child's contracts are silently
+     * missing from it — the opposite of what cancel-points.ts promises.
+     */
+    test('a cancel is NOT swallowed by a best-effort planning catch', async () => {
+        only('plan:contract-extract')
+        requestCancel()
+        const spawned: string[] = []
+        let appended = false
+        // The REAL best-effort wrapper, not a stand-in for it: its whole body sits
+        // in one catch, which is exactly what has to let the cancel through.
+        const run = runGroundedExtraction({
+            cwd: '/nowhere',
+            runChild: (name, tools, prompt) => call(spawned, name, tools, prompt),
+            child: 'contract-extract',
+            noun: 'contract',
+            label: 'contract extraction',
+            prompt: 'p',
+            parse: (raw: string) => [raw],
+            ground: (e: string[]) => e,
+            append: () => {
+                appended = true
+                return Promise.resolve()
+            }
+        })
+        await expect(run).rejects.toThrow(USER_CANCELLED)
+        expect(spawned).toEqual([])
+        expect(appended).toBe(false)
     })
 
     test('CONTROL: with no seam live the child runs', async () => {
@@ -741,6 +834,7 @@ describe('/task-cancel', () => {
                     ctx,
                     cwd,
                     rawPrompt: 'run lint',
+                    implAwaited: true,
                     sendSpec: async s => {
                         sent.push(s)
                         await cancel('', ctx as never)
@@ -764,15 +858,23 @@ describe('/task-cancel', () => {
             const {ctx, captured} = makeFakeCtx(dir)
             const cancel = commandTable().get('task-cancel')!
             only('gate:post-commit')
+            let raised = false
             const r = await withRunLike(ctx, async () => {
                 await cancel('', ctx as never)
+                // Read INSIDE the bracket: withRun clears the flag on the way out,
+                // so the request is only observable while the run still owns it.
+                raised = isCancelRequested()
                 return runGatesForTask(
                     ctx,
                     gateDeps({enforce: () => Promise.resolve({ok: true})}),
                     gateParams({cwd: dir})
                 )
             })
-            expect(r.kind).toBe('cancelled')
+            // `done` because the task finished; what matters is that the command
+            // raised the request instead of claiming nothing was running while a
+            // task plainly was.
+            expect(raised).toBe(true)
+            expect(r.kind).toBe('done')
             expect(captured.notifies.some(n => /No task is running/.test(n.msg))).toBe(false)
         })
     })
@@ -824,7 +926,7 @@ const COVERED = new Set([
     'pre-final-gate',
     'impl:post-turn',
     'gate:post-commit',
-    'gate:pre-autofix',
+    'gate:pre-resolution',
     'phase:',
     'plan:',
     'research:'
