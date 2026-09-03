@@ -15,6 +15,14 @@ export interface PromptMessage {
      * nothing to the card.
      */
     actions?: {label: string; value: string}[]
+    /**
+     * The card only DISPLAYS. `recommended` carries the body, and the buttons
+     * collapse to a single Close that answers with an empty string. Its one
+     * producer is /task-plan's answer to a question the USER asked, which needs
+     * dismissing rather than answering — and which needs to be a prompt, not a
+     * `viewer`, because only a prompt is in the reconnect snapshot.
+     */
+    dismissOnly?: boolean
     allowSkip: boolean
 }
 

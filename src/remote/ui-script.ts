@@ -832,13 +832,16 @@ export function clientScript(wsUrl: string): string {
       return out;
     }
 
-    function renderButtons(buttons, stacked) {
+    // omitCancel is for the dismiss-only card: there is nothing to cancel, and a
+    // Cancel task button beside a read-only answer would offer to abort the run
+    // when the only real choice is to close.
+    function renderButtons(buttons, stacked, omitCancel) {
       promptButtons.className = stacked ? 'row stacked' : 'row';
       promptButtons.innerHTML = '';
       for (let i = 0; i < buttons.length; i++) promptButtons.appendChild(buttons[i]);
       const actions = makeActionBtns();
       for (let i = 0; i < actions.length; i++) promptButtons.appendChild(actions[i]);
-      promptButtons.appendChild(makeCancelBtn());
+      if (!omitCancel) promptButtons.appendChild(makeCancelBtn());
     }
 
     // Manual-entry view: empty textarea + Submit, reachable from the
@@ -881,7 +884,14 @@ export function clientScript(wsUrl: string): string {
       activeRecommended = msg.recommended || '';
       activeRecommended2 = msg.recommended2 || '';
       activeActions = msg.actions || [];
-      if (msg.recommended) {
+      if (msg.dismissOnly) {
+        // Mode C: nothing to answer. The body goes in the panel so it renders as
+        // markdown, and Close is the only way out.
+        promptInput.style.display = 'none';
+        promptRec.style.display = 'block';
+        setContent(promptRecText, msg.recommended || '');
+        renderButtons([makeBtn('Close', 'primary', function () { answer(''); })], false, true);
+      } else if (msg.recommended) {
         // Mode A: recommendation(s) present. Render markdown in the panel so a
         // recommendation with code/emphasis reads the same as an assistant bubble.
         setContent(promptRecText, msg.recommended);

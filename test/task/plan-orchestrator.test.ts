@@ -19,7 +19,12 @@ import {isRunActive} from '../../src/task/mid-run-input.js'
 import type {ExtensionCommandContext} from '@earendil-works/pi-coding-agent'
 import {answerPrompt, getBridge} from '../../src/remote/bridge.js'
 import {broadcast as wsBroadcast} from '../../src/remote/broadcast.js'
-import {_setSink, getState, reset as resetSessionState, snapshot} from '../../src/remote/session-state.js'
+import {
+    _setSink,
+    getState,
+    reset as resetSessionState,
+    snapshot
+} from '../../src/remote/session-state.js'
 
 const PLAN_ID = 'TASK_PLAN_0001'
 

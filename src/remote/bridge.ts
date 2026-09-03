@@ -113,6 +113,18 @@ export interface AskSpec {
     actions?: {label: string; value: string}[]
 }
 
+/** A read-only display fanned out to both surfaces by {@link SessionUI.show}. */
+export interface ShowSpec {
+    /** Title for the local terminal editor. */
+    localTitle: string
+    /** Full text the local editor opens with. */
+    localText: string
+    /** Card header on the browser. Plain text. */
+    question: string
+    /** Card body on the browser, markdown-rendered in the panel. */
+    body: string
+}
+
 /** Wraps a live command ctx and fans interactions out to local TUI + browsers. */
 export class SessionUI {
     constructor(
@@ -130,6 +142,56 @@ export class SessionUI {
 
     /** Race the local input against a remote answer; first to settle wins. */
     async ask(spec: AskSpec): Promise<string | undefined> {
+        return this.race(
+            id => ({
+                type: 'prompt',
+                id,
+                question: spec.question,
+                recommended: spec.recommended,
+                ...(spec.recommended2 !== undefined && {recommended2: spec.recommended2}),
+                ...(spec.actions !== undefined
+                    && spec.actions.length > 0 && {actions: spec.actions}),
+                allowSkip: spec.allowSkip
+            }),
+            spec.question,
+            signal => this.askLocal(spec, signal)
+        )
+    }
+
+    /**
+     * Show text that only needs dismissing. Locally that is the terminal editor;
+     * remotely it is a dismiss-only prompt card, and it has to be a prompt rather
+     * than a `viewer` because only the prompt slot is in the reconnect snapshot
+     * and only a prompt can settle the caller from the browser.
+     *
+     * pi's `ui.editor` takes no AbortSignal, so a remote dismissal cannot close
+     * the terminal editor the way a remote answer aborts a local ask. It is left
+     * open and whatever it eventually returns is discarded — the run has moved on.
+     */
+    async show(spec: ShowSpec): Promise<void> {
+        await this.race(
+            id => ({
+                type: 'prompt',
+                id,
+                question: spec.question,
+                recommended: spec.body,
+                dismissOnly: true,
+                allowSkip: false
+            }),
+            spec.question,
+            () => this.ctx.ui.editor(spec.localTitle, spec.localText)
+        )
+    }
+
+    /**
+     * The shared half of ask() and show(): publish one prompt card, open the
+     * local dialog beside it, and take whichever settles first.
+     */
+    private async race(
+        build: (id: string) => PromptMessage,
+        pushBody: string,
+        local: (signal: AbortSignal) => Promise<string | undefined>
+    ): Promise<string | undefined> {
         const b = this.bridge
         const id = String(b.nextId++)
         const ac = new AbortController()
@@ -138,32 +200,23 @@ export class SessionUI {
             b.pending.set(id, resolve)
         })
 
-        const prompt: PromptMessage = {
-            type: 'prompt',
-            id,
-            question: spec.question,
-            recommended: spec.recommended,
-            ...(spec.recommended2 !== undefined && {recommended2: spec.recommended2}),
-            ...(spec.actions !== undefined && spec.actions.length > 0 && {actions: spec.actions}),
-            allowSkip: spec.allowSkip
-        }
-        setPrompt(prompt)
+        setPrompt(build(id))
         // Reaches a backgrounded/suspended phone, which the in-page UI can't. The
         // service worker drops the banner if a window is visible+focused (sw.ts),
         // so we always push and let delivery-time visibility decide.
-        void pushNotify('pi needs your input', spec.question, 'pi-prompt').catch(() => {})
+        void pushNotify('pi needs your input', pushBody, 'pi-prompt').catch(() => {})
 
         // Local: resolves to a value, or to undefined on cancel or abort. The
         // catch is belt-and-braces — a rejection here would surface as an
         // unhandled one rather than as a lost race.
-        const local: Promise<string | undefined> =
+        const localSide: Promise<string | undefined> =
             this.ctx.hasUI ?
-                this.askLocal(spec, ac.signal).catch(() => undefined)
+                local(ac.signal).catch(() => undefined)
             :   new Promise<string | undefined>(() => {})
 
         try {
             const winner = await Promise.race([
-                local.then(v => ({from: 'local' as const, v})),
+                localSide.then(v => ({from: 'local' as const, v})),
                 remote.then(v => ({from: 'remote' as const, v}))
             ])
             if (winner.from === 'remote') ac.abort()

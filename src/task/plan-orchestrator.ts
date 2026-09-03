@@ -63,12 +63,7 @@ import {deriveTitle} from './parsers.js'
 import {renderInlineMarkdown} from './inline-markdown.js'
 import {expandFeatureMentions} from './auto-orchestrator.js'
 import {runSingleTask, runGatedTask} from './orchestrator.js'
-import {
-    SessionUI,
-    publishViewer,
-    publishLifecycleNotice,
-    registerBridgeCommand
-} from '../remote/bridge.js'
+import {SessionUI, publishLifecycleNotice, registerBridgeCommand} from '../remote/bridge.js'
 import {withRun, announceTerminal} from './run-bracket.js'
 import {getConfig} from '../config/config.js'
 import {isYoloMode} from './yolo.js'
@@ -169,9 +164,12 @@ export function buildPlanDeps(
                 allowSkip: true
             }),
         showAnswer: async (question, answer) => {
-            const text = `You asked:\n${question}\n\n${answer}\n`
-            publishViewer(ASK_TITLE, text)
-            await ctx.ui.editor(ASK_TITLE, text)
+            await ui.show({
+                localTitle: ASK_TITLE,
+                localText: `You asked:\n${question}\n\n${answer}\n`,
+                question: `You asked: ${question}`,
+                body: answer
+            })
         },
         onEntries: async entries => {
             await persistEntries(cwd, planId, entries)
