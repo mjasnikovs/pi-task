@@ -976,7 +976,6 @@ async function handleTaskResume(args: string, ctx: ExtensionCommandContext): Pro
             await fsp.access(taskFilePath(cwd, id))
         } catch {
             notifyBoth(ctx, `${id} not found in .pi-tasks/`, 'error')
-            publishNotify(`${id} not found in .pi-tasks/`, 'error')
             return
         }
     } else {
@@ -1000,7 +999,6 @@ async function handleTaskResume(args: string, ctx: ExtensionCommandContext): Pro
         candidates.sort((a, b) => b.mtime - a.mtime)
         if (candidates.length === 0) {
             notifyBoth(ctx, 'No resumable tasks.', 'info')
-            publishNotify('No resumable tasks.', 'info')
             return
         }
         id = candidates[0].id
@@ -1021,12 +1019,10 @@ async function handleTaskResume(args: string, ctx: ExtensionCommandContext): Pro
 async function handleTaskCancel(_args: string, ctx: ExtensionCommandContext): Promise<void> {
     if (!activeTask) {
         notifyBoth(ctx, 'No task is running.', 'info')
-        publishNotify('No task is running.', 'info')
         return
     }
     activeTask.cancel()
     notifyBoth(ctx, `Cancelling ${activeTask.taskId}…`, 'warning')
-    publishNotify(`Cancelling ${activeTask.taskId}…`, 'warning')
 }
 
 // ─── Entry point ─────────────────────────────────────────────────────────────

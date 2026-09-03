@@ -2,7 +2,7 @@
  * Defects the review found in the remote-contract work itself. Each one is a way
  * the fix could still lose a message, evict a live question, or block a run.
  */
-import {afterEach, describe, expect, test} from 'bun:test'
+import {afterEach, describe, expect, mock, test} from 'bun:test'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
@@ -22,6 +22,20 @@ import {flashTerminalWidget, NOTIFY_CLEAR_MS} from '../../src/task/widget.js'
 import {registerTask} from '../../src/task/orchestrator.js'
 import {STYLES} from '../../src/remote/ui-styles.js'
 
+/** pushNotify is fire-and-forget over web-push and leaves no frame on the wire,
+ *  so the only way to see whether a card woke someone's phone is to record it. */
+const pushes: string[] = []
+void mock.module('../../src/remote/push.js', () => ({
+    pushNotify: (title: string) => {
+        pushes.push(title)
+        return Promise.resolve()
+    },
+    publicKey: () => null,
+    addSubscription: () => {},
+    getSubscriptions: () => [],
+    logPush: () => {}
+}))
+
 const dirs: string[] = []
 function tmpRepo(): string {
     const d = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-review-'))
@@ -39,6 +53,7 @@ afterEach(() => {
     b.currentCtx = null
     reset()
     _setSink(wsBroadcast)
+    pushes.length = 0
     for (const d of dirs.splice(0)) fs.rmSync(d, {recursive: true, force: true})
 })
 
@@ -119,13 +134,6 @@ describe('a display must not evict a live question', () => {
     })
 
     test('a dismiss-only display does not push "pi needs your input"', async () => {
-        const pushes: string[] = []
-        const push = await import('../../src/remote/push.js')
-        const real = push.pushNotify
-        ;(push as {pushNotify: unknown}).pushNotify = (title: string) => {
-            pushes.push(title)
-            return Promise.resolve()
-        }
         const b = getBridge()
         frames()
         const ctx = {
@@ -144,10 +152,14 @@ describe('a display must not evict a live question', () => {
         })
         await new Promise(r => setTimeout(r, 10))
         // A read-only card is not a request for input; waking a phone for it is a lie.
-        ;(push as {pushNotify: unknown}).pushNotify = real
         // A read-only card is not a request for input; waking a phone for it is a lie.
-        expect(pushes).toEqual([])
         expect(getState().prompt?.dismissOnly).toBe(true)
+        expect(pushes).toEqual([])
+
+        // ...and the recorder is live: a real question DOES wake the phone.
+        void new SessionUI(ctx, b).ask({localTitle: 'q', question: 'q?', allowSkip: false})
+        await new Promise(r => setTimeout(r, 10))
+        expect(pushes).toEqual(['pi needs your input'])
     })
 
     test('a display never blocks a run on a host with no TUI', async () => {

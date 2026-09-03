@@ -5,7 +5,7 @@ import type {
 } from '@earendil-works/pi-coding-agent'
 import {broadcast as wsBroadcast} from './broadcast.js'
 import {pushNotify} from './push.js'
-import {setPrompt, clearPrompt, addError, addSystemNote} from './session-state.js'
+import {setPrompt, clearPrompt, addError, addSystemNote, getState} from './session-state.js'
 import type {PromptMessage, ServerMessage} from './protocol.js'
 import {askQuestionBox} from '../task/question-box.js'
 
@@ -50,10 +50,14 @@ export function answerPrompt(id: string, value: string | undefined): void {
 }
 
 /**
- * Settle every parked ask with undefined. Its one caller is the `session_start`
- * that follows a remote `/new`: the reset wipes the prompt slot and tells the
- * browser to close its card, which leaves the resolver here with no surface on
- * any device — and, on a host with no TUI, no local half either.
+ * Settle every parked ask with undefined. Its one caller is the remote `/new`,
+ * whose reset wipes the prompt slot and tells the browser to close its card,
+ * leaving the resolver here with no surface on any device — and, on a host with
+ * no TUI, no local half either.
+ *
+ * Deliberately NOT on every `session_start`: that also fires for the /task
+ * handoff's own newSession, where cancelling would read to the planner as the
+ * user skipping a question they were never shown.
  */
 export function cancelPendingPrompts(): void {
     const b = getBridge()
@@ -181,6 +185,13 @@ export class SessionUI {
      * open and whatever it eventually returns is discarded — the run has moved on.
      */
     async show(spec: ShowSpec): Promise<void> {
+        // Nothing to wait for: with no local editor the only surface is the
+        // browser, and a DISPLAY that blocks a run until someone opens one is
+        // worse than a note nobody dismisses.
+        if (!this.ctx.hasUI) {
+            publishNote(`${spec.question}\n${spec.body}`)
+            return
+        }
         await this.race(
             id => ({
                 type: 'prompt',
@@ -190,7 +201,9 @@ export class SessionUI {
                 dismissOnly: true,
                 allowSkip: false
             }),
-            spec.question,
+            // No push: a read-only card is not a request for input, and waking a
+            // phone to say it is would be a lie.
+            null,
             () => this.ctx.ui.editor(spec.localTitle, spec.localText)
         )
     }
@@ -201,7 +214,7 @@ export class SessionUI {
      */
     private async race(
         build: (id: string) => PromptMessage,
-        pushBody: string,
+        pushBody: string | null,
         local: (signal: AbortSignal) => Promise<string | undefined>
     ): Promise<string | undefined> {
         const b = this.bridge
@@ -212,11 +225,17 @@ export class SessionUI {
             b.pending.set(id, resolve)
         })
 
+        // The slot holds one prompt. Whatever is in it is put BACK when this one
+        // settles, or a /task-list would leave a parked question unanswerable
+        // from every browser — off the card and out of the snapshot both.
+        const displaced = getState().prompt
         setPrompt(build(id))
-        // Reaches a backgrounded/suspended phone, which the in-page UI can't. The
-        // service worker drops the banner if a window is visible+focused (sw.ts),
-        // so we always push and let delivery-time visibility decide.
-        void pushNotify('pi needs your input', pushBody, 'pi-prompt').catch(() => {})
+        if (pushBody !== null) {
+            // Reaches a backgrounded/suspended phone, which the in-page UI can't. The
+            // service worker drops the banner if a window is visible+focused (sw.ts),
+            // so we always push and let delivery-time visibility decide.
+            void pushNotify('pi needs your input', pushBody, 'pi-prompt').catch(() => {})
+        }
 
         // Local: resolves to a value, or to undefined on cancel or abort. The
         // catch is belt-and-braces — a rejection here would surface as an
@@ -236,6 +255,7 @@ export class SessionUI {
         } finally {
             b.pending.delete(id)
             clearPrompt(id)
+            if (displaced && b.pending.has(displaced.id)) setPrompt(displaced)
         }
     }
 
@@ -410,7 +430,11 @@ export function registerBridgeCommand(pi: ExtensionAPI, name: string, def: Bridg
     const wrapped: BridgeCommandDef = {
         ...def,
         handler: (args: string, ctx: ExtensionCommandContext) => {
-            b.currentCtx = ctx // keep latest live ctx for remote dispatch
+            // A remote-dispatched ctx is a clone of this very field. Storing it
+            // back would make the next remote line clone the clone — one more
+            // prototype link per command, for the life of the session — and would
+            // leave the marker on the ctx a later TERMINAL command is handed.
+            if (!isRemoteOrigin(ctx)) b.currentCtx = ctx
             return def.handler(args, ctx)
         }
     }

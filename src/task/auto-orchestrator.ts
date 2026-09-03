@@ -61,7 +61,6 @@ import {
     SessionUI,
     registerBridgeCommand,
     publishLifecycleNotice,
-    publishRunNotice,
     notifyBoth,
     notifyRun,
     isRemoteOrigin
@@ -1959,11 +1958,11 @@ async function handleTaskAutoResume(args: string, ctx: ExtensionCommandContext):
         :   await findResumableAutoDetailed(cwd)
     const candidate = eligible ?? (unattended ? await findResumableAutoDetailed(cwd) : null)
     const decision = decideResume(candidate, Date.now(), unattended)
-    ctx.ui.notify(decision.banner, decision.level)
     // An unattended refusal happens with nobody watching the terminal — the
     // remote view is the only surface that will still be there in the morning,
     // which is why it is a run notice and not a toast.
-    if (unattended) publishRunNotice(decision.banner, decision.level)
+    if (unattended) notifyRun(ctx, decision.banner, decision.level)
+    else notifyBoth(ctx, decision.banner, decision.level)
     if (!decision.resume || !candidate) return
     const id = candidate.id
     await updateTaskFrontMatter(cwd, id, {state: 'in_progress'})

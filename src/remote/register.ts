@@ -83,6 +83,12 @@ export function registerRemote(pi: ExtensionAPI): void {
         S.server = await startServer(
             text => {
                 if (text === '/new') {
+                    // The reset inside a new session clears the browser's prompt
+                    // card, so a parked ask has lost its last surface. Only HERE:
+                    // session_start also fires for the /task handoff's own
+                    // newSession, and cancelling there reads to the planner as the
+                    // user skipping a question they never saw.
+                    cancelPendingPrompts()
                     dispatchRemoteNewSession(newCtx => {
                         S.send = (msg, opts) => {
                             void (opts ?
@@ -115,9 +121,6 @@ export function registerRemote(pi: ExtensionAPI): void {
         // state and tell connected clients to clear.
         const bridge = getBridge()
         reset()
-        // Paired with the reset: it clears the browser's prompt card, so any ask
-        // still parked on the bridge has lost its last surface.
-        cancelPendingPrompts()
         setupEvents(pi)
         // Mirror held mid-run input into the browser composer.
         setHeldInputListener(() => setHeld(heldInput(), isRunActive()))

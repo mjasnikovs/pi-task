@@ -121,6 +121,9 @@ export const STYLES = `    :root {
     /* Persistent inline system note (e.g. context compaction) — a muted centered
        divider, distinct from chat bubbles. */
     .sysnote {
+      /* publishNote sends multi-line text (the /task-config table); textContent
+         keeps the newlines only if the box does not collapse them. */
+      white-space: pre-wrap;
       align-self: center; color: var(--subtext0); font-size: 11px;
       font-family: ui-monospace, monospace; letter-spacing: 0.5px;
       padding: 2px 10px; opacity: 0.85;

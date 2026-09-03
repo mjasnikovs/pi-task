@@ -374,9 +374,13 @@ export function flashTerminalWidget(
         }
     }
     setTimeout(() => {
+        // Wire first, for the same reason as the flash above: a ctx that went
+        // stale in the meantime would otherwise leave the browser showing the
+        // flash for the rest of the session.
+        setTaskWidget(undefined)
+        if (!ctx.hasUI) return
         try {
             ctx.ui.setWidget(WIDGET_KEY, undefined)
-            setTaskWidget(undefined)
         } catch {
             /* stale ctx */
         }
