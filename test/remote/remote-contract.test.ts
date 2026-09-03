@@ -240,7 +240,7 @@ describe('what the terminal is told, the browser is told', () => {
         const stop = startWidget(ctx, () => ({
             taskId: 'TASK_0007',
             title: 'auth routes',
-            phase: 'implementing',
+            phase: 'compose',
             startedAt: Date.now()
         }))
         try {

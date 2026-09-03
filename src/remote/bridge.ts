@@ -300,6 +300,18 @@ export function publishLifecycleNotice(message: string, level: 'info' | 'warning
     else publishNotify(message, level)
 }
 
+/**
+ * A run outcome the remote must still have later: what a gate decided, what a
+ * commit failed to do, what a resume refused. Unlike publishLifecycleNotice it
+ * persists at EVERY level, because "still there in the morning" is the reason
+ * these are published at all — a warning that vanishes after four seconds tells
+ * an absent user nothing.
+ */
+export function publishRunNotice(message: string, level: 'info' | 'warning' | 'error'): void {
+    if (level === 'error') addError(message)
+    else addSystemNote(message)
+}
+
 /** Commit text to the remote transcript. Unlike a notify it is in the reconnect
  *  snapshot, so it is still there after a refresh. */
 export function publishNote(text: string): void {

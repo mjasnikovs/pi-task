@@ -145,7 +145,6 @@ export function startWidget(
     ctx: ExtensionCommandContext,
     getState: () => WidgetState | null
 ): () => void {
-    if (!ctx.hasUI) return () => {}
     // pi's `ctx.ui` getter calls `runner.assertActive()`, which THROWS once the
     // ctx goes stale (/reload, session replacement) — so the theme read belongs
     // INSIDE the guard, not one line above it. render() runs from a timer, and a
@@ -156,16 +155,18 @@ export function startWidget(
     const render = () => {
         if (stale) return
         const s = getState()
-        const plain = s ? buildWidgetLines(s, undefined) : undefined // un-themed for the wire; needs no ctx
+        // The wire half FIRST, and unguarded: it needs no ctx, so gating it on a
+        // local terminal that may not exist would leave a headless host's browser
+        // with no phase, no progress and no failure flash.
+        setTaskWidget(s ? buildWidgetLines(s, undefined) : undefined, s ? buildWidgetData(s) : null)
+        if (!ctx.hasUI) return
         try {
             const lines = s ? buildWidgetLines(s, ctx.ui.theme) : undefined
             ctx.ui.setWidget(WIDGET_KEY, lines)
         } catch {
             stale = true
             clearInterval(timer)
-            return
         }
-        setTaskWidget(plain, s ? buildWidgetData(s) : null)
     }
     // The timer is created BEFORE the first render so `timer` is always bound
     // when render's catch reaches for it. Calling render() first instead would
@@ -266,23 +267,23 @@ export function startAutoLoader(
     ctx: ExtensionCommandContext,
     getState: () => AutoLoaderState | null
 ): () => void {
-    if (!ctx.hasUI) return () => {}
-    // Same staleness hazard as startWidget: the theme read must sit inside the
-    // guard, and a stale ctx stops the timer rather than throwing every tick.
+    // Same staleness hazard as startWidget, and the same wire-half-first order.
     let stale = false
     const render = () => {
         if (stale) return
         const s = getState()
-        const plain = s ? buildAutoLoaderLines(s, undefined) : undefined // needs no ctx
+        setTaskWidget(
+            s ? buildAutoLoaderLines(s, undefined) : undefined,
+            s ? buildAutoLoaderData(s) : null
+        )
+        if (!ctx.hasUI) return
         try {
             const lines = s ? buildAutoLoaderLines(s, ctx.ui.theme) : undefined
             ctx.ui.setWidget(AUTO_WIDGET_KEY, lines)
         } catch {
             stale = true
             clearInterval(timer)
-            return
         }
-        setTaskWidget(plain, s ? buildAutoLoaderData(s) : null)
     }
     // The timer is created BEFORE the first render so `timer` is always bound
     // when render's catch reaches for it. Calling render() first instead would
@@ -354,32 +355,23 @@ export function flashTerminalWidget(
     taskId: string,
     reason: string | undefined
 ): void {
-    if (!ctx.hasUI) return
-    // Same staleness hazard as the render timers: bail rather than throw.
-    let theme: WidgetTheme
-    try {
-        theme = ctx.ui.theme
-    } catch {
-        return
-    }
-    let line: string
-    let clearMs: number
-    if (state === 'cancelled') {
-        line = theme.fg('warning', `⚠ ${taskId} cancelled`)
-        clearMs = NOTIFY_CLEAR_MS
-    } else {
-        line = theme.fg('error', `✘ ${taskId} failed${reason ? ': ' + reason : ''}`)
-        clearMs = FAIL_CLEAR_MS
-    }
     const plainLine =
         state === 'cancelled' ?
             `⚠ ${taskId} cancelled`
         :   `✘ ${taskId} failed${reason ? ': ' + reason : ''}`
-    try {
-        ctx.ui.setWidget(WIDGET_KEY, [line])
-        setTaskWidget([plainLine])
-    } catch {
-        /* stale ctx */
+    const clearMs = state === 'cancelled' ? NOTIFY_CLEAR_MS : FAIL_CLEAR_MS
+    setTaskWidget([plainLine])
+    // The wire half is already done, so a missing or stale local ctx no longer
+    // costs the browser the flash as well. Same staleness hazard as the render
+    // timers: bail rather than throw.
+    if (ctx.hasUI) {
+        try {
+            const theme: WidgetTheme = ctx.ui.theme
+            const tint = state === 'cancelled' ? 'warning' : 'error'
+            ctx.ui.setWidget(WIDGET_KEY, [theme.fg(tint, plainLine)])
+        } catch {
+            /* stale ctx */
+        }
     }
     setTimeout(() => {
         try {

@@ -39,7 +39,7 @@ import {
     type ResolutionOutcome,
     type ResolutionChoice
 } from './verify-resolution.js'
-import {SessionUI} from '../remote/bridge.js'
+import {SessionUI, publishRunNotice} from '../remote/bridge.js'
 import {isYoloMode, yoloVerifyResolution, YOLO_STAMP} from './yolo.js'
 import {
     extractFailingCommand,
@@ -1121,12 +1121,14 @@ export async function runGatesForTask(
         // warnings to show for it. "blocked" is the unmerged-index refusal
         // (gitCommitAll) — the same severity: nothing can commit until it's resolved.
         const gitFailure = /^git (commit|add) (failed|blocked)/.test(commit.reason ?? '')
-        active.ui.notify(
+        const line =
             gitFailure ?
                 `${p.tag}: COMMIT FAILED (${commit.reason}) — enforce and revert guards are disabled for this task.`
-            :   `${p.tag}: not committed (${commit.reason ?? 'unknown'}) — continuing.`,
-            gitFailure ? 'error' : 'warning'
-        )
+            :   `${p.tag}: not committed (${commit.reason ?? 'unknown'}) — continuing.`
+        active.ui.notify(line, gitFailure ? 'error' : 'warning')
+        // The whole task ran unguarded. A remote user cannot infer that from the
+        // widget, and a toast is gone before they look.
+        if (gitFailure) publishRunNotice(line, 'error')
     }
     await runEnforcePass(active, deps, p, rec, routeRootCause, {cleanPass, commit})
     return {kind: 'done', ctx: active}

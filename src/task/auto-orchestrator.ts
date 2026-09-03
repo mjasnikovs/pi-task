@@ -57,7 +57,12 @@ import {isFatalChildCause, prependHint, USER_CANCELLED, type PhaseDeps} from './
 import {requestCancel, resetCancel, isCancelRequested, cancelCheckpoint} from './cancel-points.js'
 import {withRun, announceTerminal} from './run-bracket.js'
 import {refineExistingFilesBlock, SINGLE_READ_EXTENSION_PATH} from './phases.js'
-import {SessionUI, registerBridgeCommand, publishLifecycleNotice} from '../remote/bridge.js'
+import {
+    SessionUI,
+    registerBridgeCommand,
+    publishLifecycleNotice,
+    publishRunNotice
+} from '../remote/bridge.js'
 import {getParentContextWindow} from './context-usage.js'
 import {ChildStatus, runPlanningChild, statusCallbacks} from './child-status.js'
 import {buildGateDeps, collectTreeChanges} from './gate-deps.js'
@@ -1942,8 +1947,9 @@ async function handleTaskAutoResume(args: string, ctx: ExtensionCommandContext):
     const decision = decideResume(candidate, Date.now(), unattended)
     ctx.ui.notify(decision.banner, decision.level)
     // An unattended refusal happens with nobody watching the terminal — the
-    // remote view is the only surface that will still be there in the morning.
-    if (unattended) publishLifecycleNotice(decision.banner, decision.level)
+    // remote view is the only surface that will still be there in the morning,
+    // which is why it is a run notice and not a toast.
+    if (unattended) publishRunNotice(decision.banner, decision.level)
     if (!decision.resume || !candidate) return
     const id = candidate.id
     await updateTaskFrontMatter(cwd, id, {state: 'in_progress'})
@@ -1978,10 +1984,12 @@ async function handleTaskAutoResume(args: string, ctx: ExtensionCommandContext):
 async function handleTaskAutoCancel(_args: string, ctx: ExtensionCommandContext): Promise<void> {
     if (!autoRunning) {
         ctx.ui.notify('No /task-auto loop is running.', 'info')
+        publishLifecycleNotice('No /task-auto loop is running.', 'info')
         return
     }
     requestAutoCancel()
     ctx.ui.notify(CANCEL_ACK, 'warning')
+    publishLifecycleNotice(CANCEL_ACK, 'warning')
 }
 
 /**

@@ -217,7 +217,7 @@ describe('/task-auto', () => {
             // Nobody was watching the terminal. A toast is dropped after 4s and is
             // absent from the reconnect snapshot, which is the whole point of
             // mirroring this one.
-            expect(JSON.stringify(snapshot())).toContain('TASK_0001')
+            expect(JSON.stringify(snapshot())).toContain('No resumable /task-auto run')
         } finally {
             b.pending.clear()
             b.sent.length = 0
