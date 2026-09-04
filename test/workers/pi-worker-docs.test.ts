@@ -7,6 +7,7 @@ import {
     registerPiWorkerDocs,
     packageRootOf,
     docsCacheKey,
+    docsCachePkg,
     type PiWorkerDocsInternals
 } from '../../src/workers/pi-worker-docs.js'
 import {openCache} from '../../src/workers/docs-cache.js'
@@ -488,6 +489,20 @@ test('an ecosystem the directory does not hold is refused by name', async () => 
     expect((result.content[0] as {type: 'text'; text: string}).text).toContain('No npm project')
     expect(spawns).toBe(0)
     fs.rmSync(dir, {recursive: true, force: true})
+})
+
+test('cache provenance names the RESOLVED registry, not the argument', () => {
+    // The `ecosystem` argument exists only to disambiguate a polyglot repo, so in
+    // an ordinary cargo project it is absent. Reading it instead of the resolved
+    // answer recorded every such entry as npm — and its version was then looked
+    // for in a package.json that is not there, leaving it un-prunable forever.
+    expect(docsCachePkg({module: 'tokio'}, {ecosystem: 'cargo'})).toEqual({
+        pkg: 'tokio',
+        ecosystem: 'cargo'
+    })
+    // npm stays absent, so the cache file matches what earlier versions wrote.
+    expect(docsCachePkg({module: 'hono/client'}, {ecosystem: 'npm'})).toEqual({pkg: 'hono'})
+    expect(docsCachePkg({module: '.'}, {ecosystem: 'npm'})).toBeUndefined()
 })
 
 test('naming the ecosystem scopes the cache key; letting the manifest decide does not', () => {

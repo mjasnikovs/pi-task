@@ -176,6 +176,25 @@ describe('the surface', () => {
         expect(out).toContain('-- | Build a greeting for a name.')
     })
 
+    test('a signature whose :: wrapped onto the next line survives, haddock and all', () => {
+        // How most multi-constraint signatures are written. Matching only the head
+        // line drops the whole declaration and its docs with it.
+        const wrapped = haskellSurface(
+            'module M (decode) where\n\n-- | Decode a value.\ndecode\n'
+                + '  :: FromJSON a\n  => ByteString\n  -> Maybe a\ndecode = undefined\n'
+        )
+        expect(wrapped).toContain('-- | Decode a value.')
+        expect(wrapped).toContain('decode')
+        expect(wrapped).toContain(':: FromJSON a')
+        expect(wrapped).toContain('-> Maybe a')
+        expect(wrapped).not.toContain('undefined')
+    })
+
+    test('a bare name followed by an equation is still dropped', () => {
+        const equation = haskellSurface('module M (x) where\n\nfoo\n  = 1 + 2\n')
+        expect(equation).not.toContain('1 + 2')
+    })
+
     test('drops equations, instance bodies, imports and pragmas', () => {
         expect(out).not.toContain('let body')
         expect(out).not.toContain('Quiet -> body')
@@ -243,6 +262,34 @@ describe('end to end', () => {
     })
 
     test('a dotted module name is refused before any registry or spawn', async () => {
+        // The fixture sits inside this npm repo, so detection legitimately finds
+        // package.json above it too; `ecosystem` is what settles a polyglot tree.
+        let spawns = 0
+        const result = await docsRaw({
+            pkg: 'Data.Aeson',
+            query: 'decode',
+            cwd: HS_PROJECT,
+            ecosystem: 'hackage',
+            io: {modulesDir: HS_MODULES, cabalPackageDirs: [HS_PACKAGES]},
+            spawn: fakeSpawnByPrompt(() => {
+                spawns++
+                return {stdout: '', exitCode: 0}
+            }),
+            npmVersionLookup: async () => null
+        })
+        expect(result.kind).toBe('error')
+        if (result.kind === 'error') {
+            expect(result.resolveError).toBe('invalid_name')
+            expect(result.message).toContain('MODULE name')
+        }
+        expect(spawns).toBe(0)
+    })
+
+    test('an unnamed dotted module name is still refused, and installs nothing', async () => {
+        // Without `ecosystem` the tree is npm + hackage and the name is in neither,
+        // so this comes back ambiguous rather than as the module-name correction.
+        // What must not happen either way is an npm install of "Data.Aeson" — npm
+        // would take that name, which is the whole class of bug being closed.
         let spawns = 0
         const result = await docsRaw({
             pkg: 'Data.Aeson',
@@ -256,10 +303,7 @@ describe('end to end', () => {
             npmVersionLookup: async () => null
         })
         expect(result.kind).toBe('error')
-        if (result.kind === 'error') {
-            expect(result.resolveError).toBe('invalid_name')
-            expect(result.message).toContain('MODULE name')
-        }
+        if (result.kind === 'error') expect(result.resolveError).toBe('ambiguous_ecosystem')
         expect(spawns).toBe(0)
     })
 })

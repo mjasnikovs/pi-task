@@ -182,6 +182,24 @@ describe('buildExternalContext policy', () => {
 
     const SERVICES = 'EXTERNAL-DEPENDENCIES\n- Stripe  a\n- Twilio  b\n- Sendgrid  c\n'
 
+    test('a standalone version block is headed by the registry it was asked', async () => {
+        // The docs-target blocks already carried the label; this second, cheaper
+        // lookup did not — so a cargo project emitted crates.io versions under
+        // "### npm:", which is the wrong-registry claim this tool exists to stop.
+        const out = await buildExternalContext(
+            'use `tokio` and `serde`',
+            deps,
+            lookups(newCalls()),
+            {
+                targetCap: 1,
+                versionLookup: pkg => Promise.resolve({pkg, latest: '1.53.1', recent: []}),
+                versionLabel: 'crates.io'
+            }
+        )
+        expect(out).toContain('### crates.io: serde')
+        expect(out).not.toContain('### npm: serde')
+    })
+
     test('targetCap spends its budget on packages before urls', async () => {
         const calls = newCalls()
         await buildExternalContext(

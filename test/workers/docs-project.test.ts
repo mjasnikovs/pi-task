@@ -2,7 +2,12 @@ import {test, expect, describe} from 'bun:test'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
-import {projectDocsRaw, buildProjectPrompt, getProjectName} from '../../src/workers/docs-project.js'
+import {
+    projectDocsRaw,
+    buildProjectPrompt,
+    getProjectName,
+    getProjectFiles
+} from '../../src/workers/docs-project.js'
 import {openCache} from '../../src/workers/docs-cache.js'
 import {abstentionSentence, isAbstention} from '../../src/workers/abstention.js'
 
@@ -116,4 +121,20 @@ test('the project prompt instructs the abstention the host actually recognises',
     // and by two of the numbered rules; all of them must spell it the same way.
     expect(p).toContain('<project-content>')
     expect(p.match(/<project-content>/g)?.length).toBeGreaterThan(1)
+})
+
+test('the project walk skips a cargo target/ and a cabal dist-newstyle/', () => {
+    // Build output is not project source. `git ls-files` never lists it, but the
+    // fallback walk is what runs outside a repo — and it only knew npm's skips.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'docs-project-skip-'))
+    fs.writeFileSync(path.join(dir, 'Cargo.toml'), '[package]\nname = "x"\n', 'utf8')
+    fs.mkdirSync(path.join(dir, 'src'), {recursive: true})
+    fs.writeFileSync(path.join(dir, 'src', 'lib.rs'), 'pub fn a() {}', 'utf8')
+    fs.mkdirSync(path.join(dir, 'target', 'debug'), {recursive: true})
+    fs.writeFileSync(path.join(dir, 'target', 'debug', 'build.rs'), 'fn main() {}', 'utf8')
+
+    const files = getProjectFiles(dir).map(f => path.relative(dir, f).replace(/\\/g, '/'))
+    expect(files).toContain('src/lib.rs')
+    expect(files.some(f => f.startsWith('target/'))).toBe(false)
+    fs.rmSync(dir, {recursive: true, force: true})
 })

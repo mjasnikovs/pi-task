@@ -117,6 +117,25 @@ describe('finding a crate on disk', () => {
         fs.rmSync(modulesDir, {recursive: true, force: true})
     })
 
+    test('a prerelease checkout is found, not reported missing', () => {
+        // `clap-4.0.0-rc.1` split at the LAST dash gives version "rc.1", which no
+        // version test accepts — so a crate sitting right there reads as absent.
+        const modulesDir = fs.mkdtempSync(path.join(os.tmpdir(), 'eco-cargo-pre-'))
+        fs.mkdirSync(path.join(modulesDir, 'cargo', 'clap-4.0.0-rc.1', 'src'), {recursive: true})
+        fs.writeFileSync(
+            path.join(modulesDir, 'cargo', 'clap-4.0.0-rc.1', 'src', 'lib.rs'),
+            'pub fn build() {}',
+            'utf8'
+        )
+        const pkg = resolveCrate('clap', modulesDir, {
+            cargoHome: path.join(os.tmpdir(), 'no-cargo-home'),
+            modulesDir
+        })
+        expect(pkg.name).toBe('clap')
+        expect(pkg.version).toBe('4.0.0-rc.1')
+        fs.rmSync(modulesDir, {recursive: true, force: true})
+    })
+
     test('reads the project name out of [package]', () => {
         expect(cargoProjectName(CARGO_PROJECT)).toBe('demo-app')
         expect(cargoProjectName(os.tmpdir())).toBeNull()
@@ -150,6 +169,40 @@ describe('the surface', () => {
         expect(out).not.toContain('SECRET')
         expect(out).not.toContain('seen: bool')
         expect(out.length).toBeLessThan(lib.length)
+    })
+
+    test("a braced re-export keeps its list — it is most crates' whole API", () => {
+        const out2 = rustSurface(
+            'pub use crate::runtime::{Runtime, Builder};\npub use self::spawn;'
+        )
+        expect(out2).toContain('pub use crate::runtime::{Runtime, Builder};')
+        expect(out2).toContain('pub use self::spawn;')
+        expect(out2).not.toContain('runtime::;')
+    })
+
+    test('the module doc is emitted once, not once per item', () => {
+        const doubled = rustSurface('//! Crate doc.\n\n/// A thing.\npub fn thing() -> u8 { 1 }\n')
+        expect(doubled.split('//! Crate doc.').length - 1).toBe(1)
+        // A nested module must not reprint it either.
+        const nested = rustSurface('//! Crate doc.\npub mod inner {\n    pub fn a() {}\n}\n')
+        expect(nested.split('//! Crate doc.').length - 1).toBe(1)
+    })
+
+    test('a private field sharing a line with a public one is still dropped', () => {
+        const inline = rustSurface('pub struct Cfg { pub n: u32, secret: u8 }')
+        expect(inline).toContain('pub n: u32')
+        expect(inline).not.toContain('secret')
+    })
+
+    test('a field doc is kept, and a generic or a closure type is not cut at its commas', () => {
+        const generics = rustSurface(
+            'pub struct M {\n    /// the map\n    pub map: HashMap<String, u8>,\n'
+                + '    pub cb: Box<dyn Fn(u8, u8) -> u8>,\n    hidden: u8,\n}'
+        )
+        expect(generics).toContain('/// the map')
+        expect(generics).toContain('pub map: HashMap<String, u8>,')
+        expect(generics).toContain('pub cb: Box<dyn Fn(u8, u8) -> u8>,')
+        expect(generics).not.toContain('hidden')
     })
 
     test('a brace inside a string or a char literal does not end an item', () => {

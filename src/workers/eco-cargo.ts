@@ -190,11 +190,15 @@ function registryRoots(cargoHome: string): string[] {
     }
 }
 
+/** `<name>-<version>`, split at the first dash a digit follows. Splitting at the
+ *  LAST dash instead cuts a prerelease in half: `clap-4.0.0-rc.1` becomes name
+ *  `clap-4.0.0` and version `rc.1`, and the crate is then invisible on disk. */
+const CHECKOUT_DIR_RE = /^(.*?)-(\d[^\s]*)$/
+
 /**
- * A checkout directory is `<name>-<version>`, and the name half may be written
- * with either separator — so the split is at the LAST dash and only the name
- * half is canonicalised. Canonicalising the whole string turns
- * `tiny-crate-0.1.0` into `tiny_crate_0.1.0` and matches nothing.
+ * Find a crate's checkout directory. Only the NAME half is canonicalised — a
+ * crate is written with either separator, but `canonical()` over the whole
+ * string turns `tiny-crate-0.1.0` into `tiny_crate_0.1.0` and matches nothing.
  */
 function findSourceDir(
     roots: string[],
@@ -212,11 +216,10 @@ function findSourceDir(
         }
         for (const entry of entries) {
             if (!entry.isDirectory()) continue
-            const cut = entry.name.lastIndexOf('-')
-            if (cut < 0) continue
-            if (canonical(entry.name.slice(0, cut)) !== want) continue
-            const found = entry.name.slice(cut + 1)
-            if (!/^\d/.test(found)) continue
+            const parts = CHECKOUT_DIR_RE.exec(entry.name)
+            if (!parts) continue
+            if (canonical(parts[1]) !== want) continue
+            const found = parts[2]
             if (version !== undefined && found !== version) continue
             if (!best || compareVersions(found, best.version) > 0) {
                 best = {
@@ -224,7 +227,7 @@ function findSourceDir(
                     // The DIRECTORY spells the registry's own name. Reporting the
                     // caller's spelling instead would give `tiny_crate` and
                     // `tiny-crate` two cache rows for one crate.
-                    name: entry.name.slice(0, cut),
+                    name: parts[1],
                     version: found
                 }
             }
@@ -512,16 +515,30 @@ function skipChar(src: string, i: number): number {
     return src.length
 }
 
-/** Only `//!`, `///` and attributes survive as an item's preamble. */
+/**
+ * Only `///` and attributes survive as an item's preamble. `//!` documents the
+ * MODULE, and `rustSurface` emits those once at the top — keeping them here as
+ * well printed every file's module doc twice, and three times inside a `mod`.
+ */
 function keptPreamble(pending: string): string {
     return pending
         .split('\n')
         .map(l => l.trim())
-        .filter(l => l.startsWith('///') || l.startsWith('//!') || l.startsWith('#['))
+        .filter(l => l.startsWith('///') || l.startsWith('#['))
         .join('\n')
 }
 
 const BODY_KINDS = new Set(['struct', 'enum', 'union', 'trait', 'impl', 'mod', 'extern'])
+
+/**
+ * `use` braces hold a LIST, not a block. `splitRustItems` hands back the text
+ * before the brace and the text inside it, so a re-export has to be put back
+ * together — otherwise `pub use crate::runtime::{Runtime, Builder};` is emitted
+ * as `pub use crate::runtime::;`, which names nothing and is not even Rust. A
+ * third of the `pub use` lines across a real registry are braced, and in most
+ * crates `pub use` in lib.rs IS the public API.
+ */
+const LIST_KINDS = new Set(['use'])
 
 /**
  * Reduce Rust source to its public API surface.
@@ -533,16 +550,16 @@ const BODY_KINDS = new Set(['struct', 'enum', 'union', 'trait', 'impl', 'mod', '
  * Inside a `trait` every member is public by definition, so the `pub` test is
  * suspended there; anywhere else a bare or `pub(crate)` item is dropped.
  */
-export function rustSurface(src: string, insideTrait = false): string {
+export function rustSurface(src: string, insideTrait = false, topLevel = true): string {
     const out: string[] = []
     // `//!` documents the module, not the item under it, so it survives whether or
-    // not the first item does.
+    // not the first item does — and only at the top, never again per nested block.
     const moduleDoc = src
         .split('\n')
         .filter(l => l.trim().startsWith('//!'))
         .map(l => l.trim())
         .join('\n')
-    if (!insideTrait && moduleDoc) out.push(moduleDoc)
+    if (topLevel && moduleDoc) out.push(moduleDoc)
     for (const item of splitRustItems(src)) {
         const headMatch = ITEM_HEAD_RE.exec(item.head)
         if (!headMatch) continue
@@ -555,6 +572,10 @@ export function rustSurface(src: string, insideTrait = false): string {
         const head = item.head.replace(/\s+/g, ' ').trim()
         const lead = preamble ? `${preamble}\n` : ''
 
+        if (item.body !== null && LIST_KINDS.has(kind)) {
+            out.push(`${lead}${head}{${item.body.replace(/\s+/g, ' ').trim()}};`)
+            continue
+        }
         if (item.body === null || kind === 'fn') {
             out.push(`${lead}${head};`)
             continue
@@ -578,15 +599,51 @@ export function rustSurface(src: string, insideTrait = false): string {
 /**
  * A struct's fields or an enum's variants. A struct field is public only when it
  * says `pub`; an enum variant carries no such keyword and is always public.
+ *
+ * Split on COMMAS, not on lines: `pub struct Cfg { pub n: u32, secret: u8 }` is
+ * one line holding two fields, and a line filter keeps or drops both together.
+ * The split tracks `<>()[]{}` depth so `HashMap<String, u8>` stays one field.
  */
 function fieldsOf(body: string, requirePub: boolean): string {
-    return body
-        .split('\n')
-        .map(l => l.trim())
-        .filter(l => l.length > 0 && !l.startsWith('//') && !l.startsWith('#['))
-        .filter(l => !requirePub || /^pub\b/.test(l))
-        .join('\n')
-        .trim()
+    const out: string[] = []
+    let doc: string[] = []
+    for (const raw of body.split('\n')) {
+        const line = raw.trim()
+        if (!line) continue
+        if (line.startsWith('///')) {
+            doc.push(line)
+            continue
+        }
+        if (line.startsWith('//') || line.startsWith('#[')) continue
+        const kept = splitFields(line).filter(f => !requirePub || /^pub\b/.test(f))
+        if (kept.length) out.push(...doc, kept.map(f => `${f.replace(/,+$/, '')},`).join(' '))
+        doc = []
+    }
+    return out.join('\n').trim()
+}
+
+const OPENERS: Record<string, string> = {'<': '>', '(': ')', '[': ']', '{': '}'}
+
+/** One line of a field or variant list, cut at its top-level commas. */
+function splitFields(line: string): string[] {
+    const out: string[] = []
+    let depth = 0
+    let start = 0
+    for (let i = 0; i < line.length; i++) {
+        const c = line[i]
+        // `->` is a return arrow, not a closing generic: counting it drives the
+        // depth negative and the rest of the line stops splitting.
+        if (OPENERS[c]) depth++
+        else if (c === '>' && line[i - 1] !== '-') depth--
+        else if (c === ')' || c === ']' || c === '}') depth--
+        else if (c === ',' && depth === 0) {
+            out.push(line.slice(start, i).trim())
+            start = i + 1
+        }
+    }
+    const tail = line.slice(start).trim()
+    if (tail) out.push(tail)
+    return out.filter(Boolean)
 }
 
 function indent(s: string): string {

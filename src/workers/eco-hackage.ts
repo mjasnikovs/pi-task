@@ -346,6 +346,8 @@ export const HACKAGE_DECL_SPLIT_RE =
 
 const SIGNATURE_RE = /^[a-z_][\w']*(?:\s*,\s*[a-z_][\w']*)*\s*::/
 const OPERATOR_SIGNATURE_RE = /^\([^)]+\)\s*::/
+/** The same heads with the `::` wrapped onto the next line. */
+const BARE_NAME_RE = /^(?:[a-z_][\w']*|\([^)]+\))(?:\s*,\s*(?:[a-z_][\w']*|\([^)]+\)))*\s*$/
 const TYPE_HEAD_RE = /^(data|newtype|type|class|instance|pattern|foreign import)\b/
 const HADDOCK_RE = /^--\s*[|^]/
 
@@ -420,7 +422,16 @@ export function haskellSurface(src: string): string {
         // Drop the blank tail the block picked up on its way to the next head.
         while (block.length && block[block.length - 1].trim() === '') block.pop()
 
-        if (SIGNATURE_RE.test(line) || OPERATOR_SIGNATURE_RE.test(line)) {
+        // A signature whose `::` starts the CONTINUATION line is the same
+        // declaration, and it is how most multi-constraint signatures are written:
+        //     decode
+        //       :: FromJSON a
+        //       => ByteString -> Maybe a
+        // Matching the head line alone drops those, and their haddock with them.
+        const wrappedSignature =
+            BARE_NAME_RE.test(line) && (block[1]?.trim().startsWith('::') ?? false)
+
+        if (SIGNATURE_RE.test(line) || OPERATOR_SIGNATURE_RE.test(line) || wrappedSignature) {
             out.push(...pending, ...block, '')
         } else if (TYPE_HEAD_RE.test(line)) {
             const head = TYPE_HEAD_RE.exec(line)![1]

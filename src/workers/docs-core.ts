@@ -282,16 +282,33 @@ export function buildVersionBanner(
     pin: AutoInstallPin | undefined,
     resolved: string,
     version: string,
-    cwd: string
+    cwd: string,
+    profile: EcosystemProfile = ECOSYSTEMS.npm
 ): string {
     if (!pin) return ''
     const asked = pin.asked ?? resolved
     const grounded = resolved !== asked ? ` The types this answer reads come from ${resolved}.` : ''
+    const manifest = profile.manifestLabel
+    const registry = profile.registryLabel
     if (pin.source === 'declared-range') {
         return (
             `[VERSION] "${asked}" resolved to this project's declared range `
             + `${pin.range} (installed v${version}); the answer below is pinned to that `
             + `version.${grounded}\n\n`
+        )
+    }
+
+    // The @types redirect chain and the four dependency maps are npm ideas, so the
+    // "declared, but only as X" wordings below can only be reached for npm. Every
+    // other registry gets the plain not-declared sentence, which is the true one:
+    // its own `declaredRange` already returned null.
+    if (profile.id !== 'npm') {
+        return (
+            `[VERSION — verify] "${asked}" is not pinned by this project's ${manifest}, so `
+            + `this answer is based on the latest ${registry} release (v${version}). Your `
+            + `project may target a different MAJOR — confirm the version you intend and `
+            + `treat any API that differs across majors as unverified until you check `
+            + `it.${grounded}\n\n`
         )
     }
     // The install fell back to npm latest. A usable declaration can still exist

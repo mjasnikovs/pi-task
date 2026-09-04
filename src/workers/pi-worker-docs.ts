@@ -9,7 +9,7 @@ import {retrieveChunks as defaultRetrieveChunks} from './docs-retrieve.js'
 import {docsLookup, type DocsCorpus, type DocsLookup} from './docs-lookup.js'
 import {projectCorpus} from './docs-project.js'
 import {docsRaw, packageCorpus, buildVersionBanner, type AutoInstallPin} from './docs-core.js'
-import type {EcosystemId} from './docs-ecosystems.js'
+import {ECOSYSTEMS, type EcosystemId} from './docs-ecosystems.js'
 import {
     npmVersionLookup as defaultNpmVersionLookup,
     formatNpmVersionSection
@@ -59,6 +59,8 @@ interface DocsDetails {
     childExitCode?: number
     indexingMs?: number
     indexedFiles?: number
+    /** Which registry the answer was read from. Absent for the project-source path. */
+    ecosystem?: EcosystemId
     resolveError?:
         'not_installed' | 'invalid_name' | 'unsupported_ecosystem' | 'ambiguous_ecosystem'
     cacheError?: string
@@ -370,7 +372,8 @@ export function registerPiWorkerDocs(
                     rawResult.autoInstallPin,
                     rawResult.pkg.name,
                     rawResult.pkg.version,
-                    ctx.cwd
+                    ctx.cwd,
+                    ECOSYSTEMS[rawResult.pkg.ecosystem]
                 )
                 // The package resolved and genuinely ships nothing to read — an
                 // answer, and a stable one for this run.
@@ -380,6 +383,7 @@ export function registerPiWorkerDocs(
                         + `Package ${rawResult.pkg.name}@${rawResult.pkg.version} has no .d.ts files or README. Use pi-worker to read source directly.`,
                     {
                         version: rawResult.pkg.version,
+                        ecosystem: rawResult.pkg.ecosystem,
                         hitCache: rawResult.hitCache,
                         indexedFiles: rawResult.indexedFiles ?? 0,
                         cacheError: rawResult.cacheError,
@@ -395,10 +399,12 @@ export function registerPiWorkerDocs(
                 rawResult.autoInstallPin,
                 pkg.name,
                 pkg.version,
-                ctx.cwd
+                ctx.cwd,
+                ECOSYSTEMS[pkg.ecosystem]
             )
             const baseDetails: DocsDetails = {
                 version: pkg.version,
+                ecosystem: pkg.ecosystem,
                 hitCache,
                 chunksRetrieved: chunks.length,
                 indexingMs,
@@ -549,15 +555,18 @@ export function docsCacheKey(params: {
 /** Package provenance for per-entry resume invalidation: the package ROOT of the
  *  specifier (`hono/client` → `hono`), and undefined for the project-source `.`.
  *
- *  The ecosystem rides along only when the caller named one — an unnamed lookup was
- *  decided by the manifest, and npm is what the cache file reads an absent value as. */
-export function docsCachePkg(params: {
-    module: string
-    ecosystem?: EcosystemId
-}): CachePackage | undefined {
+ *  The ecosystem comes from the RESOLVED lookup, not from the optional argument.
+ *  Reading the argument would record npm for every single-manifest cargo or cabal
+ *  project — the ordinary case, since the argument only exists to disambiguate a
+ *  polyglot repo — and the entry's version would then be looked for in a
+ *  `package.json` that is not there, leaving it un-prunable forever. */
+export function docsCachePkg(
+    params: {module: string},
+    details: Pick<DocsDetails, 'ecosystem'>
+): CachePackage | undefined {
     if (params.module === '.') return undefined
     return {
         pkg: packageRootOf(params.module),
-        ...(params.ecosystem ? {ecosystem: params.ecosystem} : {})
+        ...(details.ecosystem && details.ecosystem !== 'npm' ? {ecosystem: details.ecosystem} : {})
     }
 }

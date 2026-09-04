@@ -81,6 +81,16 @@ describe('the npm row', () => {
         fs.rmSync(neither, {recursive: true, force: true})
     })
 
+    test('detection reaches as far up as node resolution does', () => {
+        // Node resolves a package by walking node_modules UPWARD, so a session
+        // started in a subdirectory is in an npm project by every rule that
+        // matters. A cwd-only check refused every lookup there.
+        const repoSubdir = path.resolve(__dirname, '..', '..', 'src', 'workers')
+        expect(fs.existsSync(path.join(repoSubdir, 'package.json'))).toBe(false)
+        expect(fs.existsSync(path.join(repoSubdir, 'node_modules'))).toBe(false)
+        expect(npm.detect(repoSubdir)).toBe(true)
+    })
+
     test('resolves an installed package and names its own ecosystem', () => {
         const pkg = npm.resolve('tiny-pkg', FIXTURES, io(NEVER_SPAWN))
         expect(pkg.ecosystem).toBe('npm')

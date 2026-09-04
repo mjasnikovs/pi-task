@@ -114,6 +114,8 @@ export interface ExternalContextPolicy {
      * model remembers — which is how a dependency gets pinned to a stale major.
      */
     versionLookup?: (pkg: string) => Promise<NpmVersionInfo | null>
+    /** Which registry `versionLookup` asks, for the block heading. npm when absent. */
+    versionLabel?: string
     /** Sub-step label recorded via `deps.recordSubStep`. Omit to record nothing. */
     subStepLabel?: string
     /**
@@ -186,7 +188,7 @@ export async function buildExternalContext(
         if (r?.npmVersion) sections.push(formatNpmVersionSection(r.npmVersion, r.registryLabel))
     }
     for (const v of extraVersionResults) {
-        if (v) sections.push(formatNpmVersionSection(v))
+        if (v) sections.push(formatNpmVersionSection(v, policy.versionLabel))
     }
 
     for (let i = 0; i < targets.length; i++) {
@@ -239,6 +241,7 @@ export async function gatherExternalContext(refined: string, deps: GatherDeps): 
     // docs tool now refuses. Nothing detected keeps npm, which is what a bare
     // directory has always done. Ambiguous asks nobody.
     const choice = chooseEcosystem({cwd: deps.cwd})
+    const versionLabel = choice.ok ? choice.profile.registryLabel : 'npm'
     const versionLookup =
         !choice.ok ?
             choice.reason === 'none' ?
@@ -281,7 +284,7 @@ export async function gatherExternalContext(refined: string, deps: GatherDeps): 
             search: deps.searchFn
         },
         {
-            ...(versionLookup ? {versionLookup} : {}),
+            ...(versionLookup ? {versionLookup, versionLabel} : {}),
             subStepLabel: 'enrichment',
             earlyReturnOnNoTargets: true
         }

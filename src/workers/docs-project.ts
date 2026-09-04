@@ -92,11 +92,24 @@ export function getProjectFiles(cwd: string): string[] {
                 .map(f => path.join(cwd, f))
         }
     } catch {}
-    return walkSourceFiles(cwd, globs.map(extensionOf))
+    return walkSourceFiles(cwd, globs.map(extensionOf), projectProfiles(cwd))
 }
 
-function walkSourceFiles(root: string, extensions: string[]): string[] {
-    const SKIP = new Set(['node_modules', '.git', 'dist', 'build', 'coverage'])
+function walkSourceFiles(
+    root: string,
+    extensions: string[],
+    profiles: EcosystemProfile[]
+): string[] {
+    // The rows' own skip lists ride along, or a cargo project's `target/` and a
+    // cabal project's `dist-newstyle/` index as if they were project source.
+    const SKIP = new Set([
+        'node_modules',
+        '.git',
+        'dist',
+        'build',
+        'coverage',
+        ...profiles.flatMap(p => p.skipDirs)
+    ])
     const out: string[] = []
     const stack: string[] = [root]
     while (stack.length) {

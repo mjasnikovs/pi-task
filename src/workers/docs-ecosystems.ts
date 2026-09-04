@@ -64,6 +64,25 @@ import {runChild, type SpawnFn} from '../shared/child-process.js'
 export type EcosystemId = 'npm' | 'cargo' | 'hackage'
 
 /**
+ * Is any of `names` present at `cwd` or above it?
+ *
+ * Detection has to reach as far as resolution does. Node resolves a package by
+ * walking `node_modules` UPWARD, and cargo and cabal read the nearest manifest
+ * above them, so a session started in `~/project/src` is in an npm project by
+ * every rule that matters — and a cwd-only check would refuse every lookup
+ * there.
+ */
+function existsAtOrAbove(cwd: string, names: readonly string[]): boolean {
+    let dir = cwd
+    while (true) {
+        if (names.some(n => fs.existsSync(path.join(dir, n)))) return true
+        const up = path.dirname(dir)
+        if (up === dir) return false
+        dir = up
+    }
+}
+
+/**
  * Every filesystem, process and network reach a row is allowed. Rows read no
  * environment and call no global directly, so a test injects a fake registry and
  * a fake extractor instead of needing a real toolchain on the machine.
@@ -206,9 +225,7 @@ export function npmProfile(hooks: NpmProfileHooks = {}): EcosystemProfile {
 
         // `node_modules` without a package.json counts: a directory that has one
         // is an npm project whether or not it declares itself.
-        detect: cwd =>
-            fs.existsSync(path.join(cwd, 'package.json'))
-            || fs.existsSync(path.join(cwd, 'node_modules')),
+        detect: cwd => existsAtOrAbove(cwd, ['package.json', 'node_modules']),
         isValidName: isValidModuleName,
         parentPackage: extractParentPackage,
 
@@ -345,7 +362,7 @@ const cargoProfile: EcosystemProfile = {
     // One level down as well: a Tauri repo declares package.json at the root and
     // keeps its crate in `src-tauri/`.
     detect: cwd =>
-        fs.existsSync(path.join(cwd, 'Cargo.toml'))
+        existsAtOrAbove(cwd, ['Cargo.toml'])
         || childDirs(cwd).some(d => fs.existsSync(path.join(d, 'Cargo.toml'))),
     isValidName: isValidCrateName,
     parentPackage: crateOf,
@@ -414,7 +431,7 @@ const hackageProfile: EcosystemProfile = {
     registryLabel: 'hackage',
     manifestLabel: '*.cabal',
 
-    detect: cwd => hasCabalManifest(cwd) || childDirs(cwd).some(hasCabalManifest),
+    detect: cwd => hasCabalManifestAtOrAbove(cwd) || childDirs(cwd).some(hasCabalManifest),
     isValidName: isValidHackageName,
     parentPackage: name => name,
 
@@ -479,9 +496,26 @@ function hasCabalManifest(cwd: string): boolean {
         return true
     }
     try {
-        return fs.readdirSync(cwd).some(e => e.endsWith('.cabal'))
+        // A FILE named `<pkg>.cabal`. `~/.cabal` is cabal's own config DIRECTORY
+        // and ends in the same six characters, so a bare suffix test makes every
+        // directory under a Haskell developer's home look like a cabal project.
+        return fs
+            .readdirSync(cwd, {withFileTypes: true})
+            .some(e => e.isFile() && e.name.length > '.cabal'.length && e.name.endsWith('.cabal'))
     } catch {
         return false
+    }
+}
+
+/** The same question walking up. A `.cabal` file is a wildcard, so this cannot
+ *  go through `existsAtOrAbove`, which takes exact names. */
+function hasCabalManifestAtOrAbove(cwd: string): boolean {
+    let dir = cwd
+    while (true) {
+        if (hasCabalManifest(dir)) return true
+        const up = path.dirname(dir)
+        if (up === dir) return false
+        dir = up
     }
 }
 
