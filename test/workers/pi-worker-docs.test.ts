@@ -37,7 +37,7 @@ function makePi(): {
 
 async function runTool(
     internals: PiWorkerDocsInternals,
-    params: {module: string; query: string; ecosystem?: 'npm'},
+    params: {module: string; query: string; ecosystem?: 'npm' | 'cargo'},
     cwd: string = FIXTURES
 ): Promise<AgentToolResult<unknown>> {
     const {registered, api} = makePi()
@@ -431,7 +431,7 @@ test('the description names the manifests it reads and says it refuses otherwise
     const {registered, api} = makePi()
     registerPiWorkerDocs(api as unknown as Parameters<typeof registerPiWorkerDocs>[0], {})
     const d = (registered[0] as unknown as {description: string}).description
-    expect(d).toContain('SUPPORTED ECOSYSTEMS: npm (package.json)')
+    expect(d).toContain('SUPPORTED ECOSYSTEMS: npm (package.json), cargo (Cargo.toml)')
     expect(d).toContain('REFUSES and installs nothing')
 })
 

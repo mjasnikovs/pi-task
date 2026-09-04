@@ -11,6 +11,7 @@ import {
 import type {RetrievedChunk} from './docs-retrieve.js'
 import {buildExtractionPrompt} from './abstention.js'
 import {chunkDeclarations} from './docs-chunk.js'
+import {ECOSYSTEMS, detectEcosystems, type EcosystemProfile} from './docs-ecosystems.js'
 import type {DocsCorpus} from './docs-lookup.js'
 
 const DEFAULT_LIMIT = PROJECT_RETRIEVE_LIMIT
@@ -23,14 +24,34 @@ const DEFAULT_BUDGET = RETRIEVE_CONTENT_BUDGET
  */
 export const PROJECT_SCOPE = 'project'
 
+/**
+ * The rows whose manifest is present, or npm alone when none is. The npm
+ * fallback is what keeps a bare directory indexing its `.ts` exactly as before.
+ */
+function projectProfiles(cwd: string): EcosystemProfile[] {
+    const detected = detectEcosystems(cwd)
+    return detected.length ? detected.map(id => ECOSYSTEMS[id]) : [ECOSYSTEMS.npm]
+}
+
 export function getProjectName(cwd: string): string {
-    try {
-        const pkg = JSON.parse(fs.readFileSync(path.join(cwd, 'package.json'), 'utf8')) as {
-            name?: string
-        }
-        if (pkg.name) return pkg.name
-    } catch {}
+    for (const profile of projectProfiles(cwd)) {
+        const name = profile.projectName(cwd)
+        if (name) return name
+    }
     return path.basename(cwd)
+}
+
+/** The file extension a glob like `*.rs` selects. */
+function extensionOf(glob: string): string {
+    return glob.replace(/^\*/, '')
+}
+
+/** Which row chunks a given project file, by its extension. */
+function profileForFile(file: string, profiles: EcosystemProfile[]): EcosystemProfile {
+    for (const profile of profiles) {
+        if (profile.projectGlobs.some(g => file.endsWith(extensionOf(g)))) return profile
+    }
+    return profiles[0]
 }
 
 export function cwdKey(cwd: string): string {
@@ -56,10 +77,11 @@ export function cwdKey(cwd: string): string {
  * and a temp dir that is not itself inside a repo.
  */
 export function getProjectFiles(cwd: string): string[] {
+    const globs = [...new Set(projectProfiles(cwd).flatMap(p => p.projectGlobs))]
     try {
         const result = spawnSync(
             'git',
-            ['ls-files', '--cached', '--others', '--exclude-standard', '*.ts', '*.tsx'],
+            ['ls-files', '--cached', '--others', '--exclude-standard', ...globs],
             {cwd, encoding: 'utf8', timeout: 5000}
         )
         if (result.status === 0 && result.stdout?.trim()) {
@@ -70,10 +92,10 @@ export function getProjectFiles(cwd: string): string[] {
                 .map(f => path.join(cwd, f))
         }
     } catch {}
-    return walkTsFiles(cwd)
+    return walkSourceFiles(cwd, globs.map(extensionOf))
 }
 
-function walkTsFiles(root: string): string[] {
+function walkSourceFiles(root: string, extensions: string[]): string[] {
     const SKIP = new Set(['node_modules', '.git', 'dist', 'build', 'coverage'])
     const out: string[] = []
     const stack: string[] = [root]
@@ -89,10 +111,7 @@ function walkTsFiles(root: string): string[] {
             if (SKIP.has(entry.name)) continue
             const full = path.join(dir, entry.name)
             if (entry.isDirectory()) stack.push(full)
-            else if (
-                entry.isFile()
-                && (entry.name.endsWith('.ts') || entry.name.endsWith('.tsx'))
-            ) {
+            else if (entry.isFile() && extensions.some(ext => entry.name.endsWith(ext))) {
                 out.push(full)
             }
         }
@@ -129,6 +148,7 @@ export function ensureProjectIndexed(
     files: string[],
     cwd: string
 ): ProjectIndexResult {
+    const profiles = projectProfiles(cwd)
     const existing = cache.db
         .prepare(
             'SELECT content_hash FROM packages WHERE ecosystem = ? AND name = ? AND version = ?'
@@ -162,7 +182,13 @@ export function ensureProjectIndexed(
                 continue
             }
             const rel = path.relative(cwd, abs)
-            const chunks = chunkDeclarations(raw, rel)
+            const profile = profileForFile(abs, profiles)
+            const chunks = chunkDeclarations(
+                profile.surface(raw),
+                rel,
+                profile.declSplitRe,
+                profile.commentPrefix
+            )
             if (!chunks.length) continue
             filesIngested++
             for (const c of chunks) {

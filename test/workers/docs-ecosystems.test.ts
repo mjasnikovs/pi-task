@@ -5,6 +5,7 @@ import * as path from 'node:path'
 import {
     ECOSYSTEMS,
     chooseEcosystem,
+    defaultEcosystemIo,
     detectEcosystems,
     npmProfile,
     type EcosystemIo,
@@ -17,8 +18,8 @@ import type {SpawnFn} from '../../src/shared/child-process.js'
 
 const FIXTURES = path.resolve(__dirname, '__fixtures__')
 
-function io(spawn: SpawnFn): EcosystemIo {
-    return {spawn}
+function io(spawn: SpawnFn, overrides: Partial<EcosystemIo> = {}): EcosystemIo {
+    return defaultEcosystemIo({spawn, ...overrides})
 }
 
 const NEVER_SPAWN: SpawnFn = (() => {
@@ -45,7 +46,9 @@ describe('the roster', () => {
             'acquire',
             'latest',
             'isSurfaceFile',
-            'surface'
+            'surface',
+            'projectName',
+            'declaredDeps'
         ] as const
         for (const profile of Object.values(ECOSYSTEMS) as EcosystemProfile[]) {
             for (const hook of required) {
@@ -53,6 +56,7 @@ describe('the roster', () => {
             }
             expect(profile.declSplitRe).toBeInstanceOf(RegExp)
             expect(profile.commentPrefix.length).toBeGreaterThan(0)
+            expect(profile.projectGlobs.length).toBeGreaterThan(0)
         }
     })
 })

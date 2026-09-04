@@ -79,6 +79,7 @@
 import * as fsp from 'node:fs/promises'
 import * as path from 'node:path'
 import {tasksDir} from '../task/task-io.js'
+import {ECOSYSTEMS, type EcosystemId} from './docs-ecosystems.js'
 
 const RESEARCH_CACHE_FILE = 'research-cache.json'
 /** The env var the orchestrator stamps with the per-run id children inherit. */
@@ -143,8 +144,10 @@ interface CacheEntry {
     text: string
     details: unknown
     at: number
-    /** The npm package this answer is ABOUT (docs entries only; absent ⇒ never pruned). */
+    /** The package this answer is ABOUT (docs entries only; absent ⇒ never pruned). */
     pkg?: string
+    /** Which registry `pkg` names. Absent means npm, so old files read correctly. */
+    ecosystem?: EcosystemId
     /**
      * The version range declared for `pkg` when the answer was produced. Absent when the
      * package was not in the manifest at all (a transitive or ambient lookup) — nothing
@@ -211,45 +214,14 @@ export function normalizeQuery(s: string): string {
     return s.replace(/\s+/g, ' ').trim().toLowerCase()
 }
 
-/**
- * The project's declared dependency surface as a name→range map, flattened across every
- * dependency block (a package listed in two blocks resolves to the first range seen, in
- * block order — a real manifest does not disagree with itself, and a disagreement can
- * only make the comparison stricter, i.e. re-fetch).
- *
- * Returns undefined when the manifest is missing or unparseable: the caller then cannot
- * prove any package's version and must treat every package-scoped entry as unprovable.
- * Deliberately NOT the lockfile: it is rewritten by installs that change no resolved
- * version, which would drop digests for no correctness gain.
- */
-export async function depsMap(cwd: string): Promise<Record<string, string> | undefined> {
-    try {
-        const raw = await fsp.readFile(path.join(cwd, 'package.json'), 'utf8')
-        const pkg = JSON.parse(raw) as Record<string, unknown>
-        const blocks = [
-            'dependencies',
-            'devDependencies',
-            'peerDependencies',
-            'optionalDependencies'
-        ]
-        const out: Record<string, string> = {}
-        for (const block of blocks) {
-            const deps = pkg[block]
-            if (!deps || typeof deps !== 'object') continue
-            for (const [name, range] of Object.entries(deps as Record<string, unknown>)) {
-                if (typeof range === 'string' && !(name in out)) out[name] = range
-            }
-        }
-        // No dependency block at all is a real, stable state (a dependency-free repo).
-        return out
-    } catch {
-        return undefined
-    }
+/** The same question for any ecosystem: what does its manifest pin, name to version. */
+function depsMapFor(cwd: string, ecosystem: EcosystemId): Record<string, string> | undefined {
+    return ECOSYSTEMS[ecosystem].declaredDeps(cwd)
 }
 
 /** The version declared for `pkg`, or undefined when it is not in the manifest. */
-async function declaredVersion(cwd: string, pkg: string): Promise<string | undefined> {
-    return (await depsMap(cwd))?.[pkg]
+function declaredVersion(cwd: string, pkg: string, ecosystem: EcosystemId): string | undefined {
+    return depsMapFor(cwd, ecosystem)?.[pkg]
 }
 
 /**
@@ -263,9 +235,12 @@ async function declaredVersion(cwd: string, pkg: string): Promise<string | undef
  * - `pkg` whose version moved, which left the manifest, or an unreadable manifest
  *   (no evidence either way): DROPPED.
  */
-function entryStillFresh(entry: CacheEntry, deps: Record<string, string> | undefined): boolean {
+function entryStillFresh(
+    entry: CacheEntry,
+    depsFor: (ecosystem: EcosystemId) => Record<string, string> | undefined
+): boolean {
     if (entry.pkg === undefined || entry.pkgVersion === undefined) return true
-    return deps?.[entry.pkg] === entry.pkgVersion
+    return depsFor(entry.ecosystem ?? 'npm')?.[entry.pkg] === entry.pkgVersion
 }
 
 /**
@@ -307,11 +282,16 @@ async function pruneCache(
 ): Promise<{runId: string; entries: number; dropped: number} | null> {
     const file = await readCacheFile(cwd)
     if (!file || file.pkgv !== PKG_PROVENANCE_VERSION) return null
-    const deps = await depsMap(cwd)
+    // Read each manifest at most once: a file can hold entries from several.
+    const byEcosystem = new Map<EcosystemId, Record<string, string> | undefined>()
+    const depsFor = (id: EcosystemId): Record<string, string> | undefined => {
+        if (!byEcosystem.has(id)) byEcosystem.set(id, depsMapFor(cwd, id))
+        return byEcosystem.get(id)
+    }
     const kept: Record<string, CacheEntry> = {}
     let dropped = 0
     for (const [key, entry] of Object.entries(file.entries)) {
-        if (entryStillFresh(entry, deps)) kept[key] = entry
+        if (entryStillFresh(entry, depsFor)) kept[key] = entry
         else dropped++
     }
     // Persist the pruning now, so a crash between here and the first store cannot leave
@@ -488,13 +468,14 @@ export async function storeResearch(
     key: string,
     text: string,
     details: unknown,
-    pkg?: string
+    pkg?: string,
+    ecosystem: EcosystemId = 'npm'
 ): Promise<void> {
     try {
-        // Resolved OUTSIDE the critical section: it reads package.json, which no other
+        // Resolved OUTSIDE the critical section: it reads the manifest, which no other
         // writer can be mutating, and keeping it out holds the lock for the file
         // read/write alone. The version is still the one current at store time.
-        const pkgVersion = pkg === undefined ? undefined : await declaredVersion(cwd, pkg)
+        const pkgVersion = pkg === undefined ? undefined : declaredVersion(cwd, pkg, ecosystem)
         await withCacheLock(cwd, async () => {
             const existing = await readCacheFile(cwd)
             const entries = existing && existing.runId === runId ? existing.entries : {}
@@ -503,6 +484,9 @@ export async function storeResearch(
                 details,
                 at: Date.now(),
                 ...(pkg === undefined ? {} : {pkg}),
+                // npm is the absent default, so an npm-only file is byte-identical
+                // to what earlier versions wrote.
+                ...(pkg !== undefined && ecosystem !== 'npm' ? {ecosystem} : {}),
                 ...(pkgVersion === undefined ? {} : {pkgVersion})
             }
             // Evict oldest by write time if over the cap.

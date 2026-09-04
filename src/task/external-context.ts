@@ -23,6 +23,7 @@
  * `### npm:` then `### docs:` then `### url:` then `### service:`.
  */
 
+import {chooseEcosystem, defaultEcosystemIo} from '../workers/docs-ecosystems.js'
 import {docsRaw} from '../workers/docs-core.js'
 import {fetchRaw} from '../workers/fetch-core.js'
 import {
@@ -61,6 +62,8 @@ interface ExternalTarget {
 export interface ExternalTargetResult {
     /** Emitted as an `### npm:` block ahead of every body. Absent for url targets. */
     npmVersion?: NpmVersionInfo | null
+    /** Which registry the version block came from; npm when absent. */
+    registryLabel?: string
     /**
      * The `### docs:`/`### url:` body. `undefined` means "this target contributes no
      * body block" — and the two call paths draw that line differently ON PURPOSE:
@@ -180,7 +183,7 @@ export async function buildExternalContext(
     // theirs from the cheap standalone lookup above. Together they cover EVERY
     // named dep.
     for (const r of targetResults) {
-        if (r?.npmVersion) sections.push(formatNpmVersionSection(r.npmVersion))
+        if (r?.npmVersion) sections.push(formatNpmVersionSection(r.npmVersion, r.registryLabel))
     }
     for (const v of extraVersionResults) {
         if (v) sections.push(formatNpmVersionSection(v))
@@ -230,6 +233,24 @@ export async function gatherExternalContext(refined: string, deps: GatherDeps): 
     const npmVersionFn = deps.npmVersionLookup ?? npmVersionLookup
     const docsQuery = refined.split('\n').find(l => l.trim()) ?? refined
 
+    // Which registry the standalone version lookups should ask. A cargo-only
+    // project's dependency names are crate names, and asking npm about them
+    // returns a real but unrelated package's versions — the exact confusion the
+    // docs tool now refuses. Nothing detected keeps npm, which is what a bare
+    // directory has always done. Ambiguous asks nobody.
+    const choice = chooseEcosystem({cwd: deps.cwd})
+    const versionLookup =
+        !choice.ok ?
+            choice.reason === 'none' ?
+                (pkg: string) => npmVersionFn(pkg, {signal: deps.signal})
+            :   undefined
+        : choice.profile.id === 'npm' ? (pkg: string) => npmVersionFn(pkg, {signal: deps.signal})
+        : (pkg: string) =>
+                choice.profile.latest(
+                    pkg,
+                    defaultEcosystemIo(deps.signal ? {signal: deps.signal} : {})
+                )
+
     return buildExternalContext(
         refined,
         deps,
@@ -243,6 +264,7 @@ export async function gatherExternalContext(refined: string, deps: GatherDeps): 
                 })
                 return {
                     npmVersion: r.npmVersion,
+                    ...(r.registryLabel ? {registryLabel: r.registryLabel} : {}),
                     body:
                         r.kind === 'ok' && r.chunks.length > 0 ?
                             r.chunks
@@ -259,7 +281,7 @@ export async function gatherExternalContext(refined: string, deps: GatherDeps): 
             search: deps.searchFn
         },
         {
-            versionLookup: pkg => npmVersionFn(pkg, {signal: deps.signal}),
+            ...(versionLookup ? {versionLookup} : {}),
             subStepLabel: 'enrichment',
             earlyReturnOnNoTargets: true
         }

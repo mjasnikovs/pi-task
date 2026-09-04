@@ -196,7 +196,7 @@ function tmpCwd(): string {
 function cachingTool(opts?: {
     cacheKey?: (p: {q: string}) => string | null
     cacheable?: (d: {n: number}, t: string) => boolean
-    cachePkg?: (p: {q: string}) => string | undefined
+    cachePkg?: (p: {q: string}) => {pkg: string; ecosystem?: 'npm' | 'cargo'} | undefined
     /** Answer or not. Default: every call answers. */
     outcome?: (text: string, details: {n: number}) => WorkerOutcome<{n: number}>
 }): {registered: RegisteredTool[]; calls: () => number} {
@@ -281,7 +281,7 @@ test('cachePkg records package provenance on the entry, so a resume can prune pe
         JSON.stringify({name: 'x', dependencies: {hono: '^4.6.0'}}),
         'utf8'
     )
-    const tool = cachingTool({cachePkg: p => (p.q === 'hono-q' ? 'hono' : undefined)})
+    const tool = cachingTool({cachePkg: p => (p.q === 'hono-q' ? {pkg: 'hono'} : undefined)})
     const exec = tool.registered[0].execute
     await exec('id1', {q: 'hono-q'}, undefined, undefined, {cwd})
     await exec('id2', {q: 'search-q'}, undefined, undefined, {cwd})

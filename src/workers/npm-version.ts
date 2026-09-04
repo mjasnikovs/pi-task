@@ -109,10 +109,12 @@ export async function npmVersionLookup(
 }
 
 /** Format an NpmVersionInfo as a short Markdown block for EXTERNAL CONTEXT: a
- *  `### npm: <pkg>` heading, a `latest:` line that gains ` (published YYYY-MM-DD)`
- *  when the date is known, and a `recent:` line only when the list is non-empty. */
-export function formatNpmVersionSection(info: NpmVersionInfo): string {
-    const lines = [`### npm: ${info.pkg}`, `latest: ${info.latest}`]
+ *  `### <registry>: <pkg>` heading, a `latest:` line that gains ` (published
+ *  YYYY-MM-DD)` when the date is known, and a `recent:` line only when the list is
+ *  non-empty. The label defaults to npm, which is where every caller but the docs
+ *  tool's non-npm rows reads from. */
+export function formatNpmVersionSection(info: NpmVersionInfo, label = 'npm'): string {
+    const lines = [`### ${label}: ${info.pkg}`, `latest: ${info.latest}`]
     if (info.publishedAt) {
         const date = info.publishedAt.slice(0, 10)
         lines[1] += ` (published ${date})`

@@ -9,6 +9,7 @@ import {retrieveChunks as defaultRetrieveChunks} from './docs-retrieve.js'
 import {docsLookup, type DocsCorpus, type DocsLookup} from './docs-lookup.js'
 import {projectCorpus} from './docs-project.js'
 import {docsRaw, packageCorpus, buildVersionBanner, type AutoInstallPin} from './docs-core.js'
+import type {EcosystemId} from './docs-ecosystems.js'
 import {
     npmVersionLookup as defaultNpmVersionLookup,
     formatNpmVersionSection
@@ -20,6 +21,7 @@ import {
     makeWorkerTool,
     workerAnswer,
     workerUnavailable,
+    type CachePackage,
     type WorkerOutcome
 } from './shared.js'
 import {isTypeOnlyAnswer} from '../task/type-only-answer.js'
@@ -42,7 +44,7 @@ const Params = Type.Object({
             'What to extract from the docs. The child pi reads ranked chunks and returns ONLY content answering this.'
     }),
     ecosystem: Type.Optional(
-        Type.Union([Type.Literal('npm')], {
+        Type.Union([Type.Literal('npm'), Type.Literal('cargo')], {
             description:
                 'Which registry to read. Only needed in a repo holding more than one package manifest; otherwise the manifest decides.'
         })
@@ -57,7 +59,8 @@ interface DocsDetails {
     childExitCode?: number
     indexingMs?: number
     indexedFiles?: number
-    resolveError?: 'not_installed' | 'invalid_name' | 'unsupported_ecosystem'
+    resolveError?:
+        'not_installed' | 'invalid_name' | 'unsupported_ecosystem' | 'ambiguous_ecosystem'
     cacheError?: string
     aborted?: boolean
     autoInstalled?: boolean
@@ -174,7 +177,8 @@ export function registerPiWorkerDocs(
             + 'do NOT web-search for an installed package — this tool is the source of '
             + 'truth and is version-pinned to what is actually installed (training-data '
             + 'versions and APIs are typically months stale).\n'
-            + 'SUPPORTED ECOSYSTEMS: npm (package.json). The MANIFEST in the working '
+            + 'SUPPORTED ECOSYSTEMS: npm (package.json), cargo (Cargo.toml). The '
+            + 'MANIFEST in the working '
             + 'directory decides which registry a name is looked up in — you do not. If '
             + 'the directory holds none of those manifests, this tool REFUSES and '
             + 'installs nothing; use `pi-worker-search` or `pi-worker-fetch` for that '
@@ -331,7 +335,9 @@ export function registerPiWorkerDocs(
             })
 
             const npmHeader =
-                rawResult.npmVersion ? `${formatNpmVersionSection(rawResult.npmVersion)}\n\n` : ''
+                rawResult.npmVersion ?
+                    `${formatNpmVersionSection(rawResult.npmVersion, rawResult.registryLabel)}\n\n`
+                :   ''
             const npmDetails =
                 rawResult.npmVersion ?
                     {
@@ -541,7 +547,17 @@ export function docsCacheKey(params: {
 }
 
 /** Package provenance for per-entry resume invalidation: the package ROOT of the
- *  specifier (`hono/client` → `hono`), and undefined for the project-source `.`. */
-export function docsCachePkg(params: {module: string}): string | undefined {
-    return params.module === '.' ? undefined : packageRootOf(params.module)
+ *  specifier (`hono/client` → `hono`), and undefined for the project-source `.`.
+ *
+ *  The ecosystem rides along only when the caller named one — an unnamed lookup was
+ *  decided by the manifest, and npm is what the cache file reads an absent value as. */
+export function docsCachePkg(params: {
+    module: string
+    ecosystem?: EcosystemId
+}): CachePackage | undefined {
+    if (params.module === '.') return undefined
+    return {
+        pkg: packageRootOf(params.module),
+        ...(params.ecosystem ? {ecosystem: params.ecosystem} : {})
+    }
 }

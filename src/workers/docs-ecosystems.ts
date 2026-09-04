@@ -14,21 +14,38 @@
  * string that either works or silently does not.
  */
 
+import {spawn as nodeSpawn} from 'node:child_process'
 import * as fs from 'node:fs'
+import * as os from 'node:os'
 import * as path from 'node:path'
 import {
     runAutoInstall,
     findDeclaredRange,
     extractParentPackage,
     resolveTypeSourceForDocs,
+    getDocsModulesDir,
     type AutoInstallPin
 } from './docs-core.js'
 import {resolvePackage, isDtsFile, isValidModuleName, type ResolvedPackage} from './docs-resolve.js'
 import {DECL_SPLIT_RE} from './docs-chunk.js'
 import {npmVersionLookup, type NpmVersionInfo} from './npm-version.js'
-import type {SpawnFn} from '../shared/child-process.js'
+import {
+    resolveCrate,
+    cratesLatest,
+    crateTarballUrl,
+    crateOf,
+    isValidCrateName,
+    isRustFile,
+    lockedVersion,
+    rustSurface,
+    cargoProjectName,
+    childDirs,
+    lockedDeps,
+    CARGO_DECL_SPLIT_RE
+} from './eco-cargo.js'
+import {runChild, type SpawnFn} from '../shared/child-process.js'
 
-export type EcosystemId = 'npm'
+export type EcosystemId = 'npm' | 'cargo'
 
 /**
  * Every filesystem, process and network reach a row is allowed. Rows read no
@@ -37,7 +54,27 @@ export type EcosystemId = 'npm'
  */
 export interface EcosystemIo {
     spawn: SpawnFn
+    fetch: typeof fetch
+    /** Where a package the project does not have is put once fetched. */
+    modulesDir: string
+    /** Root of the cargo checkout cache — `CARGO_HOME`, or its default. */
+    cargoHome: string
     signal?: AbortSignal | undefined
+}
+
+/**
+ * Production defaults for {@link EcosystemIo}. The environment is read HERE and
+ * nowhere in a row, so a test injects a directory instead of setting a variable
+ * that outlives it.
+ */
+export function defaultEcosystemIo(overrides: Partial<EcosystemIo> = {}): EcosystemIo {
+    return {
+        spawn: nodeSpawn as unknown as SpawnFn,
+        fetch,
+        modulesDir: getDocsModulesDir(),
+        cargoHome: process.env.CARGO_HOME?.trim() || path.join(os.homedir(), '.cargo'),
+        ...overrides
+    }
 }
 
 /** What acquiring a package produced, whatever the registry. */
@@ -92,6 +129,17 @@ export interface EcosystemProfile {
     declSplitRe: RegExp
     /** Line-comment marker, used to label a chunk with the file it came from. */
     commentPrefix: string
+
+    /** Which of the PROJECT's own files this ecosystem contributes to its index. */
+    projectGlobs: readonly string[]
+    /** The project's own name from its manifest, or null when it declares none. */
+    projectName: (cwd: string) => string | null
+    /**
+     * What the project's manifest declares, name to version. Undefined when the
+     * manifest is missing or unreadable — the caller then cannot prove any
+     * package's version, which is a different fact from "declares nothing".
+     */
+    declaredDeps: (cwd: string) => Record<string, string> | undefined
 }
 
 /** Overrides a caller has already been given its own copies of. */
@@ -143,12 +191,156 @@ export function npmProfile(hooks: NpmProfileHooks = {}): EcosystemProfile {
         isSurfaceFile: isDtsFile,
         surface: content => content,
         declSplitRe: DECL_SPLIT_RE,
-        commentPrefix: '//'
+        commentPrefix: '//',
+        projectGlobs: ['*.ts', '*.tsx'],
+        projectName: npmProjectName,
+        declaredDeps: npmDeclaredDeps
     }
 }
 
+const NPM_DEP_BLOCKS = [
+    'dependencies',
+    'devDependencies',
+    'peerDependencies',
+    'optionalDependencies'
+]
+
+/**
+ * The package.json manifest, not the lockfile: a lockfile is rewritten by
+ * installs that change no resolved version, and pruning digests on that would
+ * cost reuse for no correctness gain.
+ */
+export function npmDeclaredDeps(cwd: string): Record<string, string> | undefined {
+    let json: Record<string, unknown>
+    try {
+        json = JSON.parse(fs.readFileSync(path.join(cwd, 'package.json'), 'utf8')) as Record<
+            string,
+            unknown
+        >
+    } catch {
+        return undefined
+    }
+    const out: Record<string, string> = {}
+    for (const block of NPM_DEP_BLOCKS) {
+        const deps = json[block]
+        if (!deps || typeof deps !== 'object') continue
+        for (const [name, range] of Object.entries(deps as Record<string, unknown>)) {
+            if (typeof range === 'string' && !(name in out)) out[name] = range
+        }
+    }
+    // No dependency block at all is a real, stable state (a dependency-free repo).
+    return out
+}
+
+/** A project's own name from its package.json, or null when it declares none. */
+export function npmProjectName(cwd: string): string | null {
+    try {
+        const pkg = JSON.parse(fs.readFileSync(path.join(cwd, 'package.json'), 'utf8')) as {
+            name?: string
+        }
+        return pkg.name ?? null
+    } catch {
+        return null
+    }
+}
+
+/**
+ * A crate's `.crate` tarball is fetched to a FILE and handed to `tar`, not piped:
+ * `runChild` writes only strings to a child's stdin, so gzip bytes cannot go
+ * through it. Windows ships bsdtar as `tar`, which reads `-xzf` the same way.
+ */
+async function acquireCrate(
+    name: string,
+    version: string,
+    io: EcosystemIo
+): Promise<AcquireResult> {
+    const dir = path.join(io.modulesDir, 'cargo')
+    const crate = crateOf(name)
+    const archive = path.join(dir, `${crate}-${version}.crate`)
+    try {
+        fs.mkdirSync(dir, {recursive: true})
+        const response = await io.fetch(crateTarballUrl(crate, version), {
+            headers: {'user-agent': 'pi-task (github.com/mjasnikovs/pi-task)'},
+            ...(io.signal ? {signal: io.signal} : {})
+        })
+        if (!response.ok) {
+            return {
+                success: false,
+                installDir: dir,
+                stderr: `crates.io returned ${response.status} for ${crate} ${version}`
+            }
+        }
+        fs.writeFileSync(archive, Buffer.from(await response.arrayBuffer()))
+    } catch (err) {
+        return {
+            success: false,
+            installDir: dir,
+            stderr: err instanceof Error ? err.message : String(err)
+        }
+    }
+    const result = await runChild(
+        io.spawn,
+        {command: 'tar', args: ['-xzf', archive, '-C', dir]},
+        dir,
+        io.signal,
+        {mode: 'text', discardStdout: true}
+    )
+    return {
+        success: result.exitCode === 0 && !result.aborted,
+        installDir: dir,
+        stderr: result.stderr
+    }
+}
+
+const cargoProfile: EcosystemProfile = {
+    id: 'cargo',
+    why:
+        'Rust ships no declarations file, so the surface is cut out of .rs source. '
+        + 'Versions come from Cargo.lock, not from a range: cargo has already resolved '
+        + 'them, and the newest wins when a workspace holds two majors — the answer '
+        + 'header states which was read. Note the asymmetry this leaves: in a repo with '
+        + 'both manifests the docs tool answers from cargo while the final gate still '
+        + 'runs the npm test command. Widening the gate is a separate change.',
+    registryLabel: 'crates.io',
+    manifestLabel: 'Cargo.toml',
+
+    // One level down as well: a Tauri repo declares package.json at the root and
+    // keeps its crate in `src-tauri/`.
+    detect: cwd =>
+        fs.existsSync(path.join(cwd, 'Cargo.toml'))
+        || childDirs(cwd).some(d => fs.existsSync(path.join(d, 'Cargo.toml'))),
+    isValidName: isValidCrateName,
+    parentPackage: crateOf,
+
+    resolve: (name, cwd, io) =>
+        resolveCrate(name, cwd, {cargoHome: io.cargoHome, modulesDir: io.modulesDir}),
+    // Cargo has already resolved every version; the lock IS the pin.
+    declaredRange: (name, cwd) => lockedVersion(name, cwd),
+    acquire: async (name, range, io) => {
+        const version = range ?? (await cratesLatest(name, io.fetch, io.signal))?.latest
+        if (!version) {
+            return {
+                success: false,
+                installDir: path.join(io.modulesDir, 'cargo'),
+                stderr: `No published version found for crate "${crateOf(name)}".`
+            }
+        }
+        return acquireCrate(name, version, io)
+    },
+    latest: (name, io) => cratesLatest(name, io.fetch, io.signal),
+
+    isSurfaceFile: isRustFile,
+    surface: content => rustSurface(content),
+    declSplitRe: CARGO_DECL_SPLIT_RE,
+    commentPrefix: '//',
+    projectGlobs: ['*.rs'],
+    projectName: cargoProjectName,
+    declaredDeps: lockedDeps
+}
+
 export const ECOSYSTEMS = {
-    npm: npmProfile()
+    npm: npmProfile(),
+    cargo: cargoProfile
 } as const satisfies Record<EcosystemId, EcosystemProfile>
 
 /** Which ecosystems `cwd` looks like a project of, in roster order. */
@@ -236,8 +428,8 @@ export function chooseEcosystem(input: ChooseEcosystemInput): EcosystemChoice {
         reason: 'ambiguous',
         detected,
         message:
-            `${input.cwd} is a ${detected.join(' + ')} project and this package is `
-            + 'installed in none of them, so which registry to read is not decidable. '
+            `${input.cwd} holds manifests for ${detected.join(' and ')}, and this package `
+            + 'is installed in none of them, so which registry to read is not decidable. '
             + `Pass ecosystem: "${detected[0]}" (or one of: ${detected.join(', ')}) to say which.`
     }
 }

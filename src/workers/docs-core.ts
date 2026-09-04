@@ -7,6 +7,7 @@ import {ensureIndexed as defaultEnsureIndexed, type IndexResult} from './docs-in
 import {
     npmProfile,
     chooseEcosystem,
+    defaultEcosystemIo,
     ECOSYSTEMS,
     type EcosystemId,
     type EcosystemIo,
@@ -74,6 +75,8 @@ export type DocsRawResult =
           autoInstalled?: boolean
           autoInstallPin?: AutoInstallPin
           npmVersion?: NpmVersionInfo | null
+          /** The registry the answer came from, for the block that leads it. */
+          registryLabel?: string
       }
     | {
           kind: 'no_chunks'
@@ -84,11 +87,14 @@ export type DocsRawResult =
           autoInstalled?: boolean
           autoInstallPin?: AutoInstallPin
           npmVersion?: NpmVersionInfo | null
+          /** The registry the answer came from, for the block that leads it. */
+          registryLabel?: string
       }
     | {
           kind: 'error'
           message: string
-          resolveError?: 'not_installed' | 'invalid_name' | 'unsupported_ecosystem'
+          resolveError?:
+              'not_installed' | 'invalid_name' | 'unsupported_ecosystem' | 'ambiguous_ecosystem'
           installError?: string
           version?: string
           hitCache?: boolean
@@ -96,6 +102,8 @@ export type DocsRawResult =
           autoInstalled?: boolean
           autoInstallPin?: AutoInstallPin
           npmVersion?: NpmVersionInfo | null
+          /** The registry the answer came from, for the block that leads it. */
+          registryLabel?: string
       }
 
 export interface DocsRawInput {
@@ -112,6 +120,8 @@ export interface DocsRawInput {
     openCache?: typeof defaultOpenCache
     spawn?: SpawnFn
     npmVersionLookup?: typeof defaultNpmVersionLookup
+    /** Overrides for the filesystem and network a non-npm row reaches through. */
+    io?: Partial<EcosystemIo>
     signal?: AbortSignal
 }
 
@@ -402,6 +412,8 @@ export interface AcquireInput {
     signal: AbortSignal | undefined
     /** Which registry to acquire from. */
     profile?: EcosystemProfile
+    /** The row's filesystem and network reach. Built from `spawn` when absent. */
+    io?: EcosystemIo
 }
 
 /**
@@ -427,7 +439,7 @@ export interface AcquireInput {
 export async function acquirePackage(input: AcquireInput): Promise<AcquireOutcome> {
     const {name, cwd, spawn, resolvePackage, signal} = input
     const profile = input.profile ?? ECOSYSTEMS.npm
-    const io: EcosystemIo = {spawn, signal}
+    const io: EcosystemIo = input.io ?? defaultEcosystemIo({spawn, signal})
     const resolve = (from: string): ResolvedPackage =>
         resolvePackage ? resolvePackage(name, from) : profile.resolve(name, from, io)
     try {
@@ -512,17 +524,40 @@ export async function docsRaw(input: DocsRawInput): Promise<DocsRawResult> {
     const spawn = input.spawn ?? (defaultSpawn as unknown as SpawnFn)
     const npmVersionLookup = input.npmVersionLookup ?? defaultNpmVersionLookup
 
+    const io: EcosystemIo = defaultEcosystemIo({spawn, signal: input.signal, ...input.io})
+
+    // A runtime builtin specifier (`bun:sql`, `node:fs`) is typed by the runtime's
+    // own types package, not a literal package of that colon-name — so resolve the
+    // runtime instead. This is what turns a `bun:sql` lookup into Bun's real SQL
+    // surface (`declare module "bun"` → `const sql: SQL`) rather than an
+    // `invalid_name` error, and it lets the docs tool disprove a phantom submodule.
+    const requested = splitRuntimeNamespace(input.pkg)?.runtime ?? input.pkg
+
     // Which registry, decided by the MANIFEST before anything else runs. A refusal
     // must reach the caller having spawned nothing and asked no registry, so this
     // sits above the version lookup and the resolve ladder both.
-    const choice = chooseEcosystem({cwd: input.cwd, requested: input.ecosystem})
+    const choice = chooseEcosystem({
+        cwd: input.cwd,
+        requested: input.ecosystem,
+        // Read-only, and deliberately so: an ambiguous name is exactly the one that
+        // would otherwise be fetched from the wrong registry.
+        resolvesLocally: candidate => {
+            try {
+                candidate.resolve(requested, input.cwd, io)
+                return true
+            } catch {
+                return false
+            }
+        }
+    })
     if (!choice.ok) {
         return {
             kind: 'error',
             message:
                 `${choice.message} Use pi-worker-search or pi-worker-fetch for `
                 + `"${input.pkg}" instead.`,
-            resolveError: 'unsupported_ecosystem'
+            resolveError:
+                choice.reason === 'ambiguous' ? 'ambiguous_ecosystem' : 'unsupported_ecosystem'
         }
     }
 
@@ -534,14 +569,7 @@ export async function docsRaw(input: DocsRawInput): Promise<DocsRawResult> {
         choice.profile.id === 'npm' ?
             npmProfile({resolvePackage, npmVersionLookup})
         :   choice.profile
-    const io: EcosystemIo = {spawn, signal: input.signal}
-
-    // A runtime builtin specifier (`bun:sql`, `node:fs`) is typed by the runtime's
-    // own types package, not a literal package of that colon-name — so resolve the
-    // runtime instead. This is what turns a `bun:sql` lookup into Bun's real SQL
-    // surface (`declare module "bun"` → `const sql: SQL`) rather than an
-    // `invalid_name` error, and it lets the docs tool disprove a phantom submodule.
-    const requested = splitRuntimeNamespace(input.pkg)?.runtime ?? input.pkg
+    const registryLabel = profile.registryLabel
 
     // Fire the npm registry lookup in parallel with resolve/index/retrieve.
     // It returns null on any failure, so it never blocks the local pipeline.
@@ -557,7 +585,8 @@ export async function docsRaw(input: DocsRawInput): Promise<DocsRawResult> {
         cwd: input.cwd,
         spawn,
         signal: input.signal,
-        profile
+        profile,
+        io
     })
     if (!got.ok) {
         if (got.stage === 'install') {
@@ -567,7 +596,8 @@ export async function docsRaw(input: DocsRawInput): Promise<DocsRawResult> {
                 resolveError: 'not_installed',
                 installError: got.stderr,
                 autoInstallPin: got.pin,
-                npmVersion: await npmVersionPromise
+                npmVersion: await npmVersionPromise,
+                registryLabel
             }
         }
         if (got.stage === 'reresolve') {
@@ -578,7 +608,8 @@ export async function docsRaw(input: DocsRawInput): Promise<DocsRawResult> {
                     resolveError: got.err.kind,
                     autoInstalled: true,
                     autoInstallPin: got.pin,
-                    npmVersion: await npmVersionPromise
+                    npmVersion: await npmVersionPromise,
+                    registryLabel
                 }
             }
             return {
@@ -586,7 +617,8 @@ export async function docsRaw(input: DocsRawInput): Promise<DocsRawResult> {
                 message: `Could not resolve "${input.pkg}" after install: ${got.err instanceof Error ? got.err.message : String(got.err)}`,
                 autoInstalled: true,
                 autoInstallPin: got.pin,
-                npmVersion: await npmVersionPromise
+                npmVersion: await npmVersionPromise,
+                registryLabel
             }
         }
         if (got.err instanceof ResolveError) {
@@ -594,13 +626,15 @@ export async function docsRaw(input: DocsRawInput): Promise<DocsRawResult> {
                 kind: 'error',
                 message: got.err.message,
                 resolveError: got.err.kind,
-                npmVersion: await npmVersionPromise
+                npmVersion: await npmVersionPromise,
+                registryLabel
             }
         }
         return {
             kind: 'error',
             message: `Could not resolve "${input.pkg}": ${got.err instanceof Error ? got.err.message : String(got.err)}`,
-            npmVersion: await npmVersionPromise
+            npmVersion: await npmVersionPromise,
+            registryLabel
         }
     }
     let pkg: ResolvedPackage = got.pkg
@@ -644,6 +678,7 @@ export async function docsRaw(input: DocsRawInput): Promise<DocsRawResult> {
             )
         :   docsRawUncached(pkg, profile, cacheError ?? 'unknown cache error', autoInstalled)
     result.npmVersion = await npmVersionPromise
+    result.registryLabel = registryLabel
     if (autoInstallPin) result.autoInstallPin = autoInstallPin
     return result
 }

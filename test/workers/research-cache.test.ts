@@ -13,10 +13,10 @@ import {
     researchCacheFile,
     lookupResearch,
     storeResearch,
-    depsMap,
     resumeResearchRun,
     isRetryableFsError
 } from '../../src/workers/research-cache.js'
+import {npmDeclaredDeps} from '../../src/workers/docs-ecosystems.js'
 
 function tmpCwd(): string {
     return fs.mkdtempSync(path.join(os.tmpdir(), 'research-cache-'))
@@ -148,7 +148,7 @@ async function seed(cwd: string, deps: Record<string, string> | null): Promise<v
     await storeResearch(cwd, 'run-orig', DOCS_HONO, 'answer', {}, 'hono')
 }
 
-test('depsMap flattens every dependency block and is undefined without a manifest', async () => {
+test('the npm dep map flattens every block and is undefined without a manifest', async () => {
     const cwd = tmpCwd()
     await fsp.writeFile(
         path.join(cwd, 'package.json'),
@@ -159,13 +159,13 @@ test('depsMap flattens every dependency block and is undefined without a manifes
         }),
         'utf8'
     )
-    expect(await depsMap(cwd)).toEqual({hono: '^4.6.0', '@playwright/test': '^1.48.0'})
+    expect(npmDeclaredDeps(cwd)).toEqual({hono: '^4.6.0', '@playwright/test': '^1.48.0'})
     // A dependency-free repo is a real, stable state — an empty map, not "unknown".
     const bare = tmpCwd()
     await fsp.writeFile(path.join(bare, 'package.json'), '{"name":"x"}', 'utf8')
-    expect(await depsMap(bare)).toEqual({})
+    expect(npmDeclaredDeps(bare)).toEqual({})
     // An absent manifest is unknown — nothing about any package can be proved.
-    expect(await depsMap(tmpCwd())).toBeUndefined()
+    expect(npmDeclaredDeps(tmpCwd())).toBeUndefined()
 })
 
 test('a resume REUSES the interrupted run id when the dependency surface is unchanged', async () => {
@@ -409,4 +409,45 @@ test('a resume prunes and reuses correctly while holding the same lock a store t
     expect(await lookupResearch(cwd, 'run-orig', DOCS_HONO)).toBeUndefined()
     expect(await lookupResearch(cwd, 'run-orig', SEARCH_KEY)).toBeDefined()
     expect(fs.existsSync(`${researchCacheFile(cwd)}.lock`)).toBe(false)
+})
+
+const DOCS_TOKIO = 'pi-worker-docs tokio::spawn'
+
+async function writeLock(cwd: string, versions: Record<string, string>): Promise<void> {
+    const blocks = Object.entries(versions)
+        .map(([name, version]) => `[[package]]\nname = "${name}"\nversion = "${version}"\n`)
+        .join('\n')
+    await fsp.writeFile(path.join(cwd, 'Cargo.lock'), `version = 4\n\n${blocks}`, 'utf8')
+}
+
+test('a cargo entry is judged against Cargo.lock, and an npm entry against package.json', async () => {
+    const cwd = tmpCwd()
+    await writeManifest(cwd, {hono: '^4.6.0'})
+    await writeLock(cwd, {tokio: '1.53.1', serde: '1.0.0'})
+    process.env[RESEARCH_RUN_ID_ENV] = 'run-orig'
+    await storeResearch(cwd, 'run-orig', DOCS_HONO, 'hono answer', {}, 'hono')
+    await storeResearch(cwd, 'run-orig', DOCS_TOKIO, 'tokio answer', {}, 'tokio', 'cargo')
+
+    // Both survive while neither manifest has moved.
+    const first = await resumeResearchRun(cwd, true)
+    expect(first).toMatchObject({reused: true, entries: 2, dropped: 0})
+
+    // A cargo update moves tokio; package.json is untouched, so hono stays.
+    await writeLock(cwd, {tokio: '1.54.0', serde: '1.0.0'})
+    const second = await resumeResearchRun(cwd, true)
+    expect(second).toMatchObject({reused: true, entries: 1, dropped: 1})
+    expect(await lookupResearch(cwd, 'run-orig', DOCS_HONO)).toBeDefined()
+    expect(await lookupResearch(cwd, 'run-orig', DOCS_TOKIO)).toBeUndefined()
+})
+
+test('an npm entry stores no ecosystem, so the file matches what earlier versions wrote', async () => {
+    const cwd = tmpCwd()
+    await writeManifest(cwd, {hono: '^4.6.0'})
+    process.env[RESEARCH_RUN_ID_ENV] = 'run-orig'
+    await storeResearch(cwd, 'run-orig', DOCS_HONO, 'answer', {}, 'hono')
+    const file = JSON.parse(await fsp.readFile(researchCacheFile(cwd), 'utf8')) as {
+        entries: Record<string, Record<string, unknown>>
+    }
+    expect(file.entries[DOCS_HONO].pkg).toBe('hono')
+    expect(file.entries[DOCS_HONO].ecosystem).toBeUndefined()
 })
