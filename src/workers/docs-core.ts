@@ -768,7 +768,7 @@ function docsRawUncached(
     autoInstalled: boolean
 ): DocsRawResult {
     const parts: string[] = []
-    const surfaceFiles = walkSurfaceAlpha(pkg.root, profile.isSurfaceFile)
+    const surfaceFiles = walkSurfaceAlpha(pkg.root, profile)
     const entryFirst =
         pkg.entry ? [pkg.entry, ...surfaceFiles.filter(f => f !== pkg.entry)] : surfaceFiles
     for (const abs of entryFirst) {
@@ -815,7 +815,7 @@ function docsRawUncached(
     }
 }
 
-function walkSurfaceAlpha(root: string, isSurfaceFile: (name: string) => boolean): string[] {
+function walkSurfaceAlpha(root: string, profile: EcosystemProfile): string[] {
     const out: string[] = []
     const stack: string[] = [root]
     while (stack.length) {
@@ -827,10 +827,10 @@ function walkSurfaceAlpha(root: string, isSurfaceFile: (name: string) => boolean
             continue
         }
         for (const entry of entries) {
-            if (entry.name === 'node_modules') continue
+            if (profile.skipDirs.includes(entry.name)) continue
             const full = path.join(dir, entry.name)
             if (entry.isDirectory()) stack.push(full)
-            else if (entry.isFile() && isSurfaceFile(entry.name)) out.push(full)
+            else if (entry.isFile() && profile.isSurfaceFile(entry.name)) out.push(full)
         }
     }
     return out.sort()

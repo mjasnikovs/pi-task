@@ -43,9 +43,25 @@ import {
     lockedDeps,
     CARGO_DECL_SPLIT_RE
 } from './eco-cargo.js'
+import {
+    resolveHackage,
+    hackageLatest,
+    hackageVersion,
+    hackageTarballUrl,
+    hackageExtractDir,
+    hackageProjectName,
+    findCabalTarball,
+    cachedVersions,
+    resolvedVersions,
+    isValidHackageName,
+    isHaskellFile,
+    haskellSurface,
+    HACKAGE_DECL_SPLIT_RE,
+    HACKAGE_SKIP_DIRS
+} from './eco-hackage.js'
 import {runChild, type SpawnFn} from '../shared/child-process.js'
 
-export type EcosystemId = 'npm' | 'cargo'
+export type EcosystemId = 'npm' | 'cargo' | 'hackage'
 
 /**
  * Every filesystem, process and network reach a row is allowed. Rows read no
@@ -59,6 +75,8 @@ export interface EcosystemIo {
     modulesDir: string
     /** Root of the cargo checkout cache — `CARGO_HOME`, or its default. */
     cargoHome: string
+    /** Every directory cabal may have filed a downloaded tarball under. */
+    cabalPackageDirs: readonly string[]
     signal?: AbortSignal | undefined
 }
 
@@ -73,11 +91,27 @@ export function defaultEcosystemIo(overrides: Partial<EcosystemIo> = {}): Ecosys
         fetch,
         modulesDir: getDocsModulesDir(),
         cargoHome: process.env.CARGO_HOME?.trim() || path.join(os.homedir(), '.cargo'),
+        cabalPackageDirs: defaultCabalPackageDirs(),
         ...overrides
     }
 }
 
 /** What acquiring a package produced, whatever the registry. */
+/**
+ * Both cabal layouts, because a machine may have either: `CABAL_DIR` when set,
+ * then the classic `~/.cabal`, then the XDG path newer cabal versions use.
+ */
+function defaultCabalPackageDirs(): string[] {
+    const home = os.homedir()
+    const configured = process.env.CABAL_DIR?.trim()
+    const cacheHome = process.env.XDG_CACHE_HOME?.trim() || path.join(home, '.cache')
+    return [
+        ...(configured ? [path.join(configured, 'packages')] : []),
+        path.join(home, '.cabal', 'packages'),
+        path.join(cacheHome, 'cabal', 'packages')
+    ]
+}
+
 export interface AcquireResult {
     success: boolean
     installDir: string
@@ -130,6 +164,8 @@ export interface EcosystemProfile {
     /** Line-comment marker, used to label a chunk with the file it came from. */
     commentPrefix: string
 
+    /** Directories the surface walk never descends into: tests, build output. */
+    skipDirs: readonly string[]
     /** Which of the PROJECT's own files this ecosystem contributes to its index. */
     projectGlobs: readonly string[]
     /** The project's own name from its manifest, or null when it declares none. */
@@ -192,6 +228,8 @@ export function npmProfile(hooks: NpmProfileHooks = {}): EcosystemProfile {
         surface: content => content,
         declSplitRe: DECL_SPLIT_RE,
         commentPrefix: '//',
+        // A nested node_modules is another package's surface, never this one's.
+        skipDirs: ['node_modules'],
         projectGlobs: ['*.ts', '*.tsx'],
         projectName: npmProjectName,
         declaredDeps: npmDeclaredDeps
@@ -333,14 +371,124 @@ const cargoProfile: EcosystemProfile = {
     surface: content => rustSurface(content),
     declSplitRe: CARGO_DECL_SPLIT_RE,
     commentPrefix: '//',
+    skipDirs: ['tests', 'benches', 'examples', 'target'],
     projectGlobs: ['*.rs'],
     projectName: cargoProjectName,
     declaredDeps: lockedDeps
 }
 
+/**
+ * Unpack a Hackage tarball into the tool's own directory. Whether it came from
+ * cabal's cache or from Hackage, a `.tar.gz` is not readable in place, and
+ * `runChild` writes only strings to stdin — so the archive is always a file on
+ * disk and `tar` always reads it from there. Windows ships bsdtar as `tar`.
+ */
+async function extractTarball(
+    archive: string,
+    dir: string,
+    io: EcosystemIo
+): Promise<AcquireResult> {
+    const result = await runChild(
+        io.spawn,
+        {command: 'tar', args: ['-xzf', archive, '-C', dir]},
+        dir,
+        io.signal,
+        {mode: 'text', discardStdout: true}
+    )
+    return {
+        success: result.exitCode === 0 && !result.aborted,
+        installDir: dir,
+        stderr: result.stderr
+    }
+}
+
+const hackageProfile: EcosystemProfile = {
+    id: 'hackage',
+    why:
+        'A Hackage package is a tarball, not a checked-out tree, so it is unpacked '
+        + 'before it can be read — which is why acquire runs even for a package cabal '
+        + 'already holds. Versions come from what the build actually resolved '
+        + '(dist-newstyle/cache/plan.json), then a freeze file, then a stack lock. The '
+        + 'row refuses a dotted MODULE name outright: Data.Aeson is not a package, and '
+        + 'answering it from the wrong registry is the bug this whole table exists for.',
+    registryLabel: 'hackage',
+    manifestLabel: '*.cabal',
+
+    detect: cwd => hasCabalManifest(cwd) || childDirs(cwd).some(hasCabalManifest),
+    isValidName: isValidHackageName,
+    parentPackage: name => name,
+
+    resolve: (name, cwd, io) => resolveHackage(name, cwd, {modulesDir: io.modulesDir}),
+    declaredRange: (name, cwd) => hackageVersion(name, cwd),
+    acquire: async (name, range, io) => {
+        const dir = hackageExtractDir(io.modulesDir)
+        const version =
+            range
+            ?? cachedVersions(name, io.cabalPackageDirs).pop()
+            ?? (await hackageLatest(name, io.fetch, io.signal))?.latest
+        if (!version) {
+            return {
+                success: false,
+                installDir: dir,
+                stderr: `No published version found for Hackage package "${name}".`
+            }
+        }
+        try {
+            fs.mkdirSync(dir, {recursive: true})
+            const cached = findCabalTarball(name, version, io.cabalPackageDirs)
+            if (cached) return await extractTarball(cached, dir, io)
+
+            const response = await io.fetch(hackageTarballUrl(name, version), {
+                ...(io.signal ? {signal: io.signal} : {})
+            })
+            if (!response.ok) {
+                return {
+                    success: false,
+                    installDir: dir,
+                    stderr: `hackage returned ${response.status} for ${name} ${version}`
+                }
+            }
+            const archive = path.join(dir, `${name}-${version}.tar.gz`)
+            fs.writeFileSync(archive, Buffer.from(await response.arrayBuffer()))
+            return await extractTarball(archive, dir, io)
+        } catch (err) {
+            return {
+                success: false,
+                installDir: dir,
+                stderr: err instanceof Error ? err.message : String(err)
+            }
+        }
+    },
+    latest: (name, io) => hackageLatest(name, io.fetch, io.signal),
+
+    isSurfaceFile: isHaskellFile,
+    surface: haskellSurface,
+    declSplitRe: HACKAGE_DECL_SPLIT_RE,
+    commentPrefix: '--',
+    skipDirs: HACKAGE_SKIP_DIRS,
+    projectGlobs: ['*.hs'],
+    projectName: hackageProjectName,
+    declaredDeps: resolvedVersions
+}
+
+/** A cabal, stack or hpack project declares itself with one of these. */
+function hasCabalManifest(cwd: string): boolean {
+    if (
+        ['cabal.project', 'stack.yaml', 'package.yaml'].some(f => fs.existsSync(path.join(cwd, f)))
+    ) {
+        return true
+    }
+    try {
+        return fs.readdirSync(cwd).some(e => e.endsWith('.cabal'))
+    } catch {
+        return false
+    }
+}
+
 export const ECOSYSTEMS = {
     npm: npmProfile(),
-    cargo: cargoProfile
+    cargo: cargoProfile,
+    hackage: hackageProfile
 } as const satisfies Record<EcosystemId, EcosystemProfile>
 
 /** Which ecosystems `cwd` looks like a project of, in roster order. */

@@ -1,0 +1,5 @@
+packages:
+- completed:
+    hackage: tiny-hs-0.0.1@sha256:aaaa,1234
+  original:
+    hackage: tiny-hs-0.0.1

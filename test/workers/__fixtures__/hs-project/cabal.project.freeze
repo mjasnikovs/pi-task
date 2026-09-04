@@ -1,0 +1,4 @@
+active-repositories: hackage.haskell.org:merge
+constraints: any.base ==4.20.0.0,
+             any.tiny-hs ==0.0.9,
+             any.text ==2.1.3

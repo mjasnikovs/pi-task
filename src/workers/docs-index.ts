@@ -44,7 +44,7 @@ function computeContentHash(pkg: ResolvedPackage): string {
     return hash.digest('hex')
 }
 
-function walkSurface(root: string, isSurfaceFile: (name: string) => boolean): string[] {
+function walkSurface(root: string, profile: EcosystemProfile): string[] {
     const out: string[] = []
     const stack: string[] = [root]
     while (stack.length) {
@@ -56,7 +56,7 @@ function walkSurface(root: string, isSurfaceFile: (name: string) => boolean): st
             continue
         }
         for (const entry of entries) {
-            if (entry.name === 'node_modules') continue
+            if (profile.skipDirs.includes(entry.name)) continue
             const full = path.join(dir, entry.name)
             if (entry.isSymbolicLink()) {
                 let realPath: string
@@ -69,11 +69,11 @@ function walkSurface(root: string, isSurfaceFile: (name: string) => boolean): st
                 if (relReal.startsWith('..')) continue
                 const stat = fs.statSync(realPath)
                 if (stat.isDirectory()) stack.push(realPath)
-                else if (stat.isFile() && isSurfaceFile(realPath)) out.push(realPath)
+                else if (stat.isFile() && profile.isSurfaceFile(realPath)) out.push(realPath)
                 continue
             }
             if (entry.isDirectory()) stack.push(full)
-            else if (entry.isFile() && isSurfaceFile(entry.name)) out.push(full)
+            else if (entry.isFile() && profile.isSurfaceFile(entry.name)) out.push(full)
         }
     }
     return out.sort()
@@ -81,7 +81,7 @@ function walkSurface(root: string, isSurfaceFile: (name: string) => boolean): st
 
 function collectFiles(pkg: ResolvedPackage, profile: EcosystemProfile): CollectedFiles {
     return {
-        surface: walkSurface(pkg.root, profile.isSurfaceFile),
+        surface: walkSurface(pkg.root, profile),
         readme: pkg.readme
     }
 }

@@ -44,7 +44,7 @@ const Params = Type.Object({
             'What to extract from the docs. The child pi reads ranked chunks and returns ONLY content answering this.'
     }),
     ecosystem: Type.Optional(
-        Type.Union([Type.Literal('npm'), Type.Literal('cargo')], {
+        Type.Union([Type.Literal('npm'), Type.Literal('cargo'), Type.Literal('hackage')], {
             description:
                 'Which registry to read. Only needed in a repo holding more than one package manifest; otherwise the manifest decides.'
         })
@@ -177,8 +177,8 @@ export function registerPiWorkerDocs(
             + 'do NOT web-search for an installed package — this tool is the source of '
             + 'truth and is version-pinned to what is actually installed (training-data '
             + 'versions and APIs are typically months stale).\n'
-            + 'SUPPORTED ECOSYSTEMS: npm (package.json), cargo (Cargo.toml). The '
-            + 'MANIFEST in the working '
+            + 'SUPPORTED ECOSYSTEMS: npm (package.json), cargo (Cargo.toml), hackage '
+            + '(*.cabal). The MANIFEST in the working '
             + 'directory decides which registry a name is looked up in — you do not. If '
             + 'the directory holds none of those manifests, this tool REFUSES and '
             + 'installs nothing; use `pi-worker-search` or `pi-worker-fetch` for that '
