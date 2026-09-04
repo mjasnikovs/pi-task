@@ -1,10 +1,11 @@
-import {test, expect} from 'bun:test'
+import {test, expect, describe} from 'bun:test'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import {openCache} from '../../src/workers/docs-cache.js'
 import {ensureIndexed} from '../../src/workers/docs-index.js'
 import {ECOSYSTEMS} from '../../src/workers/docs-ecosystems.js'
+import {retrieveChunks} from '../../src/workers/docs-retrieve.js'
 import {resolvePackage, type ResolvedPackage} from '../../src/workers/docs-resolve.js'
 
 const FIXTURES = path.resolve(__dirname, '__fixtures__')
@@ -189,4 +190,112 @@ test('a changed surface extractor re-indexes a package that has not moved', () =
     } finally {
         cache.close()
     }
+})
+
+describe('one name, two registries', () => {
+    // The bug this whole table exists for: `aeson`, `tokio`, `text` and `base` are
+    // all real npm packages AND real Rust/Haskell ones. Live, npm's `tokio` is a
+    // web scraper and npm's `aeson` loads JSON properties files — nothing to do
+    // with the packages a Rust or Haskell user means.
+    function sameNameIn(
+        ecosystem: 'npm' | 'cargo',
+        fixture: string,
+        root: string
+    ): ResolvedPackage {
+        return {
+            ecosystem,
+            name: 'collides',
+            version: '1.0.0',
+            root,
+            entry: fixture,
+            readme: null
+        }
+    }
+
+    test('the same name in two registries indexes to separate rows', () => {
+        const cache = openCache(':memory:')
+        try {
+            const npmPkg = sameNameIn(
+                'npm',
+                path.join(FIXTURES, 'node_modules', 'tiny-pkg', 'index.d.ts'),
+                path.join(FIXTURES, 'node_modules', 'tiny-pkg')
+            )
+            const cargoRoot = path.join(
+                FIXTURES,
+                'cargo-home',
+                'registry',
+                'src',
+                'index.crates.io-0000000000000000',
+                'tiny-crate-0.1.0'
+            )
+            const cargoPkg = sameNameIn('cargo', path.join(cargoRoot, 'src', 'lib.rs'), cargoRoot)
+
+            expect(ensureIndexed(cache, npmPkg, ECOSYSTEMS.npm).chunksWritten).toBeGreaterThan(0)
+            // Indexing the second must NOT be read as a re-index of the first.
+            const second = ensureIndexed(cache, cargoPkg, ECOSYSTEMS.cargo)
+            expect(second.hitCache).toBe(false)
+            expect(second.chunksWritten).toBeGreaterThan(0)
+
+            const perEcosystem = cache.db
+                .prepare(
+                    'SELECT ecosystem, count(*) AS n FROM chunks WHERE name = ? GROUP BY ecosystem ORDER BY ecosystem'
+                )
+                .all('collides') as {ecosystem: string; n: number}[]
+            expect(perEcosystem.map(r => r.ecosystem)).toEqual(['cargo', 'npm'])
+            expect(perEcosystem.every(r => r.n > 0)).toBe(true)
+
+            // And retrieval only ever sees its own registry's rows.
+            const fromNpm = retrieveChunks(cache, {
+                ecosystem: 'npm',
+                name: 'collides',
+                version: '1.0.0',
+                query: 'greet'
+            })
+            const fromCargo = retrieveChunks(cache, {
+                ecosystem: 'cargo',
+                name: 'collides',
+                version: '1.0.0',
+                query: 'greet'
+            })
+            expect(fromNpm.length).toBeGreaterThan(0)
+            expect(fromCargo.length).toBeGreaterThan(0)
+            expect(fromNpm.some(c => c.content.includes('pub fn greet'))).toBe(false)
+            expect(fromCargo.some(c => c.content.includes('pub fn greet'))).toBe(true)
+        } finally {
+            cache.close()
+        }
+    })
+
+    test('re-indexing one registry leaves the other registry untouched', () => {
+        const cache = openCache(':memory:')
+        try {
+            const root = path.join(FIXTURES, 'node_modules', 'tiny-pkg')
+            const entry = path.join(root, 'index.d.ts')
+            const npmPkg = sameNameIn('npm', entry, root)
+            const cargoRoot = path.join(
+                FIXTURES,
+                'cargo-home',
+                'registry',
+                'src',
+                'index.crates.io-0000000000000000',
+                'tiny-crate-0.1.0'
+            )
+            const cargoPkg = sameNameIn('cargo', path.join(cargoRoot, 'src', 'lib.rs'), cargoRoot)
+            ensureIndexed(cache, npmPkg, ECOSYSTEMS.npm)
+            const cargoBefore = ensureIndexed(cache, cargoPkg, ECOSYSTEMS.cargo).chunksWritten
+
+            // Force the npm side to re-ingest; its DELETE must be registry-scoped.
+            ensureIndexed(cache, npmPkg, {
+                ...ECOSYSTEMS.npm,
+                surface: (s: string) => `// CHANGED\n${s}`
+            })
+
+            const cargoAfter = cache.db
+                .prepare("SELECT count(*) AS n FROM chunks WHERE ecosystem = 'cargo' AND name = ?")
+                .get('collides') as {n: number}
+            expect(cargoAfter.n).toBe(cargoBefore)
+        } finally {
+            cache.close()
+        }
+    })
 })

@@ -327,6 +327,60 @@ describe('end to end', () => {
         }
     })
 
+    test('the lock decides the version, and an older one is kept beside it', async () => {
+        // A package index keeps every version it has seen — unlike the project
+        // corpus, which keeps only its newest. Moving the lock back must therefore
+        // be a cache HIT, not a re-index.
+        const cache = openCache(':memory:')
+        const project = fs.mkdtempSync(path.join(os.tmpdir(), 'eco-cargo-lock-'))
+        fs.writeFileSync(path.join(project, 'Cargo.toml'), '[package]\nname = "p"\n', 'utf8')
+        const pin = (version: string): void =>
+            fs.writeFileSync(
+                path.join(project, 'Cargo.lock'),
+                `version = 4\n\n[[package]]\nname = "many"\nversion = "${version}"\n`,
+                'utf8'
+            )
+        const home = fs.mkdtempSync(path.join(os.tmpdir(), 'eco-cargo-home-'))
+        for (const version of ['1.0.0', '2.0.0']) {
+            const dir = path.join(home, 'registry', 'src', 'index', `many-${version}`, 'src')
+            fs.mkdirSync(dir, {recursive: true})
+            fs.writeFileSync(path.join(dir, 'lib.rs'), `pub fn v${version[0]}() {}`, 'utf8')
+        }
+        const ask = async (): Promise<{version: string; hitCache: boolean}> => {
+            const r = await docsRaw({
+                pkg: 'many',
+                query: 'v1 v2',
+                cwd: project,
+                openCache: () => cache,
+                io: {cargoHome: home},
+                spawn: fakeSpawnByPrompt(() => ({stdout: '', exitCode: 0})),
+                npmVersionLookup: async () => null
+            })
+            if (r.kind !== 'ok') throw new Error(`expected ok, got ${r.kind}`)
+            return {version: r.pkg.version, hitCache: r.hitCache}
+        }
+
+        try {
+            pin('1.0.0')
+            expect(await ask()).toEqual({version: '1.0.0', hitCache: false})
+            pin('2.0.0')
+            expect(await ask()).toEqual({version: '2.0.0', hitCache: false})
+            pin('1.0.0')
+            expect(await ask()).toEqual({version: '1.0.0', hitCache: true})
+
+            const versions = cache.db
+                .prepare(
+                    "SELECT DISTINCT version FROM chunks WHERE ecosystem = 'cargo' AND name = 'many' ORDER BY version"
+                )
+                .all() as {version: string}[]
+            expect(versions.map(v => v.version)).toEqual(['1.0.0', '2.0.0'])
+        } finally {
+            cache.close()
+            fs.rmSync(project, {recursive: true, force: true})
+            fs.rmSync(home, {recursive: true, force: true})
+        }
+    })
+
     test('a Tauri repo reads the crate it has, and refuses the name it does not', async () => {
         const cache = openCache(':memory:')
         let installs = 0
