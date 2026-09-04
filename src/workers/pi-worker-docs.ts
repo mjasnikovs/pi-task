@@ -9,6 +9,7 @@ import {retrieveChunks as defaultRetrieveChunks} from './docs-retrieve.js'
 import {docsLookup, type DocsCorpus, type DocsLookup} from './docs-lookup.js'
 import {projectCorpus} from './docs-project.js'
 import {docsRaw, packageCorpus, buildVersionBanner, type AutoInstallPin} from './docs-core.js'
+import {ECOSYSTEMS, type EcosystemId} from './docs-ecosystems.js'
 import {
     npmVersionLookup as defaultNpmVersionLookup,
     formatNpmVersionSection
@@ -20,6 +21,7 @@ import {
     makeWorkerTool,
     workerAnswer,
     workerUnavailable,
+    type CachePackage,
     type WorkerOutcome
 } from './shared.js'
 import {isTypeOnlyAnswer} from '../task/type-only-answer.js'
@@ -35,12 +37,18 @@ const RENDER_QUERY_MAX = 100
 const Params = Type.Object({
     module: Type.String({
         description:
-            'Bare npm module name (e.g. "zod", "@scope/name", "react/jsx-runtime"), OR "." to look up the current project\'s own source code. npm packages must be installed in node_modules.'
+            'Bare package name (e.g. "zod", "@scope/name", "react/jsx-runtime"), OR "." to look up the current project\'s own source code.'
     }),
     query: Type.String({
         description:
             'What to extract from the docs. The child pi reads ranked chunks and returns ONLY content answering this.'
-    })
+    }),
+    ecosystem: Type.Optional(
+        Type.Union([Type.Literal('npm'), Type.Literal('cargo'), Type.Literal('hackage')], {
+            description:
+                'Which registry to read. Only needed in a repo holding more than one package manifest; otherwise the manifest decides.'
+        })
+    )
 })
 
 interface DocsDetails {
@@ -51,7 +59,10 @@ interface DocsDetails {
     childExitCode?: number
     indexingMs?: number
     indexedFiles?: number
-    resolveError?: 'not_installed' | 'invalid_name'
+    /** Which registry the answer was read from. Absent for the project-source path. */
+    ecosystem?: EcosystemId
+    resolveError?:
+        'not_installed' | 'invalid_name' | 'unsupported_ecosystem' | 'ambiguous_ecosystem'
     cacheError?: string
     aborted?: boolean
     autoInstalled?: boolean
@@ -159,18 +170,24 @@ export function registerPiWorkerDocs(
         name: 'pi-worker-docs',
         label: 'Pi Worker Docs',
         description:
-            'Look up an INSTALLED npm package and return a focused, version-pinned '
-            + 'answer from its .d.ts types and README, PLUS the latest published version '
-            + 'from a live npm registry call. USE THIS BEFORE ANSWERING any question '
+            'Look up an INSTALLED package and return a focused, version-pinned '
+            + 'answer from its type declarations and README, PLUS the latest published '
+            + 'version from a live registry call. USE THIS BEFORE ANSWERING any question '
             + 'about how to use a library, what it exports, its types/overloads/config, '
-            + 'or the latest published version of an npm package. Do NOT answer package '
+            + 'or the latest published version of a package. Do NOT answer package '
             + 'APIs from memory, do NOT run `npm view`/bash to get a package version, and '
             + 'do NOT web-search for an installed package — this tool is the source of '
             + 'truth and is version-pinned to what is actually installed (training-data '
             + 'versions and APIs are typically months stale).\n'
+            + 'SUPPORTED ECOSYSTEMS: npm (package.json), cargo (Cargo.toml), hackage '
+            + '(*.cabal). The MANIFEST in the working '
+            + 'directory decides which registry a name is looked up in — you do not. If '
+            + 'the directory holds none of those manifests, this tool REFUSES and '
+            + 'installs nothing; use `pi-worker-search` or `pi-worker-fetch` for that '
+            + 'package instead.\n'
             + 'For a non-package framework/runtime version (e.g. Node.js, Ubuntu), use '
             + '`pi-worker-search` instead. If the package is not installed it is '
-            + 'auto-installed via bun add or npm install. The cache lives at '
+            + "auto-installed from the project's own registry. The cache lives at "
             + '~/.cache/pi-worker/docs.sqlite, keyed by exact installed version; the '
             + 'registry lookup is best-effort and silently absent when offline.\n'
             + '\n'
@@ -259,7 +276,8 @@ export function registerPiWorkerDocs(
                 if (projectResult.kind === 'no_chunks') {
                     // The project IS indexed and has nothing — a real answer.
                     return workerAnswer(
-                        `Project "${projectResult.projectName}" has no .ts/.tsx files indexed.`,
+                        `Project "${projectResult.projectName}" has no `
+                            + `${projectResult.sourceLabel} files indexed.`,
                         {
                             hitCache: projectResult.hitCache,
                             indexedFiles: projectResult.filesIngested
@@ -309,6 +327,7 @@ export function registerPiWorkerDocs(
                 pkg: params.module,
                 query: params.query,
                 cwd: ctx.cwd,
+                ...(params.ecosystem ? {ecosystem: params.ecosystem} : {}),
                 resolvePackage: internals.resolvePackage,
                 ensureIndexed: internals.ensureIndexed,
                 retrieveChunks: internals.retrieveChunks,
@@ -319,7 +338,9 @@ export function registerPiWorkerDocs(
             })
 
             const npmHeader =
-                rawResult.npmVersion ? `${formatNpmVersionSection(rawResult.npmVersion)}\n\n` : ''
+                rawResult.npmVersion ?
+                    `${formatNpmVersionSection(rawResult.npmVersion, rawResult.registryLabel)}\n\n`
+                :   ''
             const npmDetails =
                 rawResult.npmVersion ?
                     {
@@ -352,16 +373,20 @@ export function registerPiWorkerDocs(
                     rawResult.autoInstallPin,
                     rawResult.pkg.name,
                     rawResult.pkg.version,
-                    ctx.cwd
+                    ctx.cwd,
+                    ECOSYSTEMS[rawResult.pkg.ecosystem]
                 )
                 // The package resolved and genuinely ships nothing to read — an
                 // answer, and a stable one for this run.
                 return workerAnswer(
                     banner
                         + npmHeader
-                        + `Package ${rawResult.pkg.name}@${rawResult.pkg.version} has no .d.ts files or README. Use pi-worker to read source directly.`,
+                        + `Package ${rawResult.pkg.name}@${rawResult.pkg.version} has no `
+                        + `${ECOSYSTEMS[rawResult.pkg.ecosystem].surfaceLabel}. Use pi-worker to `
+                        + 'read source directly.',
                     {
                         version: rawResult.pkg.version,
+                        ecosystem: rawResult.pkg.ecosystem,
                         hitCache: rawResult.hitCache,
                         indexedFiles: rawResult.indexedFiles ?? 0,
                         cacheError: rawResult.cacheError,
@@ -377,10 +402,12 @@ export function registerPiWorkerDocs(
                 rawResult.autoInstallPin,
                 pkg.name,
                 pkg.version,
-                ctx.cwd
+                ctx.cwd,
+                ECOSYSTEMS[pkg.ecosystem]
             )
             const baseDetails: DocsDetails = {
                 version: pkg.version,
+                ecosystem: pkg.ecosystem,
                 hitCache,
                 chunksRetrieved: chunks.length,
                 indexingMs,
@@ -514,15 +541,40 @@ export function docsCacheable(
 /** The docs cache key: a package's answer is per (module, question), with the question
  *  lowercased and its whitespace collapsed so phrasing variants share one entry. Returns
  *  null for the project-source `.` lookup, which is never cached — the working tree
- *  mutates as tasks implement. */
-export function docsCacheKey(params: {module: string; query: string}): string | null {
-    return params.module === '.' ?
-            null
-        :   `${normalizeQuery(params.module)}::${normalizeQuery(params.query)}`
+ *  mutates as tasks implement.
+ *
+ *  The ecosystem joins the key only when the caller named one, so the keys of every
+ *  call that lets the manifest decide are the ones they always were. */
+export function docsCacheKey(params: {
+    module: string
+    query: string
+    ecosystem?: string
+}): string | null {
+    if (params.module === '.') return null
+    const scope = params.ecosystem ? `${params.ecosystem}::` : ''
+    return `${scope}${normalizeQuery(params.module)}::${normalizeQuery(params.query)}`
 }
 
 /** Package provenance for per-entry resume invalidation: the package ROOT of the
- *  specifier (`hono/client` → `hono`), and undefined for the project-source `.`. */
-export function docsCachePkg(params: {module: string}): string | undefined {
-    return params.module === '.' ? undefined : packageRootOf(params.module)
+ *  specifier (`hono/client` → `hono`), and undefined for the project-source `.`.
+ *
+ *  The ecosystem comes from the RESOLVED lookup, not from the optional argument.
+ *  Reading the argument would record npm for every single-manifest cargo or cabal
+ *  project — the ordinary case, since the argument only exists to disambiguate a
+ *  polyglot repo — and the entry's version would then be looked for in a
+ *  `package.json` that is not there, leaving it un-prunable forever. */
+export function docsCachePkg(
+    params: {module: string},
+    details: Pick<DocsDetails, 'ecosystem'>
+): CachePackage | undefined {
+    if (params.module === '.') return undefined
+    const ecosystem = details.ecosystem ?? 'npm'
+    // The ROW knows how its own specifiers nest: `hono/client` → `hono`, but
+    // `serde_json::Value` → `serde_json`. Splitting on `/` alone recorded the
+    // whole path, and no manifest names that — so the entry's version came back
+    // undefined and it was never invalidated again.
+    return {
+        pkg: ECOSYSTEMS[ecosystem].parentPackage(params.module),
+        ...(ecosystem !== 'npm' ? {ecosystem} : {})
+    }
 }

@@ -24,24 +24,38 @@ export interface CacheHandle {
     close(): void
 }
 
+/**
+ * Bump whenever the shape below changes in a way old rows cannot satisfy. The
+ * migration is a DROP and rebuild: this is a derived cache of package sources,
+ * so re-indexing costs a walk, and hand-written ALTERs cost a defect class.
+ */
+const SCHEMA_VERSION = 1
+
+/**
+ * `ecosystem` scopes every row to the registry it came from, so `text` on npm and
+ * `text` on Hackage are different packages. Project-source rows use their own
+ * scope value rather than a registry id.
+ */
 const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS packages (
+  ecosystem    TEXT NOT NULL DEFAULT 'npm',
   name         TEXT NOT NULL,
   version      TEXT NOT NULL,
   content_hash TEXT NOT NULL,
   indexed_at   INTEGER NOT NULL,
-  PRIMARY KEY (name, version)
+  PRIMARY KEY (ecosystem, name, version)
 );
 
 CREATE TABLE IF NOT EXISTS chunks (
   id        INTEGER PRIMARY KEY AUTOINCREMENT,
+  ecosystem TEXT NOT NULL DEFAULT 'npm',
   name      TEXT NOT NULL,
   version   TEXT NOT NULL,
   file_path TEXT NOT NULL,
   kind      TEXT NOT NULL CHECK (kind IN ('dts','readme')),
   content   TEXT NOT NULL
 );
-CREATE INDEX IF NOT EXISTS chunks_pkg ON chunks(name, version);
+CREATE INDEX IF NOT EXISTS chunks_pkg ON chunks(ecosystem, name, version);
 
 CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
   content,
@@ -55,6 +69,15 @@ END;
 CREATE TRIGGER IF NOT EXISTS chunks_ad AFTER DELETE ON chunks BEGIN
   INSERT INTO chunks_fts(chunks_fts, rowid, content) VALUES('delete', old.id, old.content);
 END;
+`
+
+// Order matters: the triggers and the FTS index reference `chunks`.
+const DROP_SQL = `
+DROP TRIGGER IF EXISTS chunks_ai;
+DROP TRIGGER IF EXISTS chunks_ad;
+DROP TABLE IF EXISTS chunks_fts;
+DROP TABLE IF EXISTS chunks;
+DROP TABLE IF EXISTS packages;
 `
 
 const req = createRequire(import.meta.url)
@@ -87,9 +110,35 @@ export function openCache(dbPath?: string): CacheHandle {
     db.exec('PRAGMA journal_mode = WAL;')
     db.exec('PRAGMA synchronous = NORMAL;')
     db.exec('PRAGMA foreign_keys = ON;')
-    db.exec(SCHEMA_SQL)
+    // A blocking busy handler, not a tuned delay: research children open this
+    // cache concurrently, and the loser of the migration lock has to WAIT for the
+    // winner's COMMIT rather than throw SQLITE_BUSY on the spot. The bound only
+    // stops a wedged handle hanging the worker forever.
+    db.exec('PRAGMA busy_timeout = 30000;')
+    migrate(db)
     return {
         db,
         close: () => db.close()
+    }
+}
+
+/**
+ * `CREATE TABLE IF NOT EXISTS` is a no-op against an older shape, so the version
+ * check has to run BEFORE it or a stale table survives untouched.
+ */
+function migrate(db: SyncDb): void {
+    db.exec('BEGIN IMMEDIATE')
+    try {
+        const row = db.prepare('PRAGMA user_version').get() as {user_version: number} | null
+        // A brand-new database also reads 0, hence DROP ... IF EXISTS.
+        if ((row?.user_version ?? 0) < SCHEMA_VERSION) {
+            db.exec(DROP_SQL)
+            db.exec(`PRAGMA user_version = ${SCHEMA_VERSION};`)
+        }
+        db.exec(SCHEMA_SQL)
+        db.exec('COMMIT')
+    } catch (err) {
+        db.exec('ROLLBACK')
+        throw err
     }
 }

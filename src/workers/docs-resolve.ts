@@ -1,6 +1,7 @@
 import {createRequire} from 'node:module'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
+import type {EcosystemId} from './docs-ecosystems.js'
 
 const DTS_RE = /\.d\.(?:ts|mts|cts)$/
 
@@ -10,10 +11,13 @@ export function isDtsFile(name: string): boolean {
 }
 
 export interface ResolvedPackage {
+    /** Which registry this package came from. Scopes it in the docs cache. */
+    ecosystem: EcosystemId
     name: string
     version: string
     root: string
-    entryDts: string | null
+    /** The file holding the package's public API surface, if it has one. */
+    entry: string | null
     readme: string | null
 }
 
@@ -29,7 +33,7 @@ export class ResolveError extends Error {
 
 const MODULE_NAME_RE = /^(?:@[a-z0-9-_.]+\/)?[a-z0-9-_.]+(?:\/[a-z0-9-_./]+)?$/i
 
-function isValidModuleName(name: string): boolean {
+export function isValidModuleName(name: string): boolean {
     if (!name || name.includes('..') || name.startsWith('/')) return false
     return MODULE_NAME_RE.test(name)
 }
@@ -175,10 +179,11 @@ export function resolvePackage(moduleName: string, cwd: string): ResolvedPackage
     const root = path.dirname(pkgJsonPath)
     const pkg = readPackageJson(pkgJsonPath)
     return {
+        ecosystem: 'npm',
         name: pkg.name ?? parent,
         version: pkg.version ?? '0.0.0',
         root,
-        entryDts: resolveEntryDts(moduleName, parent, root, pkg),
+        entry: resolveEntryDts(moduleName, parent, root, pkg),
         readme: findReadme(root)
     }
 }
@@ -307,7 +312,7 @@ export function detectTypesRedirect(pkg: ResolvedPackage): string | null {
     // A package that ships multiple declaration files is an aggregator, not a
     // redirect stub — use its own types.
     if (countTypeFiles(pkg.root, 2) > 1) return null
-    const entry = pkg.entryDts ?? findIndexDts(pkg.root)
+    const entry = pkg.entry ?? findIndexDts(pkg.root)
     if (!entry) return null
     let content: string
     try {

@@ -2,7 +2,12 @@ import {test, expect, describe} from 'bun:test'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
-import {projectDocsRaw, buildProjectPrompt, getProjectName} from '../../src/workers/docs-project.js'
+import {
+    projectDocsRaw,
+    buildProjectPrompt,
+    getProjectName,
+    getProjectFiles
+} from '../../src/workers/docs-project.js'
 import {openCache} from '../../src/workers/docs-cache.js'
 import {abstentionSentence, isAbstention} from '../../src/workers/abstention.js'
 
@@ -116,4 +121,101 @@ test('the project prompt instructs the abstention the host actually recognises',
     // and by two of the numbered rules; all of them must spell it the same way.
     expect(p).toContain('<project-content>')
     expect(p.match(/<project-content>/g)?.length).toBeGreaterThan(1)
+})
+
+test('the project walk skips a cargo target/ and a cabal dist-newstyle/', () => {
+    // Build output is not project source. `git ls-files` never lists it, but the
+    // fallback walk is what runs outside a repo — and it only knew npm's skips.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'docs-project-skip-'))
+    fs.writeFileSync(path.join(dir, 'Cargo.toml'), '[package]\nname = "x"\n', 'utf8')
+    fs.mkdirSync(path.join(dir, 'src'), {recursive: true})
+    fs.writeFileSync(path.join(dir, 'src', 'lib.rs'), 'pub fn a() {}', 'utf8')
+    fs.mkdirSync(path.join(dir, 'target', 'debug'), {recursive: true})
+    fs.writeFileSync(path.join(dir, 'target', 'debug', 'build.rs'), 'fn main() {}', 'utf8')
+
+    const files = getProjectFiles(dir).map(f => path.relative(dir, f).replace(/\\/g, '/'))
+    expect(files).toContain('src/lib.rs')
+    expect(files.some(f => f.startsWith('target/'))).toBe(false)
+    fs.rmSync(dir, {recursive: true, force: true})
+})
+
+test('the empty answer names the extensions THIS project was searched for', () => {
+    // The wording was written when only .ts/.tsx were ever indexed. A cargo-only
+    // project was told the tool had looked for TypeScript.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'docs-project-empty-'))
+    fs.writeFileSync(path.join(dir, 'Cargo.toml'), '[package]\nname = "app"\n', 'utf8')
+    const cache = openCache(':memory:')
+    try {
+        const result = projectDocsRaw(cache, dir, 'anything', undefined, () => [])
+        expect(result.kind).toBe('no_chunks')
+        if (result.kind !== 'no_chunks') return
+        expect(result.sourceLabel).toContain('.rs')
+        expect(result.sourceLabel).not.toContain('.tsx')
+    } finally {
+        cache.close()
+        fs.rmSync(dir, {recursive: true, force: true})
+    }
+})
+
+test("a dependency's skip list does not hide the PROJECT's own tests", () => {
+    // `skipDirs` says which directories of a DOWNLOADED package are not its API.
+    // Folded into the project's own walk, a Tauri repo stopped indexing its own
+    // TypeScript tests and examples because cargo's row names those directories.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'docs-project-both-'))
+    fs.writeFileSync(path.join(dir, 'package.json'), '{"name":"app"}', 'utf8')
+    fs.mkdirSync(path.join(dir, 'src-tauri'), {recursive: true})
+    fs.writeFileSync(path.join(dir, 'src-tauri', 'Cargo.toml'), '[package]\nname="a"\n', 'utf8')
+    fs.mkdirSync(path.join(dir, 'tests'), {recursive: true})
+    fs.writeFileSync(path.join(dir, 'tests', 'login.test.ts'), 'export const t = 1', 'utf8')
+    fs.mkdirSync(path.join(dir, 'examples'), {recursive: true})
+    fs.writeFileSync(path.join(dir, 'examples', 'demo.ts'), 'export const d = 1', 'utf8')
+    fs.mkdirSync(path.join(dir, 'target'), {recursive: true})
+    fs.writeFileSync(path.join(dir, 'target', 'out.rs'), 'fn main() {}', 'utf8')
+
+    const files = getProjectFiles(dir).map(f => path.relative(dir, f).replace(/\\/g, '/'))
+    expect(files).toContain('tests/login.test.ts')
+    expect(files).toContain('examples/demo.ts')
+    // Build output is still not project source.
+    expect(files.some(f => f.startsWith('target/'))).toBe(false)
+    fs.rmSync(dir, {recursive: true, force: true})
+})
+
+test("a binary crate's OWN source indexes — private items are the question there", () => {
+    // `profile.surface` strips a DEPENDENCY down to its published API. Applying it
+    // to the project's own code indexed a Rust `main.rs` to nothing at all, and
+    // `pi-worker-docs(".", …)` — which the APIS prompt tells the worker to use —
+    // answered "no chunks" for the whole Rust half of a repo.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'docs-project-rs-'))
+    fs.writeFileSync(path.join(dir, 'Cargo.toml'), '[package]\nname = "app"\n', 'utf8')
+    fs.mkdirSync(path.join(dir, 'src'), {recursive: true})
+    fs.writeFileSync(
+        path.join(dir, 'src', 'main.rs'),
+        'struct AppState { token: Option<String> }\n\n'
+            + 'impl AppState {\n    fn new() -> Self { AppState { token: None } }\n}\n\n'
+            + '#[tauri::command]\nfn handle_login(user: String) -> Result<String, String> { Ok(user) }\n',
+        'utf8'
+    )
+
+    const cache = openCache(':memory:')
+    try {
+        const files = getProjectFiles(dir)
+        const result = projectDocsRaw(cache, dir, 'handle_login', undefined, () => files)
+        expect(result.kind).toBe('ok')
+        if (result.kind !== 'ok') return
+        const text = result.chunks.map(c => c.content).join('\n')
+        expect(text).toContain('handle_login')
+        // Not just the head — the body is what a question about your own code needs.
+        expect(text).toContain('Ok(user)')
+
+        // And the private type is INDEXED, whether or not this query ranks it.
+        const indexed = cache.db
+            .prepare("SELECT content FROM chunks WHERE ecosystem = 'project'")
+            .all() as {content: string}[]
+        const all = indexed.map(r => r.content).join('\n')
+        expect(all).toContain('struct AppState')
+        expect(all).toContain('impl AppState')
+    } finally {
+        cache.close()
+        fs.rmSync(dir, {recursive: true, force: true})
+    }
 })

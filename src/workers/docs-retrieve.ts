@@ -8,6 +8,8 @@ export interface RetrievedChunk {
 }
 
 export interface RetrieveOptions {
+    /** Registry scope of the rows to search, or the project-source scope. */
+    ecosystem: string
     name: string
     version: string
     query: string
@@ -66,17 +68,22 @@ function buildFtsQuery(tokens: string[]): string {
     return tokens.map(t => `"${t}"`).join(' OR ')
 }
 
-function fallbackChunks(cache: CacheHandle, name: string, version: string): RetrievedChunk[] {
+function fallbackChunks(
+    cache: CacheHandle,
+    ecosystem: string,
+    name: string,
+    version: string
+): RetrievedChunk[] {
     const dts = cache.db
         .prepare(
-            "SELECT file_path, kind, content, 0 AS rank FROM chunks WHERE name = ? AND version = ? AND kind = 'dts' ORDER BY file_path, id LIMIT 1"
+            "SELECT file_path, kind, content, 0 AS rank FROM chunks WHERE ecosystem = ? AND name = ? AND version = ? AND kind = 'dts' ORDER BY file_path, id LIMIT 1"
         )
-        .all(name, version) as ChunkRow[]
+        .all(ecosystem, name, version) as ChunkRow[]
     const readme = cache.db
         .prepare(
-            "SELECT file_path, kind, content, 0 AS rank FROM chunks WHERE name = ? AND version = ? AND kind = 'readme' ORDER BY id LIMIT 1"
+            "SELECT file_path, kind, content, 0 AS rank FROM chunks WHERE ecosystem = ? AND name = ? AND version = ? AND kind = 'readme' ORDER BY id LIMIT 1"
         )
-        .all(name, version) as ChunkRow[]
+        .all(ecosystem, name, version) as ChunkRow[]
     const out: RetrievedChunk[] = []
     for (const r of dts) {
         out.push({
@@ -125,7 +132,7 @@ export function retrieveChunks(cache: CacheHandle, opts: RetrieveOptions): Retri
     const tokens = tokenize(opts.query)
 
     if (tokens.length === 0) {
-        return enforceBudget(fallbackChunks(cache, opts.name, opts.version), budget)
+        return enforceBudget(fallbackChunks(cache, opts.ecosystem, opts.name, opts.version), budget)
     }
 
     const ftsQuery = buildFtsQuery(tokens)
@@ -136,17 +143,17 @@ export function retrieveChunks(cache: CacheHandle, opts: RetrieveOptions): Retri
                 `SELECT c.file_path, c.kind, c.content, bm25(chunks_fts) AS rank
                  FROM chunks_fts
                  JOIN chunks c ON c.id = chunks_fts.rowid
-                 WHERE c.name = ?1 AND c.version = ?2 AND chunks_fts MATCH ?3
+                 WHERE c.ecosystem = ?1 AND c.name = ?2 AND c.version = ?3 AND chunks_fts MATCH ?4
                  ORDER BY rank
-                 LIMIT ?4`
+                 LIMIT ?5`
             )
-            .all(opts.name, opts.version, ftsQuery, limit) as ChunkRow[]
+            .all(opts.ecosystem, opts.name, opts.version, ftsQuery, limit) as ChunkRow[]
     } catch {
-        return enforceBudget(fallbackChunks(cache, opts.name, opts.version), budget)
+        return enforceBudget(fallbackChunks(cache, opts.ecosystem, opts.name, opts.version), budget)
     }
 
     if (rows.length === 0) {
-        return enforceBudget(fallbackChunks(cache, opts.name, opts.version), budget)
+        return enforceBudget(fallbackChunks(cache, opts.ecosystem, opts.name, opts.version), budget)
     }
 
     const mapped: RetrievedChunk[] = rows.map(r => ({

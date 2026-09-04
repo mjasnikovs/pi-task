@@ -1,8 +1,12 @@
 import {test, expect, describe} from 'bun:test'
+import * as fs from 'node:fs'
+import * as os from 'node:os'
+import * as path from 'node:path'
 import {
     buildExternalContext,
     gatherExternalContext,
-    type ExternalContextLookups
+    type ExternalContextLookups,
+    type VersionBlock
 } from '../../src/task/external-context.js'
 import type {PhaseDeps} from '../../src/task/child-runner.js'
 
@@ -11,7 +15,14 @@ const deps = {cwd: '/tmp', signal: new AbortController().signal}
 function docsOk(pkg: string, content: string, npmLatest?: string): PhaseDeps['docsRaw'] {
     return async () => ({
         kind: 'ok',
-        pkg: {name: pkg, version: '1.0.0', root: '/tmp', entryDts: null, readme: null},
+        pkg: {
+            ecosystem: 'npm' as const,
+            name: pkg,
+            version: '1.0.0',
+            root: '/tmp',
+            entry: null,
+            readme: null
+        },
         chunks: [{filePath: 'x', kind: 'dts', content, rank: 0}],
         hitCache: true,
         ...(npmLatest ? {npmVersion: {pkg, latest: npmLatest, recent: [npmLatest]}} : {})
@@ -66,7 +77,8 @@ describe('gatherExternalContext', () => {
                             name: pkg,
                             version: '1.0.0',
                             root: '/tmp',
-                            entryDts: null,
+                            ecosystem: 'npm',
+                            entry: null,
                             readme: null
                         },
                         chunks: [{filePath: 'x', kind: 'dts', content: `${pkg} docs`, rank: 0}],
@@ -127,14 +139,29 @@ describe('gatherExternalContext', () => {
         expect(out).toContain('- Stripe')
     })
 
-    test('tolerates a failing lookup and yields no block for it', async () => {
+    test('a failing docs lookup yields no BODY, but still yields the version', async () => {
+        // Every named dep gets a version block. A docs lookup that blew up is
+        // exactly when the standalone lookup has to cover for it — dropping both
+        // leaves the model told to quote a block that is not there.
         const out = await gatherExternalContext('use `zod` for validation', {
             ...deps,
             docsRaw: async () => {
                 throw new Error('lookup blew up')
-            }
+            },
+            npmVersionLookup: async pkg => ({pkg, latest: '3.25.0', recent: ['3.25.0']})
         })
-        // The package was a target, but its lookup failed -> nothing to assemble.
+        expect(out).toContain('### npm: zod')
+        expect(out).not.toContain('### docs: zod')
+    })
+
+    test('a failing docs lookup with no version either yields nothing', async () => {
+        const out = await gatherExternalContext('use `zod` for validation', {
+            ...deps,
+            docsRaw: async () => {
+                throw new Error('lookup blew up')
+            },
+            npmVersionLookup: async () => null
+        })
         expect(out).toBe('')
     })
 })
@@ -173,6 +200,118 @@ describe('buildExternalContext policy', () => {
     })
 
     const SERVICES = 'EXTERNAL-DEPENDENCIES\n- Stripe  a\n- Twilio  b\n- Sendgrid  c\n'
+
+    test('a standalone version block is headed by the registry it was asked', async () => {
+        // The docs-target blocks already carried the label; this second, cheaper
+        // lookup did not — so a cargo project emitted crates.io versions under
+        // "### npm:", which is the wrong-registry claim this tool exists to stop.
+        const out = await buildExternalContext(
+            'use `tokio` and `serde`',
+            deps,
+            lookups(newCalls()),
+            {
+                targetCap: 1,
+                versionLookup: pkg =>
+                    Promise.resolve({
+                        info: {pkg, latest: '1.53.1', recent: []},
+                        label: 'crates.io'
+                    })
+            }
+        )
+        expect(out).toContain('### crates.io: serde')
+        expect(out).not.toContain('### npm: serde')
+    })
+
+    test('a docs target that came back WITHOUT a version still gets one', async () => {
+        // `extraVersionPkgs` drops every docs target on the assumption the docs
+        // result carries the version. In a directory with no manifest docsRaw
+        // refuses before it asks any registry, so that block was silently lost.
+        const asked: string[] = []
+        const out = await buildExternalContext(
+            'use `hono`',
+            deps,
+            {
+                ...lookups(newCalls()),
+                docs: async () => ({body: 'hono body'})
+            },
+            {
+                versionLookup: pkg => {
+                    asked.push(pkg)
+                    return Promise.resolve({
+                        info: {pkg, latest: '4.9.0', recent: []},
+                        label: 'npm'
+                    })
+                }
+            }
+        )
+        expect(asked).toContain('hono')
+        expect(out).toContain('### npm: hono')
+        expect(out).toContain('### docs: hono')
+    })
+
+    test('every named dep still gets a version block in a POLYGLOT repo', async () => {
+        // Deciding the registry once for the whole repo made any two-manifest
+        // project ambiguous, and then NO block was emitted at all — worse than
+        // always-npm, because the CONTEXT prompt tells the model to quote a block
+        // that would never be there. The decision belongs to each name.
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ext-poly-'))
+        fs.writeFileSync(
+            path.join(dir, 'package.json'),
+            JSON.stringify({
+                name: 'p',
+                dependencies: {
+                    zod: '^3.0.0',
+                    hono: '^4.0.0',
+                    react: '^19.0.0',
+                    'react-dom': '^19.0.0',
+                    wouter: '^3.0.0',
+                    clsx: '^2.0.0',
+                    nanoid: '^5.0.0'
+                }
+            }),
+            'utf8'
+        )
+        fs.writeFileSync(path.join(dir, 'Cargo.toml'), '[package]\nname = "p"\n', 'utf8')
+        fs.writeFileSync(
+            path.join(dir, 'Cargo.lock'),
+            'version = 4\n\n[[package]]\nname = "tokio"\nversion = "1.53.1"\n',
+            'utf8'
+        )
+        // More names than the docs cap, so the tail falls to the cheap standalone
+        // version lookup — the path that went silent.
+        const asked: string[] = []
+        const source =
+            'add `zod`, `hono`, `react`, `react-dom`, `wouter`, `clsx`, `nanoid` and `tokio`'
+        const out = await gatherExternalContext(source, {
+            cwd: dir,
+            signal: new AbortController().signal,
+            docsRaw: async () => ({
+                kind: 'no_chunks',
+                pkg: {
+                    ecosystem: 'npm',
+                    name: 'x',
+                    version: '1',
+                    root: '/',
+                    entry: null,
+                    readme: null
+                },
+                hitCache: false
+            }),
+            npmVersionLookup: async (pkg: string) => {
+                asked.push(pkg)
+                return {pkg, latest: `9.9.9-${pkg}`, recent: []}
+            }
+        } as never)
+        // Past the docs cap, a dep package.json declares still gets its npm block.
+        expect(asked.length).toBeGreaterThan(0)
+        for (const pkg of asked) expect(out).toContain(`### npm: ${pkg}`)
+        expect(asked.some(p => ['clsx', 'nanoid', 'wouter'].includes(p))).toBe(true)
+        // tokio is pinned by Cargo.lock and by nothing npm has, so npm is never
+        // asked about it — that is the wrong-registry version this branch removes.
+        expect(asked).not.toContain('tokio')
+        expect(out).not.toContain('### npm: tokio')
+        fs.rmSync(dir, {recursive: true, force: true})
+    })
 
     test('targetCap spends its budget on packages before urls', async () => {
         const calls = newCalls()
@@ -230,7 +369,7 @@ describe('buildExternalContext policy', () => {
         const withVersions = await buildExternalContext(text, deps, lookups(on), {
             versionLookup: async pkg => {
                 asked.push(pkg)
-                return {pkg, latest: `4.1.0-${pkg}`, recent: []}
+                return {info: {pkg, latest: `4.1.0-${pkg}`, recent: []}, label: 'npm'}
             }
         })
         // The three docs targets carry their own version; only the extras are looked up.
@@ -267,11 +406,9 @@ describe('buildExternalContext policy', () => {
         // No docs/url/service targets at all. The research path deliberately
         // returns '' before spending a single registry GET.
         const asked: string[] = []
-        const versionLookup = async (
-            pkg: string
-        ): Promise<{pkg: string; latest: string; recent: string[]}> => {
+        const versionLookup = async (pkg: string): Promise<VersionBlock> => {
             asked.push(pkg)
-            return {pkg, latest: '1.0.0', recent: []}
+            return {info: {pkg, latest: '1.0.0', recent: []}, label: 'npm'}
         }
         const out = await buildExternalContext('no targets here', deps, lookups(newCalls()), {
             versionLookup,

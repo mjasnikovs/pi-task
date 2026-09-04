@@ -6,6 +6,7 @@
 import {fileURLToPath} from 'node:url'
 import type {ExtensionCommandContext} from '@earendil-works/pi-coding-agent'
 import {docsFocused} from '../workers/docs-core.js'
+import {detectEcosystems} from '../workers/docs-ecosystems.js'
 import {fetchFocused} from '../workers/fetch-core.js'
 import {runWorker, type RunWorkerInput} from '../workers/pi-worker-core.js'
 import {
@@ -780,7 +781,8 @@ export async function phaseResearch(deps: PhaseDeps, refined: string): Promise<s
                 + promptHeader
                 + RESEARCH_APIS_PROMPT(
                     refined,
-                    prior.find(s => s.name === 'FILES')?.text || undefined
+                    prior.find(s => s.name === 'FILES')?.text || undefined,
+                    detectEcosystems(deps.cwd)
                 )
                 + (searchConfigured() ? RESEARCH_SEARCH_HINT : '')
                 // Empty unless PI_TASK_PROJECT_DOCS_BUDGET is set. The tool-side

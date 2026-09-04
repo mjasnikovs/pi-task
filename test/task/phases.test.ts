@@ -1217,7 +1217,8 @@ describe('phaseResearch enrichment DI', () => {
                                 name: pkg,
                                 version: '1.0.0',
                                 root: '/tmp',
-                                entryDts: null,
+                                ecosystem: 'npm',
+                                entry: null,
                                 readme: null
                             },
                             chunks: [{filePath: 'x', kind: 'dts', content: 'fake docs', rank: 0}],
@@ -1275,7 +1276,8 @@ describe('phaseResearch enrichment DI', () => {
                             name: pkg,
                             version: '1.0.0',
                             root: '/tmp',
-                            entryDts: null,
+                            ecosystem: 'npm',
+                            entry: null,
                             readme: null
                         },
                         chunks: [{filePath: 'x', kind: 'dts', content: 'ZOD_DOCS_MARKER', rank: 0}],
@@ -1332,7 +1334,8 @@ describe('phaseResearch enrichment DI', () => {
                             name: pkg,
                             version: '1.0.0',
                             root: '/tmp',
-                            entryDts: null,
+                            ecosystem: 'npm',
+                            entry: null,
                             readme: null
                         },
                         chunks: [{filePath: 'x', kind: 'dts', content: 'DOCS_BODY', rank: 0}],
@@ -1403,24 +1406,27 @@ describe('phaseResearch enrichment DI', () => {
                             name: pkg,
                             version: '1.0.0',
                             root: '/tmp',
-                            entryDts: null,
+                            ecosystem: 'npm',
+                            entry: null,
                             readme: null
                         },
                         chunks: [{filePath: 'x', kind: 'dts', content: 'DOCS_ONLY', rank: 0}],
                         hitCache: true,
                         npmVersion: null
-                    })
+                    }),
+                    // A docs target with no version falls through to the standalone
+                    // lookup, so this has to be injected or the test goes live.
+                    npmVersionLookup: async () => null
                 },
                 'pin `zod` to exact version'
             )
             const withMarker = promptsSeen.filter(p => p.includes('DOCS_ONLY'))
             expect(withMarker.length).toBe(4)
-            // A successful lookup would have inserted "### npm: zod" followed
-            // by a "latest: <ver>" line into EXTERNAL CONTEXT. Verify neither
-            // appears in any of the four worker prompts. (The unrelated string
-            // "### npm: <pkg>" appears as a template instruction in the CONTEXT
-            // prompt — that's fine; we only care about the concrete `zod`
-            // injection.)
+            // Neither lookup produced a version, so no "### npm: zod" block and no
+            // "latest: <ver>" line reaches any of the four worker prompts. (The
+            // unrelated string "### npm: <pkg>" appears as a template instruction
+            // in the CONTEXT prompt — that's fine; we only care about the concrete
+            // `zod` injection.)
             for (const p of promptsSeen) {
                 expect(p).not.toContain('### npm: zod')
             }
@@ -1649,7 +1655,8 @@ describe('phaseResearch enrichment DI', () => {
                             name: pkg,
                             version: '1.0.0',
                             root: '/tmp',
-                            entryDts: null,
+                            ecosystem: 'npm',
+                            entry: null,
                             readme: null
                         },
                         chunks: [{filePath: 'x', kind: 'dts', content: 'ZOD_DOCS_MARKER', rank: 0}],
@@ -1706,7 +1713,8 @@ describe('phaseResearch enrichment DI', () => {
                             name: pkg,
                             version: '1.0.0',
                             root: '/tmp',
-                            entryDts: null,
+                            ecosystem: 'npm',
+                            entry: null,
                             readme: null
                         },
                         chunks: [{filePath: 'x', kind: 'dts', content: 'fake docs', rank: 0}],
@@ -1802,7 +1810,8 @@ describe('phaseAutoAnswer integration-unknown routing', () => {
                             name: pkg,
                             version: '1.0.0',
                             root: '/tmp',
-                            entryDts: null,
+                            ecosystem: 'npm',
+                            entry: null,
                             readme: null
                         },
                         version: '1.0.0',
@@ -1871,7 +1880,8 @@ describe('phaseAutoAnswer enrichment', () => {
                             name: pkg,
                             version: '1.0.0',
                             root: '/tmp',
-                            entryDts: null,
+                            ecosystem: 'npm',
+                            entry: null,
                             readme: null
                         },
                         version: '1.0.0',
@@ -3169,7 +3179,7 @@ async function observeResearchWorkers(
 }
 
 const apisWorker = (obs: Array<{tools: string; prompt: string}>) =>
-    obs.find(o => o.prompt.includes('NPM PACKAGES — use pi-worker-docs'))
+    obs.find(o => o.prompt.includes('content of an APIS section'))
 
 test('APIS worker gains search/fetch tools + hint when a Brave key is configured', async () => {
     await withTmpTaskDir(async cwd => {

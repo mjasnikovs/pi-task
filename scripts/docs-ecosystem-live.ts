@@ -1,0 +1,184 @@
+/**
+ * Run the docs tool against REAL packages on this machine, one line per target.
+ *
+ * The unit tests fake every spawn and every registry, which is what keeps CI
+ * honest on Windows and offline — and also what stops them from ever catching a
+ * wrong registry layout, a tar invocation `bsdtar` rejects, or a surface
+ * extractor that quietly returns nothing on real source. This is where that is
+ * checked, by hand, against the machine's own caches.
+ *
+ * Two numbers matter per target. The chunk set is what the answer is grounded
+ * in, so it must not move for npm between a before-tree and an after-tree. The
+ * invented-symbol rate is what a wrong-ecosystem answer shows up as: identifiers
+ * in the focused answer that appear nowhere in the package's own surface.
+ *
+ *   bun scripts/docs-ecosystem-live.ts               # raw only, no model child
+ *   bun scripts/docs-ecosystem-live.ts --focused     # also runs the extractor
+ *   bun scripts/docs-ecosystem-live.ts --focused --show   # print each answer
+ *
+ * `bun run test` globs `scripts/`, so nothing here runs on import.
+ */
+
+import {createHash} from 'node:crypto'
+import {execFileSync} from 'node:child_process'
+import * as os from 'node:os'
+import * as path from 'node:path'
+import {docsRaw, docsFocused} from '../src/workers/docs-core.js'
+import type {EcosystemId} from '../src/workers/docs-ecosystems.js'
+
+interface Target {
+    ecosystem: EcosystemId
+    cwd: string
+    pkg: string
+    query: string
+}
+
+/**
+ * Written as paths on THIS machine on purpose. A live check is a check of a real
+ * cache; anyone running it elsewhere edits the list to their own projects.
+ */
+const TARGETS: Target[] = [
+    {
+        ecosystem: 'npm',
+        cwd: process.cwd(),
+        pkg: 'zod',
+        query: 'z.object and how to parse a value'
+    },
+    {ecosystem: 'npm', cwd: process.cwd(), pkg: 'hono', query: 'define a GET route'},
+    {
+        ecosystem: 'cargo',
+        cwd: path.join(os.homedir(), 'hub', 'gofer', 'src-tauri'),
+        pkg: 'tokio',
+        query: 'spawn a task and join it'
+    },
+    {
+        ecosystem: 'cargo',
+        cwd: path.join(os.homedir(), 'hub', 'gofer', 'src-tauri'),
+        pkg: 'serde_json::Value',
+        query: 'parse a string into a Value'
+    },
+    {
+        ecosystem: 'hackage',
+        cwd: process.env.PI_TASK_LIVE_HS_PROJECT ?? path.join(os.homedir(), 'hs-scratch'),
+        pkg: 'aeson',
+        query: 'decode a ByteString into a value'
+    },
+    {
+        ecosystem: 'hackage',
+        cwd: process.env.PI_TASK_LIVE_HS_PROJECT ?? path.join(os.homedir(), 'hs-scratch'),
+        pkg: 'text',
+        query: 'pack a String into a Text'
+    }
+]
+
+const IDENTIFIER_RE = /[A-Za-z_][A-Za-z0-9_']{2,}/g
+const CODE_SPAN_RE = /`([^`]+)`/g
+
+/**
+ * Identifiers the answer presents AS CODE that occur nowhere in the corpus.
+ *
+ * Only backticked spans count. Scanning the prose instead measures English —
+ * "Use", "calling", "which" are all absent from a `.d.ts` corpus and none of
+ * them is a fabricated API. A hallucinated symbol is one the model wrote as
+ * code, which is the only form a reader would copy.
+ */
+function inventedSymbols(answer: string, corpus: string): string[] {
+    const known = new Set(corpus.match(IDENTIFIER_RE) ?? [])
+    const out = new Set<string>()
+    for (const span of answer.matchAll(CODE_SPAN_RE)) {
+        for (const token of span[1].match(IDENTIFIER_RE) ?? []) {
+            if (!known.has(token)) out.add(token)
+        }
+    }
+    return [...out]
+}
+
+/**
+ * A fingerprint of the retrieved chunk SET, to compare across trees.
+ *
+ * Sorted, because re-indexing a package deletes and re-inserts its rows, and the
+ * new autoincrement ids break BM25 ties differently — an order-sensitive digest
+ * then reports a difference where the retrieved evidence is identical. What a
+ * parity check claims is that the same text came back, so that is what this
+ * measures.
+ */
+function chunkDigest(chunks: ReadonlyArray<{filePath: string; content: string}>): string {
+    const h = createHash('sha256')
+    const fingerprints = chunks.map(c => `${c.filePath}::${c.content}`).sort()
+    for (const f of fingerprints) h.update(`${f}::`)
+    return h.digest('hex').slice(0, 12)
+}
+
+async function run(target: Target, focused: boolean): Promise<void> {
+    const label = `${target.ecosystem}/${target.pkg}`
+    const raw = await docsRaw({
+        pkg: target.pkg,
+        query: target.query,
+        cwd: target.cwd,
+        npmVersionLookup: () => Promise.resolve(null)
+    })
+    if (raw.kind !== 'ok') {
+        const why =
+            raw.kind === 'error' ? `${raw.resolveError ?? 'error'}: ${raw.message}` : 'no chunks'
+        console.log(`${label.padEnd(28)} FAIL  ${why.slice(0, 120)}`)
+        return
+    }
+    const home = os.homedir()
+    console.log(
+        `${label.padEnd(28)} ${raw.pkg.ecosystem} ${raw.pkg.name}@${raw.pkg.version}`
+            + `  chunks=${raw.chunks.length} digest=${chunkDigest(raw.chunks)}`
+            + `  root=${raw.pkg.root.replace(home, '~')}`
+    )
+    if (!focused) return
+
+    const corpus = raw.chunks.map(c => c.content).join('\n')
+    const answer = await docsFocused({
+        pkg: target.pkg,
+        query: target.query,
+        cwd: target.cwd,
+        npmVersionLookup: () => Promise.resolve(null)
+    })
+    const invented = inventedSymbols(answer.answer, corpus)
+    console.log(
+        `${''.padEnd(28)} answer=${answer.answer.length}B invented=${invented.length}`
+            + (invented.length ? ` ${invented.slice(0, 8).join(' ')}` : '')
+    )
+    if (process.argv.includes('--show')) {
+        console.log(
+            answer.answer
+                .split('\n')
+                .map(l => `${''.padEnd(30)}| ${l}`)
+                .join('\n')
+        )
+    }
+}
+
+/**
+ * Point the extraction child at the real pi.
+ *
+ * `getPiInvocation` re-invokes `process.argv[1]` under the current runtime when
+ * `PI_BIN` is unset — which is right for the shipped extension and catastrophic
+ * here: argv[1] is THIS FILE, so the "extraction child" re-runs the live check
+ * and its console output comes back as the answer. It exits 0, so nothing
+ * upstream calls it a failure; the numbers just quietly measure nothing.
+ */
+function requirePiBinary(): void {
+    if (process.env.PI_BIN) return
+    try {
+        process.env.PI_BIN = execFileSync('sh', ['-c', 'command -v pi'], {encoding: 'utf8'}).trim()
+    } catch {
+        // fall through to the message below
+    }
+    if (!process.env.PI_BIN) {
+        console.error('No `pi` on PATH. Set PI_BIN to the pi binary and retry.')
+        process.exit(1)
+    }
+}
+
+if (import.meta.main) {
+    const focused = process.argv.includes('--focused')
+    if (focused) requirePiBinary()
+    for (const target of TARGETS) {
+        await run(target, focused)
+    }
+}

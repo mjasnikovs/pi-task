@@ -1,0 +1,9 @@
+{
+  "cabal-version": "3.16.1.0",
+  "compiler-id": "ghc-9.10.3",
+  "install-plan": [
+    {"type": "configured", "pkg-name": "base", "pkg-version": "4.20.0.0"},
+    {"type": "configured", "pkg-name": "tiny-hs", "pkg-version": "0.1.0"},
+    {"type": "configured", "pkg-name": "hs-project", "pkg-version": "0.1.0.0"}
+  ]
+}

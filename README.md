@@ -191,11 +191,24 @@ Fetches a URL, cleans HTML to markdown ([Readability](https://github.com/mozilla
 - The extraction child runs with `--no-tools` to mitigate visible-text prompt injection.
 
 ### `pi-worker-docs`
-Resolves an installed npm package, indexes its `.d.ts` files and README into a local SQLite cache, retrieves the most relevant chunks for your `query`, and passes them to an isolated child that extracts the focused answer. Version-pinned to whatever is in your `node_modules`.
+Resolves an installed package, indexes its API surface and README into a local SQLite cache, retrieves the most relevant chunks for your `query`, and passes them to an isolated child that extracts the focused answer. Version-pinned to whatever the project actually resolved.
 
-- The package must be installed in the project's `node_modules`; otherwise a one-time auto-install into a dedicated cache dir is attempted.
-- The first call for a `(package, version)` pair pays a one-time ingestion cost; later calls are FTS-only.
+**The manifest decides which registry, not the model.** `text`, `base`, `aeson`, `tokio` and `clap` are all real npm packages *and* real Rust/Haskell ones, so a name alone cannot say which was meant — and guessing npm returns a confident answer about an unrelated package. That is a wrong answer, not a miss.
+
+| Ecosystem | Detected by | Surface read | Version comes from |
+| --- | --- | --- | --- |
+| `npm` | `package.json`, or a `node_modules/` directory | the `.d.ts` files the package ships, plus README | the installed `package.json` |
+| `cargo` | `Cargo.toml`, at the directory or one level below it | `.rs` source reduced to public item heads, doc comments and attributes | `Cargo.lock` |
+| `hackage` | `*.cabal`, `cabal.project`, `stack.yaml` or `package.yaml` | `.hs` source reduced to the export list, signatures and type declarations | `dist-newstyle/cache/plan.json`, then `cabal.project.freeze`, then `stack.yaml.lock` |
+
+- **No manifest, no lookup.** In a directory with none of the above the tool refuses, spawns nothing and installs nothing, and points you at `pi-worker-search` / `pi-worker-fetch` instead.
+- **Two manifests** (a Tauri app, say) are resolved by whichever registry already has the package on disk. If neither does, the call is refused as ambiguous and you pass `ecosystem: "cargo"` to say which.
+- A package the project does not have is fetched once into a dedicated cache dir: `npm install --ignore-scripts` for npm, the `.crate` tarball for cargo, the Hackage tarball (or cabal's own cached copy) for hackage.
+- A Haskell **module** name is refused by name — `Data.Aeson` is not a package, `aeson` is.
+- The first call for a `(ecosystem, package, version)` triple pays a one-time ingestion cost; later calls are FTS-only.
 - Cache lives at `${XDG_CACHE_HOME:-~/.cache}/pi-worker/docs.sqlite` — delete it to reset.
+
+**Known gaps.** The rest of pi-task is still npm-shaped: the final gate, repo-health and orientation read the working directory first-wins, so a Tauri repo gets cargo docs answers while the gate runs `bun run test`, not `cargo test`. Phantom-import checking, dependency-name extraction for research enrichment, and the `@types/…` redirect chain are npm concepts and are no-ops elsewhere. Adding an ecosystem is one row in `src/workers/docs-ecosystems.ts` plus its parsers — profiles live in code and arrive as pull requests with tests, never as user configuration.
 
 ## Settings — `/task-config`
 
@@ -226,6 +239,8 @@ Run `/task-config` to toggle pi-task's behavior in an editor dialog. Settings pe
 | --- | --- | --- |
 | `BRAVE_SEARCH_API_KEY` / `BRAVE_API_KEY` | `pi-worker-search`, research enrichment | Required only when the **Brave** search engine is selected in `/task-config`. |
 | `XDG_CACHE_HOME` | `pi-worker-docs` | Overrides the docs cache location (defaults to `~/.cache`). |
+| `CARGO_HOME` | `pi-worker-docs` | Where crate source checkouts are read from (defaults to `~/.cargo`). |
+| `CABAL_DIR` | `pi-worker-docs` | Where cabal's downloaded package tarballs are read from (also checks `~/.cabal/packages` and `${XDG_CACHE_HOME:-~/.cache}/cabal/packages`). |
 | `XDG_DATA_HOME` | remote push | Where the VAPID keypair is stored (defaults to `~/.local/share`). |
 | `PI_REMOTE_PUSH_SUBJECT` | remote push | VAPID JWT `sub` contact. Defaults to the project URL; set your own `mailto:you@domain.com` or `https://…`. |
 | `PI_REMOTE_PUSH_DEBUG` | remote push | When set (e.g. `1`), logs push delivery and push-service HTTP status. Off by default. |

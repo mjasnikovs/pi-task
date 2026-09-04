@@ -23,6 +23,7 @@
  * `### npm:` then `### docs:` then `### url:` then `### service:`.
  */
 
+import {chooseEcosystem, defaultEcosystemIo} from '../workers/docs-ecosystems.js'
 import {docsRaw} from '../workers/docs-core.js'
 import {fetchRaw} from '../workers/fetch-core.js'
 import {
@@ -61,6 +62,8 @@ interface ExternalTarget {
 export interface ExternalTargetResult {
     /** Emitted as an `### npm:` block ahead of every body. Absent for url targets. */
     npmVersion?: NpmVersionInfo | null
+    /** Which registry the version block came from; npm when absent. */
+    registryLabel?: string
     /**
      * The `### docs:`/`### url:` body. `undefined` means "this target contributes no
      * body block" — and the two call paths draw that line differently ON PURPOSE:
@@ -95,6 +98,12 @@ export interface ExternalContextLookups {
  * question, in front of a waiting user, while research is uncapped and trails its
  * sub-step.
  */
+/** A live version answer and the registry it came from, for the block heading. */
+export interface VersionBlock {
+    info: NpmVersionInfo
+    label: string
+}
+
 export interface ExternalContextPolicy {
     /**
      * Max combined docs+url targets fanned out, packages first. Omit for uncapped
@@ -110,7 +119,7 @@ export interface ExternalContextPolicy {
      * version at all, and a "which version?" question falls back to whatever the
      * model remembers — which is how a dependency gets pinned to a stale major.
      */
-    versionLookup?: (pkg: string) => Promise<NpmVersionInfo | null>
+    versionLookup?: (pkg: string) => Promise<VersionBlock | null>
     /** Sub-step label recorded via `deps.recordSubStep`. Omit to record nothing. */
     subStepLabel?: string
     /**
@@ -172,6 +181,21 @@ export async function buildExternalContext(
         )
     ])
 
+    // A docs target that came back WITHOUT a version — a refused ecosystem, a dead
+    // registry — was dropped from `extraVersionPkgs` on the assumption docs would
+    // supply it. Ask for it now, or its block is silently lost.
+    const missedVersionPkgs =
+        versionLookup ?
+            enrichTargets.versionPackages.filter(
+                p =>
+                    docsTargets.has(p)
+                    && !targets.some((t, i) => t.name === p && targetResults[i]?.npmVersion)
+            )
+        :   []
+    const missedVersionResults = await Promise.all(
+        missedVersionPkgs.map(pkg => versionLookup!(pkg).catch(() => null))
+    )
+
     const sections: string[] = []
 
     // npm version blocks lead the section so the model anchors on live version
@@ -180,10 +204,10 @@ export async function buildExternalContext(
     // theirs from the cheap standalone lookup above. Together they cover EVERY
     // named dep.
     for (const r of targetResults) {
-        if (r?.npmVersion) sections.push(formatNpmVersionSection(r.npmVersion))
+        if (r?.npmVersion) sections.push(formatNpmVersionSection(r.npmVersion, r.registryLabel))
     }
-    for (const v of extraVersionResults) {
-        if (v) sections.push(formatNpmVersionSection(v))
+    for (const v of [...extraVersionResults, ...missedVersionResults]) {
+        if (v) sections.push(formatNpmVersionSection(v.info, v.label))
     }
 
     for (let i = 0; i < targets.length; i++) {
@@ -230,6 +254,42 @@ export async function gatherExternalContext(refined: string, deps: GatherDeps): 
     const npmVersionFn = deps.npmVersionLookup ?? npmVersionLookup
     const docsQuery = refined.split('\n').find(l => l.trim()) ?? refined
 
+    // Which registry to ask, decided PER PACKAGE.
+    //
+    // A cargo-only project's dependency names are crate names, and asking npm
+    // about them returns a real but unrelated package's versions — the exact
+    // confusion the docs tool refuses. But deciding once for the whole repo makes
+    // every polyglot project ambiguous, and then NO version block is emitted at
+    // all: worse than the old always-npm, because the prompts tell the model to
+    // quote a block that will never be there. Each name carries its own evidence,
+    // so each name gets its own answer.
+    const io = defaultEcosystemIo(deps.signal ? {signal: deps.signal} : {})
+    const askNpm = async (pkg: string): Promise<VersionBlock | null> => {
+        const info = await npmVersionFn(pkg, {signal: deps.signal})
+        return info ? {info, label: 'npm'} : null
+    }
+    const versionLookup = async (pkg: string): Promise<VersionBlock | null> => {
+        const choice = chooseEcosystem({
+            cwd: deps.cwd,
+            declaresPackage: p => p.declaredRange(p.parentPackage(pkg), deps.cwd) !== null,
+            resolvesLocally: p => {
+                try {
+                    p.resolve(pkg, deps.cwd, io)
+                    return true
+                } catch {
+                    return false
+                }
+            }
+        })
+        // No manifest at all keeps npm, which is what a bare directory has always
+        // done. A name genuinely ambiguous between two registries gets no block —
+        // a version from the wrong registry is worse than none.
+        if (!choice.ok) return choice.reason === 'none' ? askNpm(pkg) : null
+        if (choice.profile.id === 'npm') return askNpm(pkg)
+        const info = await choice.profile.latest(pkg, io)
+        return info ? {info, label: choice.profile.registryLabel} : null
+    }
+
     return buildExternalContext(
         refined,
         deps,
@@ -243,6 +303,7 @@ export async function gatherExternalContext(refined: string, deps: GatherDeps): 
                 })
                 return {
                     npmVersion: r.npmVersion,
+                    ...(r.registryLabel ? {registryLabel: r.registryLabel} : {}),
                     body:
                         r.kind === 'ok' && r.chunks.length > 0 ?
                             r.chunks
@@ -259,7 +320,7 @@ export async function gatherExternalContext(refined: string, deps: GatherDeps): 
             search: deps.searchFn
         },
         {
-            versionLookup: pkg => npmVersionFn(pkg, {signal: deps.signal}),
+            versionLookup,
             subStepLabel: 'enrichment',
             earlyReturnOnNoTargets: true
         }

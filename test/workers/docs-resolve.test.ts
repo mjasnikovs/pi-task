@@ -19,12 +19,12 @@ const FIXTURES = path.resolve(__dirname, '__fixtures__')
 // platform's. These suffix assertions are POSIX-style, so normalise first.
 const norm = (s: string | null | undefined): string => (s ?? '').replace(/\\/g, '/')
 
-test('resolvePackage returns name, version, root, entryDts, readme for tiny-pkg', () => {
+test('resolvePackage returns name, version, root, entry, readme for tiny-pkg', () => {
     const r = resolvePackage('tiny-pkg', FIXTURES)
     expect(r.name).toBe('tiny-pkg')
     expect(r.version).toBe('1.0.0')
     expect(norm(r.root).endsWith('node_modules/tiny-pkg')).toBe(true)
-    expect(norm(r.entryDts).endsWith('node_modules/tiny-pkg/index.d.ts')).toBe(true)
+    expect(norm(r.entry).endsWith('node_modules/tiny-pkg/index.d.ts')).toBe(true)
     expect(norm(r.readme).endsWith('node_modules/tiny-pkg/README.md')).toBe(true)
 })
 
@@ -32,7 +32,7 @@ test('resolvePackage handles scoped packages', () => {
     const r = resolvePackage('@scope/scoped-pkg', FIXTURES)
     expect(r.name).toBe('@scope/scoped-pkg')
     expect(r.version).toBe('0.2.1')
-    expect(norm(r.entryDts).endsWith('node_modules/@scope/scoped-pkg/index.d.ts')).toBe(true)
+    expect(norm(r.entry).endsWith('node_modules/@scope/scoped-pkg/index.d.ts')).toBe(true)
     expect(r.readme).toBeNull()
 })
 
@@ -40,31 +40,31 @@ test('resolvePackage handles subpath but preserves parent name', () => {
     const r = resolvePackage('tiny-pkg/sub', FIXTURES)
     expect(r.name).toBe('tiny-pkg')
     expect(r.version).toBe('1.0.0')
-    // entryDts should resolve to the subpath file
-    expect(norm(r.entryDts).endsWith('node_modules/tiny-pkg/sub.d.ts')).toBe(true)
+    // entry should resolve to the subpath file
+    expect(norm(r.entry).endsWith('node_modules/tiny-pkg/sub.d.ts')).toBe(true)
 })
 
 test('resolvePackage handles modern exports field', () => {
     const r = resolvePackage('modern-pkg', FIXTURES)
     expect(r.name).toBe('modern-pkg')
     expect(r.version).toBe('2.0.0')
-    expect(norm(r.entryDts).endsWith('node_modules/modern-pkg/dist/index.d.ts')).toBe(true)
+    expect(norm(r.entry).endsWith('node_modules/modern-pkg/dist/index.d.ts')).toBe(true)
 })
 
 test('resolvePackage falls back to <root>/index.d.ts when types field absent', () => {
     const r = resolvePackage('legacy-pkg', FIXTURES)
-    expect(norm(r.entryDts).endsWith('node_modules/legacy-pkg/index.d.ts')).toBe(true)
+    expect(norm(r.entry).endsWith('node_modules/legacy-pkg/index.d.ts')).toBe(true)
 })
 
-test('resolvePackage returns entryDts=null for package with no types', () => {
+test('resolvePackage returns entry=null for package with no types', () => {
     const r = resolvePackage('no-types-pkg', FIXTURES)
-    expect(r.entryDts).toBeNull()
+    expect(r.entry).toBeNull()
     expect(norm(r.readme).endsWith('node_modules/no-types-pkg/README.md')).toBe(true)
 })
 
 test('resolvePackage returns both null for empty-pkg', () => {
     const r = resolvePackage('empty-pkg', FIXTURES)
-    expect(r.entryDts).toBeNull()
+    expect(r.entry).toBeNull()
     expect(r.readme).toBeNull()
 })
 
@@ -111,7 +111,7 @@ test('typesPackageName maps to DefinitelyTyped convention', () => {
 
 test('resolvePackage picks a .d.mts types entry (tailwindcss shape)', () => {
     const r = resolvePackage('mts-pkg', FIXTURES)
-    expect(norm(r.entryDts).endsWith('node_modules/mts-pkg/dist/lib.d.mts')).toBe(true)
+    expect(norm(r.entry).endsWith('node_modules/mts-pkg/dist/lib.d.mts')).toBe(true)
 })
 
 test('hasTypeFiles is false for a launcher package with no declarations', () => {
@@ -159,11 +159,12 @@ test('detectTypesRedirect leaves the typeless -> @types branch alone', () => {
 })
 
 test('detectTypesRedirect degrades to null on an absent or unreadable entry file', () => {
-    const absent = {
+    const absent: ResolvedPackage = {
         name: 'ghost',
         version: '0.0.0',
         root: path.join(FIXTURES, 'node_modules', 'no-such-pkg'),
-        entryDts: path.join(FIXTURES, 'node_modules', 'no-such-pkg', 'index.d.ts'),
+        ecosystem: 'npm',
+        entry: path.join(FIXTURES, 'node_modules', 'no-such-pkg', 'index.d.ts'),
         readme: null
     }
     expect(detectTypesRedirect(absent)).toBeNull()
@@ -173,7 +174,7 @@ test('detectTypesRedirect degrades to null on an absent or unreadable entry file
     const asDir = {
         ...absent,
         root: path.join(FIXTURES, 'node_modules', 'stub-pkg'),
-        entryDts: path.join(FIXTURES, 'node_modules', 'stub-pkg')
+        entry: path.join(FIXTURES, 'node_modules', 'stub-pkg')
     }
     expect(detectTypesRedirect(asDir)).toBeNull()
 })

@@ -9,11 +9,17 @@ import {
     findDeclaredRange,
     findDeclaration,
     declarationChain,
-    buildVersionBanner
+    buildVersionBanner,
+    buildPrompt
 } from '../../src/workers/docs-core.js'
-import {resolvePackage as realResolvePackage, ResolveError} from '../../src/workers/docs-resolve.js'
+import {
+    resolvePackage as realResolvePackage,
+    ResolveError,
+    type ResolvedPackage
+} from '../../src/workers/docs-resolve.js'
 import {fakeSpawnByPrompt} from '../test-utils/fake-spawn.js'
 import {openCache} from '../../src/workers/docs-cache.js'
+import {ECOSYSTEMS} from '../../src/workers/docs-ecosystems.js'
 
 const FIXTURES = path.resolve(__dirname, '__fixtures__')
 
@@ -164,7 +170,39 @@ describe('findDeclaration', () => {
     })
 })
 
+test('the extraction prompt names the registry the source actually came from', () => {
+    // The child is handed Rust or Haskell whenever the row is not npm's, and this
+    // is the one sentence telling it what it has.
+    const crate: ResolvedPackage = {
+        ecosystem: 'cargo',
+        name: 'tokio',
+        version: '1.53.1',
+        root: '/x',
+        entry: null,
+        readme: null
+    }
+    expect(buildPrompt(crate, 'spawn a task', 'source')).toContain('a Rust crate from crates.io')
+    expect(buildPrompt({...crate, ecosystem: 'npm'}, 'q', 'c')).toContain('an npm package')
+})
+
 describe('buildVersionBanner', () => {
+    test('a non-npm answer names its own registry and its own manifest', () => {
+        // The pin literal is shared across rows, so without the profile a crates.io
+        // answer led with "not declared in this project's package.json … based on
+        // npm latest" — two false claims in one model-facing sentence.
+        const b = buildVersionBanner(
+            {source: 'npm-latest', asked: 'tokio'},
+            'tokio',
+            '1.38.0',
+            NONE,
+            ECOSYSTEMS.cargo
+        )
+        expect(b).toContain('Cargo.toml')
+        expect(b).toContain('crates.io')
+        expect(b).not.toContain('package.json')
+        expect(b).not.toContain('npm latest')
+    })
+
     const NONE = makeProjectDir({dependencies: {other: '^1'}})
 
     test('returns empty string when there was no auto-install', () => {

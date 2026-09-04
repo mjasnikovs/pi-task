@@ -178,6 +178,14 @@ hc(baseUrl) creates a typed client rooted at the given URL...`
         expect(findUnsourcedAttributions(FATAL, ec, PACKAGES)).toHaveLength(0)
     })
 
+    test('a heading inside a retrieved body is not a new BLOCK KIND', () => {
+        // The registry-label widening let any `###` line in a README chunk or a
+        // fetched page parse as a context block, with its heading cast straight
+        // into a union it is not a member of.
+        const blocks = parseContextBlocks('### Usage: install it\n### crates.io: tokio')
+        expect(blocks.map(b => b.kind)).toEqual(['npm', 'npm'])
+    })
+
     test('parseContextBlocks reads the ### docs kind external-context.ts actually emits', () => {
         expect(parseContextBlocks('### docs: hono\nbody').map(b => b.kind)).toEqual(['docs'])
     })

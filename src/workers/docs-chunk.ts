@@ -92,21 +92,29 @@ export function sliceBytes(s: string, maxBytes: number): string[] {
 }
 
 /**
- * Chunk a declaration file (`.d.ts`, `.ts`, `.tsx`), one chunk per declaration,
- * each labelled with the file it came from.
+ * Chunk a declaration file, one chunk per declaration, each labelled with the
+ * file it came from.
  *
  * `relPath` is a MODEL-FACING label and is used exactly as given. docs-index.ts
  * normalises it to POSIX (`.replace(/\\/g, '/')`) so a package index is identical
  * across platforms; docs-project.ts passes `path.relative` through with the native
  * separator. It is never re-joined to the filesystem, so neither is wrong — this
  * leaves the choice with the caller that has a reason for it.
+ *
+ * `splitRe` and `commentPrefix` default to the TypeScript pair, which is what
+ * both the project corpus and npm packages are written in.
  */
-export function chunkDeclarations(content: string, relPath: string): string[] {
+export function chunkDeclarations(
+    content: string,
+    relPath: string,
+    splitRe: RegExp = DECL_SPLIT_RE,
+    commentPrefix = '//'
+): string[] {
     const chunks: string[] = []
-    for (const part of splitAtMatches(content, new RegExp(DECL_SPLIT_RE.source, 'gm'))) {
+    for (const part of splitAtMatches(content, new RegExp(splitRe.source, 'gm'))) {
         const trimmed = part.trim()
         if (!trimmed) continue
-        const prefixed = `// ${relPath}\n${trimmed}`
+        const prefixed = `${commentPrefix} ${relPath}\n${trimmed}`
         if (Buffer.byteLength(prefixed, 'utf8') > MAX_CHUNK_BYTES) {
             for (const slice of sliceBytes(prefixed, MAX_CHUNK_BYTES)) chunks.push(slice)
         } else {

@@ -114,16 +114,31 @@ No section header. No other sections. No preamble.
 Task:
 ${refined}`
 
+/**
+ * `ecosystems` is what `detectEcosystems` found in the worker's cwd. It is REQUIRED,
+ * and an empty list is a real answer: a directory with no package manifest has no
+ * registry to look a library up in, and the paragraph below has to say so rather
+ * than inviting a lookup that will be refused.
+ */
 const RESEARCH_APIS_PROMPT = (
     refined: string,
-    filesMap?: string
-) => `You are doing targeted research for an AI coding agent. Use the read, grep, find, and ls tools — and \`pi-worker-docs\` for installed npm packages — to identify the commands, functions, types, and interfaces the agent will use for the following task.
+    filesMap: string | undefined,
+    ecosystems: readonly string[]
+) => `You are doing targeted research for an AI coding agent. Use the read, grep, find, and ls tools${ecosystems.length ? ' — and `pi-worker-docs` for installed packages —' : ''} to identify the commands, functions, types, and interfaces the agent will use for the following task.
 
-NPM PACKAGES — use pi-worker-docs, NOT file reads: for any third-party npm package (e.g. "zod", "hono", "drizzle-orm"), call \`pi-worker-docs(module, query)\` to get its type signatures and API surface. Do NOT open node_modules source files directly — those reads are expensive and produce far more noise than the tool. The tool returns a compact, focused excerpt in a fraction of the token cost.
+${
+    ecosystems.length ?
+        `LIBRARY PACKAGES — use pi-worker-docs, NOT file reads: for any third-party package, call \`pi-worker-docs(module, query)\` to get its type signatures and API surface. Do NOT open installed-package source files directly — those reads are expensive and produce far more noise than the tool. The tool returns a compact, focused excerpt in a fraction of the token cost. This project's package ecosystems are: ${ecosystems.join(', ')}.`
+    :   'LIBRARY PACKAGES — do NOT look them up: this directory holds no package manifest, so `pi-worker-docs` has no registry to read and will refuse. Do not list an external library API you cannot check here.'
+}
 
-PROJECT SOURCE — use pi-worker-docs with module ".", NOT file reads: for any function, class, type, or interface defined in THIS project's own .ts/.tsx source (e.g. "what does requireAuth check?", "what does CreateListingSchema look like?", "what does the listings query module export?"), call \`pi-worker-docs(".", query)\` instead of reading the file. The tool indexes all git-tracked source files and returns only the relevant chunks — far cheaper than reading whole files.
+PROJECT SOURCE — use pi-worker-docs with module ".", NOT file reads: for any function, class, type, or interface defined in THIS project's own source (e.g. "what does requireAuth check?", "what does CreateListingSchema look like?", "what does the listings query module export?"), call \`pi-worker-docs(".", query)\` instead of reading the file. The tool indexes all git-tracked source files and returns only the relevant chunks — far cheaper than reading whole files.
 
-RUNTIME BUILTINS — verify, do NOT echo: a task (or the spec doc it references) may name a runtime/builtin import like \`bun:sql\`, \`bun:sqlite\`, \`node:fs\`, or \`Bun.password\`. A runtime exposes only a small FIXED set of \`<runtime>:<submodule>\` modules, and a spec doc can confidently name one that does not exist. Before you list ANY \`<pkg>:<sub>\` specifier, confirm it with \`pi-worker-docs\` (e.g. \`pi-worker-docs("bun:sql", "sql tagged template and SQL class — the import")\` — the tool resolves the runtime's real types) and emit the CANONICAL import the types actually prove, NOT the string copied from the task. Concretely: Bun's SQL client is \`import { sql } from "bun"\` (or \`Bun.sql\` / \`new SQL()\`) — there is NO \`bun:sql\` module. Never pass an unverified colon-specifier through to the APIS list; a phantom import laundered here becomes fabricated \`declare module\` shims in the implementation.
+${
+    ecosystems.includes('npm') ?
+        `RUNTIME BUILTINS — verify, do NOT echo: a task (or the spec doc it references) may name a runtime/builtin import like \`bun:sql\`, \`bun:sqlite\`, \`node:fs\`, or \`Bun.password\`. A runtime exposes only a small FIXED set of \`<runtime>:<submodule>\` modules, and a spec doc can confidently name one that does not exist. Before you list ANY \`<pkg>:<sub>\` specifier, confirm it with \`pi-worker-docs\` (e.g. \`pi-worker-docs("bun:sql", "sql tagged template and SQL class — the import")\` — the tool resolves the runtime's real types) and emit the CANONICAL import the types actually prove, NOT the string copied from the task. Concretely: Bun's SQL client is \`import { sql } from "bun"\` (or \`Bun.sql\` / \`new SQL()\`) — there is NO \`bun:sql\` module. Never pass an unverified colon-specifier through to the APIS list; a phantom import laundered here becomes fabricated \`declare module\` shims in the implementation.`
+    :   ''
+}
 
 APIS owns symbols and commands BY NAME ONLY. Do NOT include any file path or path fragment — no \`package.json\`, no \`./src/foo.ts\`, no \`package.json#scripts.lint\`. If the symbol is a script defined in package.json, write the invocation (\`npm run lint\`), not its location. If the symbol is a config file, it does not belong in APIS at all — it belongs in FILES.
 

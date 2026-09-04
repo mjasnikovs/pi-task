@@ -18,6 +18,7 @@ test('retrieveChunks returns chunks matching query tokens, BM25-ranked', () => {
     const {cache, pkg} = seed()
     try {
         const chunks = retrieveChunks(cache, {
+            ecosystem: 'npm',
             name: pkg.name,
             version: pkg.version,
             query: 'UserService class'
@@ -33,6 +34,7 @@ test('retrieveChunks OR-joins multi-token queries', () => {
     const {cache, pkg} = seed()
     try {
         const chunks = retrieveChunks(cache, {
+            ecosystem: 'npm',
             name: pkg.name,
             version: pkg.version,
             query: 'discriminated unions narrow'
@@ -60,6 +62,7 @@ test('retrieveChunks matches dotted symbols instead of welding them into a dead 
     const {cache, pkg} = seed()
     try {
         const chunks = retrieveChunks(cache, {
+            ecosystem: 'npm',
             name: pkg.name,
             version: pkg.version,
             query: 'UserService.list()'
@@ -76,6 +79,7 @@ test('retrieveChunks matches path-shaped queries by their segments', () => {
     const {cache, pkg} = seed()
     try {
         const chunks = retrieveChunks(cache, {
+            ecosystem: 'npm',
             name: pkg.name,
             version: pkg.version,
             query: 'src/server/UserService.ts'
@@ -92,6 +96,7 @@ test('retrieveChunks enforces limit', () => {
     const {cache, pkg} = seed()
     try {
         const chunks = retrieveChunks(cache, {
+            ecosystem: 'npm',
             name: pkg.name,
             version: pkg.version,
             query: 'a',
@@ -107,6 +112,7 @@ test('retrieveChunks enforces contentBudget', () => {
     const {cache, pkg} = seed()
     try {
         const chunks = retrieveChunks(cache, {
+            ecosystem: 'npm',
             name: pkg.name,
             version: pkg.version,
             query: 'UserService greet User',
@@ -125,6 +131,7 @@ test('retrieveChunks falls back when query has no usable tokens', () => {
     const {cache, pkg} = seed()
     try {
         const chunks = retrieveChunks(cache, {
+            ecosystem: 'npm',
             name: pkg.name,
             version: pkg.version,
             query: '!@#$ %% --'
@@ -139,6 +146,7 @@ test('retrieveChunks falls back when FTS returns zero rows', () => {
     const {cache, pkg} = seed()
     try {
         const chunks = retrieveChunks(cache, {
+            ecosystem: 'npm',
             name: pkg.name,
             version: pkg.version,
             query: 'zzzzznevermatchanything'
@@ -153,6 +161,7 @@ test('retrieveChunks returns empty when package not indexed at all', () => {
     const cache = openCache(':memory:')
     try {
         const chunks = retrieveChunks(cache, {
+            ecosystem: 'npm',
             name: 'never-indexed',
             version: '1.0.0',
             query: 'anything'
