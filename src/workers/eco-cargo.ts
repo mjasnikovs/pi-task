@@ -180,9 +180,15 @@ export function lockedDeps(cwd: string): Record<string, string> | undefined {
         }
         const versionMatch = /^version\s*=\s*"([^"]+)"$/.exec(line)
         if (versionMatch && name) {
-            const existing = out[name]
-            if (!existing || compareVersions(versionMatch[1], existing) > 0) {
-                out[name] = versionMatch[1]
+            // Under BOTH spellings. `lockedVersion` canonicalises `-`/`_` before
+            // matching, so a map keyed only on the lockfile's literal name gives a
+            // different answer to the same question for `tokio-util` vs
+            // `tokio_util` — and the freshness check silently keeps the entry.
+            for (const key of new Set([name, canonical(name)])) {
+                const existing = out[key]
+                if (!existing || compareVersions(versionMatch[1], existing) > 0) {
+                    out[key] = versionMatch[1]
+                }
             }
         }
     }

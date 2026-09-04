@@ -67,12 +67,16 @@ describe('the lock is the version', () => {
         expect(lockedVersion('tiny-crate', TAURI)).toBe('0.1.0')
     })
 
-    test('the lock also answers what the project pins, for cache invalidation', () => {
-        expect(lockedDeps(CARGO_PROJECT)).toEqual({
-            'demo-app': '0.1.0',
-            'tiny-crate': '0.1.0',
-            syn: '2.0.104'
-        })
+    test('the lock also answers what the project pins, under either spelling', () => {
+        // `lockedVersion` canonicalises `-`/`_` before matching, so a map keyed
+        // only on the lockfile's literal name would give a different answer to the
+        // same question — and a cache entry keyed the other way never expires.
+        const deps = lockedDeps(CARGO_PROJECT)
+        expect(deps?.['tiny-crate']).toBe('0.1.0')
+        expect(deps?.['tiny_crate']).toBe('0.1.0')
+        expect(deps?.syn).toBe('2.0.104')
+        expect(deps?.['demo-app']).toBe('0.1.0')
+        expect(lockedVersion('tiny_crate', CARGO_PROJECT)).toBe('0.1.0')
         expect(lockedDeps(os.tmpdir())).toBeUndefined()
     })
 })
@@ -302,7 +306,9 @@ describe('acquiring a crate', () => {
         const tar = argv.find(a => a.includes('-xzf'))
         expect(tar).toBeDefined()
         expect(tar).toContain('-C')
-        expect(tar!.some(a => a.endsWith('tiny-crate-0.1.0.crate'))).toBe(true)
+        // The archive name carries a per-download suffix — concurrent research
+        // children would otherwise share one path and delete each other's file.
+        expect(tar!.some(a => /tiny-crate-0\.1\.0\..*\.crate$/.test(a))).toBe(true)
 
         const resolved = resolveCrate('tiny-crate', result.installDir, {
             cargoHome: path.join(os.tmpdir(), 'no-cargo-home'),

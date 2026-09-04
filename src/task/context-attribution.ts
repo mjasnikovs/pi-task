@@ -192,7 +192,10 @@ export function splitBullets(context: string): string[] {
 /** Parse the `### npm:` / `### docs:` / `### url:` / `### service:` blocks out of an EXTERNAL CONTEXT header. */
 export function parseContextBlocks(externalContext: string): ContextBlock[] {
     const out: ContextBlock[] = []
-    const re = /^###\s+(npm|docs|url|service|freshness-check)\s*:?\s*(.*)$/gim
+    // A version block is headed by its REGISTRY, so `npm` is one of several
+    // (`crates.io`, `hackage`). Matching only the fixed words made every non-npm
+    // block invisible to the parser.
+    const re = /^###\s+([A-Za-z][\w.-]*)\s*:?\s*(.*)$/gim
     let m: RegExpExecArray | null
     while ((m = re.exec(externalContext)) !== null) {
         const kind = m[1].toLowerCase()

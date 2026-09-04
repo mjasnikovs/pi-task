@@ -138,3 +138,43 @@ test('the project walk skips a cargo target/ and a cabal dist-newstyle/', () => 
     expect(files.some(f => f.startsWith('target/'))).toBe(false)
     fs.rmSync(dir, {recursive: true, force: true})
 })
+
+test("a binary crate's OWN source indexes — private items are the question there", () => {
+    // `profile.surface` strips a DEPENDENCY down to its published API. Applying it
+    // to the project's own code indexed a Rust `main.rs` to nothing at all, and
+    // `pi-worker-docs(".", …)` — which the APIS prompt tells the worker to use —
+    // answered "no chunks" for the whole Rust half of a repo.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'docs-project-rs-'))
+    fs.writeFileSync(path.join(dir, 'Cargo.toml'), '[package]\nname = "app"\n', 'utf8')
+    fs.mkdirSync(path.join(dir, 'src'), {recursive: true})
+    fs.writeFileSync(
+        path.join(dir, 'src', 'main.rs'),
+        'struct AppState { token: Option<String> }\n\n'
+            + 'impl AppState {\n    fn new() -> Self { AppState { token: None } }\n}\n\n'
+            + '#[tauri::command]\nfn handle_login(user: String) -> Result<String, String> { Ok(user) }\n',
+        'utf8'
+    )
+
+    const cache = openCache(':memory:')
+    try {
+        const files = getProjectFiles(dir)
+        const result = projectDocsRaw(cache, dir, 'handle_login', undefined, () => files)
+        expect(result.kind).toBe('ok')
+        if (result.kind !== 'ok') return
+        const text = result.chunks.map(c => c.content).join('\n')
+        expect(text).toContain('handle_login')
+        // Not just the head — the body is what a question about your own code needs.
+        expect(text).toContain('Ok(user)')
+
+        // And the private type is INDEXED, whether or not this query ranks it.
+        const indexed = cache.db
+            .prepare("SELECT content FROM chunks WHERE ecosystem = 'project'")
+            .all() as {content: string}[]
+        const all = indexed.map(r => r.content).join('\n')
+        expect(all).toContain('struct AppState')
+        expect(all).toContain('impl AppState')
+    } finally {
+        cache.close()
+        fs.rmSync(dir, {recursive: true, force: true})
+    }
+})

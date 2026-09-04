@@ -918,7 +918,9 @@ export async function docsFocused(input: DocsFocusedInput): Promise<DocsFocusedR
 export function buildPrompt(pkg: ResolvedPackage, query: string, content: string): string {
     return buildExtractionPrompt({
         kind: 'package',
-        subject: 'an npm package',
+        // The extracting child is reading Rust or Haskell whenever the row is not
+        // npm's, and this is the one sentence it is told about what it has.
+        subject: ECOSYSTEMS[pkg.ecosystem].packageSubject,
         tag: 'package',
         identity: `${pkg.name}@${pkg.version}`,
         query,

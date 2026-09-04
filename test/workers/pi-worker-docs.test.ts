@@ -502,6 +502,13 @@ test('cache provenance names the RESOLVED registry, not the argument', () => {
     })
     // npm stays absent, so the cache file matches what earlier versions wrote.
     expect(docsCachePkg({module: 'hono/client'}, {ecosystem: 'npm'})).toEqual({pkg: 'hono'})
+    // The ROW knows how its own specifiers nest. Splitting on `/` alone recorded
+    // `serde_json::Value`, which no manifest names — so the entry's version came
+    // back undefined and a `cargo update` never expired it.
+    expect(docsCachePkg({module: 'serde_json::Value'}, {ecosystem: 'cargo'})).toEqual({
+        pkg: 'serde_json',
+        ecosystem: 'cargo'
+    })
     expect(docsCachePkg({module: '.'}, {ecosystem: 'npm'})).toBeUndefined()
 })
 

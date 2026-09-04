@@ -98,6 +98,12 @@ export interface ExternalContextLookups {
  * question, in front of a waiting user, while research is uncapped and trails its
  * sub-step.
  */
+/** A live version answer and the registry it came from, for the block heading. */
+export interface VersionBlock {
+    info: NpmVersionInfo
+    label: string
+}
+
 export interface ExternalContextPolicy {
     /**
      * Max combined docs+url targets fanned out, packages first. Omit for uncapped
@@ -113,9 +119,7 @@ export interface ExternalContextPolicy {
      * version at all, and a "which version?" question falls back to whatever the
      * model remembers — which is how a dependency gets pinned to a stale major.
      */
-    versionLookup?: (pkg: string) => Promise<NpmVersionInfo | null>
-    /** Which registry `versionLookup` asks, for the block heading. npm when absent. */
-    versionLabel?: string
+    versionLookup?: (pkg: string) => Promise<VersionBlock | null>
     /** Sub-step label recorded via `deps.recordSubStep`. Omit to record nothing. */
     subStepLabel?: string
     /**
@@ -188,7 +192,7 @@ export async function buildExternalContext(
         if (r?.npmVersion) sections.push(formatNpmVersionSection(r.npmVersion, r.registryLabel))
     }
     for (const v of extraVersionResults) {
-        if (v) sections.push(formatNpmVersionSection(v, policy.versionLabel))
+        if (v) sections.push(formatNpmVersionSection(v.info, v.label))
     }
 
     for (let i = 0; i < targets.length; i++) {
@@ -235,24 +239,41 @@ export async function gatherExternalContext(refined: string, deps: GatherDeps): 
     const npmVersionFn = deps.npmVersionLookup ?? npmVersionLookup
     const docsQuery = refined.split('\n').find(l => l.trim()) ?? refined
 
-    // Which registry the standalone version lookups should ask. A cargo-only
-    // project's dependency names are crate names, and asking npm about them
-    // returns a real but unrelated package's versions — the exact confusion the
-    // docs tool now refuses. Nothing detected keeps npm, which is what a bare
-    // directory has always done. Ambiguous asks nobody.
-    const choice = chooseEcosystem({cwd: deps.cwd})
-    const versionLabel = choice.ok ? choice.profile.registryLabel : 'npm'
-    const versionLookup =
-        !choice.ok ?
-            choice.reason === 'none' ?
-                (pkg: string) => npmVersionFn(pkg, {signal: deps.signal})
-            :   undefined
-        : choice.profile.id === 'npm' ? (pkg: string) => npmVersionFn(pkg, {signal: deps.signal})
-        : (pkg: string) =>
-                choice.profile.latest(
-                    pkg,
-                    defaultEcosystemIo(deps.signal ? {signal: deps.signal} : {})
-                )
+    // Which registry to ask, decided PER PACKAGE.
+    //
+    // A cargo-only project's dependency names are crate names, and asking npm
+    // about them returns a real but unrelated package's versions — the exact
+    // confusion the docs tool refuses. But deciding once for the whole repo makes
+    // every polyglot project ambiguous, and then NO version block is emitted at
+    // all: worse than the old always-npm, because the prompts tell the model to
+    // quote a block that will never be there. Each name carries its own evidence,
+    // so each name gets its own answer.
+    const io = defaultEcosystemIo(deps.signal ? {signal: deps.signal} : {})
+    const askNpm = async (pkg: string): Promise<VersionBlock | null> => {
+        const info = await npmVersionFn(pkg, {signal: deps.signal})
+        return info ? {info, label: 'npm'} : null
+    }
+    const versionLookup = async (pkg: string): Promise<VersionBlock | null> => {
+        const choice = chooseEcosystem({
+            cwd: deps.cwd,
+            declaresPackage: p => p.declaredRange(p.parentPackage(pkg), deps.cwd) !== null,
+            resolvesLocally: p => {
+                try {
+                    p.resolve(pkg, deps.cwd, io)
+                    return true
+                } catch {
+                    return false
+                }
+            }
+        })
+        // No manifest at all keeps npm, which is what a bare directory has always
+        // done. A name genuinely ambiguous between two registries gets no block —
+        // a version from the wrong registry is worse than none.
+        if (!choice.ok) return choice.reason === 'none' ? askNpm(pkg) : null
+        if (choice.profile.id === 'npm') return askNpm(pkg)
+        const info = await choice.profile.latest(pkg, io)
+        return info ? {info, label: choice.profile.registryLabel} : null
+    }
 
     return buildExternalContext(
         refined,
@@ -284,7 +305,7 @@ export async function gatherExternalContext(refined: string, deps: GatherDeps): 
             search: deps.searchFn
         },
         {
-            ...(versionLookup ? {versionLookup, versionLabel} : {}),
+            versionLookup,
             subStepLabel: 'enrichment',
             earlyReturnOnNoTargets: true
         }

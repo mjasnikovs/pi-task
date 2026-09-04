@@ -206,6 +206,11 @@ export interface EcosystemProfile {
     skipDirs: readonly string[]
     /** What this ecosystem's packages ship, for a "there is nothing to read" answer. */
     surfaceLabel: string
+    /**
+     * How the extraction child is told what it is reading. A written phrase, not
+     * a label plus an article: "a npm package" is what deriving one gives you.
+     */
+    packageSubject: string
     /** Which of the PROJECT's own files this ecosystem contributes to its index. */
     projectGlobs: readonly string[]
     /** The project's own name from its manifest, or null when it declares none. */
@@ -269,6 +274,7 @@ export function npmProfile(hooks: NpmProfileHooks = {}): EcosystemProfile {
         // A nested node_modules is another package's surface, never this one's.
         skipDirs: ['node_modules'],
         surfaceLabel: '.d.ts files or README',
+        packageSubject: 'an npm package',
         projectGlobs: ['*.ts', '*.tsx'],
         projectName: npmProjectName,
         declaredDeps: npmDeclaredDeps
@@ -333,7 +339,10 @@ async function acquireCrate(
 ): Promise<AcquireResult> {
     const dir = path.join(io.modulesDir, 'cargo')
     const crate = crateOf(name)
-    const archive = path.join(dir, `${crate}-${version}.crate`)
+    // A unique name per download. Research children run concurrently, and on a
+    // fixed path one child's post-extract delete lands between another's write
+    // and its `tar`, which then fails on a crate that was in fact fetched.
+    const archive = path.join(dir, `.${crate}-${version}.${process.pid}.${Date.now()}.crate`)
     try {
         fs.mkdirSync(dir, {recursive: true})
         const response = await io.fetch(crateTarballUrl(crate, version), {
@@ -422,6 +431,7 @@ const cargoProfile: EcosystemProfile = {
     commentPrefix: '//',
     skipDirs: ['tests', 'benches', 'examples', 'target'],
     surfaceLabel: '.rs source or README',
+    packageSubject: 'a Rust crate from crates.io',
     projectGlobs: ['*.rs'],
     projectName: cargoProjectName,
     declaredDeps: lockedDeps
@@ -503,7 +513,10 @@ const hackageProfile: EcosystemProfile = {
                     stderr: `hackage returned ${response.status} for ${name} ${version}`
                 }
             }
-            const archive = path.join(dir, `${name}-${version}.tar.gz`)
+            const archive = path.join(
+                dir,
+                `.${name}-${version}.${process.pid}.${Date.now()}.tar.gz`
+            )
             fs.writeFileSync(archive, Buffer.from(await response.arrayBuffer()))
             return await extractTarball(archive, dir, io)
         } catch (err) {
@@ -522,6 +535,7 @@ const hackageProfile: EcosystemProfile = {
     commentPrefix: '--',
     skipDirs: HACKAGE_SKIP_DIRS,
     surfaceLabel: '.hs source or README',
+    packageSubject: 'a Haskell package from Hackage',
     projectGlobs: ['*.hs'],
     projectName: hackageProjectName,
     declaredDeps: resolvedVersions

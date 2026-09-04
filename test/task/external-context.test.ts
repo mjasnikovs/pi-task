@@ -1,8 +1,12 @@
 import {test, expect, describe} from 'bun:test'
+import * as fs from 'node:fs'
+import * as os from 'node:os'
+import * as path from 'node:path'
 import {
     buildExternalContext,
     gatherExternalContext,
-    type ExternalContextLookups
+    type ExternalContextLookups,
+    type VersionBlock
 } from '../../src/task/external-context.js'
 import type {PhaseDeps} from '../../src/task/child-runner.js'
 
@@ -192,12 +196,79 @@ describe('buildExternalContext policy', () => {
             lookups(newCalls()),
             {
                 targetCap: 1,
-                versionLookup: pkg => Promise.resolve({pkg, latest: '1.53.1', recent: []}),
-                versionLabel: 'crates.io'
+                versionLookup: pkg =>
+                    Promise.resolve({
+                        info: {pkg, latest: '1.53.1', recent: []},
+                        label: 'crates.io'
+                    })
             }
         )
         expect(out).toContain('### crates.io: serde')
         expect(out).not.toContain('### npm: serde')
+    })
+
+    test('every named dep still gets a version block in a POLYGLOT repo', async () => {
+        // Deciding the registry once for the whole repo made any two-manifest
+        // project ambiguous, and then NO block was emitted at all — worse than
+        // always-npm, because the CONTEXT prompt tells the model to quote a block
+        // that would never be there. The decision belongs to each name.
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ext-poly-'))
+        fs.writeFileSync(
+            path.join(dir, 'package.json'),
+            JSON.stringify({
+                name: 'p',
+                dependencies: {
+                    zod: '^3.0.0',
+                    hono: '^4.0.0',
+                    react: '^19.0.0',
+                    'react-dom': '^19.0.0',
+                    wouter: '^3.0.0',
+                    clsx: '^2.0.0',
+                    nanoid: '^5.0.0'
+                }
+            }),
+            'utf8'
+        )
+        fs.writeFileSync(path.join(dir, 'Cargo.toml'), '[package]\nname = "p"\n', 'utf8')
+        fs.writeFileSync(
+            path.join(dir, 'Cargo.lock'),
+            'version = 4\n\n[[package]]\nname = "tokio"\nversion = "1.53.1"\n',
+            'utf8'
+        )
+        // More names than the docs cap, so the tail falls to the cheap standalone
+        // version lookup — the path that went silent.
+        const asked: string[] = []
+        const source =
+            'add `zod`, `hono`, `react`, `react-dom`, `wouter`, `clsx`, `nanoid` and `tokio`'
+        const out = await gatherExternalContext(source, {
+            cwd: dir,
+            signal: new AbortController().signal,
+            docsRaw: async () => ({
+                kind: 'no_chunks',
+                pkg: {
+                    ecosystem: 'npm',
+                    name: 'x',
+                    version: '1',
+                    root: '/',
+                    entry: null,
+                    readme: null
+                },
+                hitCache: false
+            }),
+            npmVersionLookup: async (pkg: string) => {
+                asked.push(pkg)
+                return {pkg, latest: `9.9.9-${pkg}`, recent: []}
+            }
+        } as never)
+        // Past the docs cap, a dep package.json declares still gets its npm block.
+        expect(asked.length).toBeGreaterThan(0)
+        for (const pkg of asked) expect(out).toContain(`### npm: ${pkg}`)
+        expect(asked.some(p => ['clsx', 'nanoid', 'wouter'].includes(p))).toBe(true)
+        // tokio is pinned by Cargo.lock and by nothing npm has, so npm is never
+        // asked about it — that is the wrong-registry version this branch removes.
+        expect(asked).not.toContain('tokio')
+        expect(out).not.toContain('### npm: tokio')
+        fs.rmSync(dir, {recursive: true, force: true})
     })
 
     test('targetCap spends its budget on packages before urls', async () => {
@@ -256,7 +327,7 @@ describe('buildExternalContext policy', () => {
         const withVersions = await buildExternalContext(text, deps, lookups(on), {
             versionLookup: async pkg => {
                 asked.push(pkg)
-                return {pkg, latest: `4.1.0-${pkg}`, recent: []}
+                return {info: {pkg, latest: `4.1.0-${pkg}`, recent: []}, label: 'npm'}
             }
         })
         // The three docs targets carry their own version; only the extras are looked up.
@@ -293,11 +364,9 @@ describe('buildExternalContext policy', () => {
         // No docs/url/service targets at all. The research path deliberately
         // returns '' before spending a single registry GET.
         const asked: string[] = []
-        const versionLookup = async (
-            pkg: string
-        ): Promise<{pkg: string; latest: string; recent: string[]}> => {
+        const versionLookup = async (pkg: string): Promise<VersionBlock> => {
             asked.push(pkg)
-            return {pkg, latest: '1.0.0', recent: []}
+            return {info: {pkg, latest: '1.0.0', recent: []}, label: 'npm'}
         }
         const out = await buildExternalContext('no targets here', deps, lookups(newCalls()), {
             versionLookup,

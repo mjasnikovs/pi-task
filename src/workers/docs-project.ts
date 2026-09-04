@@ -195,13 +195,14 @@ export function ensureProjectIndexed(
                 continue
             }
             const rel = path.relative(cwd, abs)
+            // The project's own source goes in WHOLE. `profile.surface` strips a
+            // dependency's implementation down to its published API, which is the
+            // opposite of what is wanted here: a binary crate's `main.rs` has no
+            // `pub` item in it at all, so surfacing it indexes to nothing and
+            // `pi-worker-docs(".", …)` answers "no chunks" for the whole project.
+            // Only the CHUNK BOUNDARY is language-specific.
             const profile = profileForFile(abs, profiles)
-            const chunks = chunkDeclarations(
-                profile.surface(raw),
-                rel,
-                profile.declSplitRe,
-                profile.commentPrefix
-            )
+            const chunks = chunkDeclarations(raw, rel, profile.declSplitRe, profile.commentPrefix)
             if (!chunks.length) continue
             filesIngested++
             for (const c of chunks) {

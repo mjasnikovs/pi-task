@@ -567,8 +567,13 @@ export function docsCachePkg(
     details: Pick<DocsDetails, 'ecosystem'>
 ): CachePackage | undefined {
     if (params.module === '.') return undefined
+    const ecosystem = details.ecosystem ?? 'npm'
+    // The ROW knows how its own specifiers nest: `hono/client` → `hono`, but
+    // `serde_json::Value` → `serde_json`. Splitting on `/` alone recorded the
+    // whole path, and no manifest names that — so the entry's version came back
+    // undefined and it was never invalidated again.
     return {
-        pkg: packageRootOf(params.module),
-        ...(details.ecosystem && details.ecosystem !== 'npm' ? {ecosystem: details.ecosystem} : {})
+        pkg: ECOSYSTEMS[ecosystem].parentPackage(params.module),
+        ...(ecosystem !== 'npm' ? {ecosystem} : {})
     }
 }

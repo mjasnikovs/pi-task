@@ -9,9 +9,14 @@ import {
     findDeclaredRange,
     findDeclaration,
     declarationChain,
-    buildVersionBanner
+    buildVersionBanner,
+    buildPrompt
 } from '../../src/workers/docs-core.js'
-import {resolvePackage as realResolvePackage, ResolveError} from '../../src/workers/docs-resolve.js'
+import {
+    resolvePackage as realResolvePackage,
+    ResolveError,
+    type ResolvedPackage
+} from '../../src/workers/docs-resolve.js'
 import {fakeSpawnByPrompt} from '../test-utils/fake-spawn.js'
 import {openCache} from '../../src/workers/docs-cache.js'
 import {ECOSYSTEMS} from '../../src/workers/docs-ecosystems.js'
@@ -163,6 +168,21 @@ describe('findDeclaration', () => {
         expect(findDeclaration(['a-pkg', '@types/a-pkg'], dir)).toBeNull()
         fs.rmSync(dir, {recursive: true, force: true})
     })
+})
+
+test('the extraction prompt names the registry the source actually came from', () => {
+    // The child is handed Rust or Haskell whenever the row is not npm's, and this
+    // is the one sentence telling it what it has.
+    const crate: ResolvedPackage = {
+        ecosystem: 'cargo',
+        name: 'tokio',
+        version: '1.53.1',
+        root: '/x',
+        entry: null,
+        readme: null
+    }
+    expect(buildPrompt(crate, 'spawn a task', 'source')).toContain('a Rust crate from crates.io')
+    expect(buildPrompt({...crate, ecosystem: 'npm'}, 'q', 'c')).toContain('an npm package')
 })
 
 describe('buildVersionBanner', () => {
