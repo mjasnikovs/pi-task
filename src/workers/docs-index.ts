@@ -30,12 +30,29 @@ interface IngestResult {
     chunksWritten: number
 }
 
-function computeContentHash(pkg: ResolvedPackage): string {
+/**
+ * The gate that decides whether a package needs re-indexing.
+ *
+ * The entry file goes in SURFACED, not raw. What is cached is the extractor's
+ * OUTPUT, so a build whose extractor changed has stale chunks even though every
+ * byte on disk is identical — a crate indexed before the braced-`use` fix keeps
+ * `pub use crate::runtime::;` forever, because name, version and file bytes all
+ * still match. Surfacing here costs one file and makes the hash answer the
+ * question actually being asked: would re-reading produce the same chunks?
+ *
+ * It is not total. An extractor change that alters only files BELOW the entry
+ * goes unnoticed; deleting the cache is still the escape hatch for that.
+ */
+function computeContentHash(pkg: ResolvedPackage, profile: EcosystemProfile): string {
     const hash = createHash('sha256')
     hash.update(Buffer.from(`${pkg.name}@${pkg.version}`, 'utf8'))
     hash.update(ZERO_SEP)
     if (pkg.entry && fs.existsSync(pkg.entry)) {
-        hash.update(fs.readFileSync(pkg.entry))
+        try {
+            hash.update(Buffer.from(profile.surface(fs.readFileSync(pkg.entry, 'utf8')), 'utf8'))
+        } catch {
+            hash.update(fs.readFileSync(pkg.entry))
+        }
     }
     hash.update(ZERO_SEP)
     if (pkg.readme && fs.existsSync(pkg.readme)) {
@@ -161,7 +178,7 @@ export function ensureIndexed(
     profile: EcosystemProfile = ECOSYSTEMS[pkg.ecosystem]
 ): IndexResult {
     const ecosystem = profile.id
-    const contentHash = computeContentHash(pkg)
+    const contentHash = computeContentHash(pkg, profile)
     const existing = cache.db
         .prepare(
             'SELECT content_hash FROM packages WHERE ecosystem = ? AND name = ? AND version = ?'

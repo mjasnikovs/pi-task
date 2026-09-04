@@ -4,6 +4,7 @@ import * as os from 'node:os'
 import * as path from 'node:path'
 import {openCache} from '../../src/workers/docs-cache.js'
 import {ensureIndexed} from '../../src/workers/docs-index.js'
+import {ECOSYSTEMS} from '../../src/workers/docs-ecosystems.js'
 import {resolvePackage, type ResolvedPackage} from '../../src/workers/docs-resolve.js'
 
 const FIXTURES = path.resolve(__dirname, '__fixtures__')
@@ -156,6 +157,35 @@ test('ensureIndexed walks nested .d.ts files (huge-pkg/lib/types.d.ts)', () => {
         ).map(r => r.file_path)
         expect(filePaths).toContain('index.d.ts')
         expect(filePaths).toContain('lib/types.d.ts')
+    } finally {
+        cache.close()
+    }
+})
+
+test('a changed surface extractor re-indexes a package that has not moved', () => {
+    // What is cached is the extractor's OUTPUT. Hashing only the file bytes meant
+    // a build whose extractor changed kept its old chunks forever — name, version
+    // and bytes all still matched — so a crate indexed before the braced-`use`
+    // fix would answer with `pub use crate::runtime::;` for good.
+    const cache = openCache(':memory:')
+    try {
+        const pkg = resolvePackage('tiny-pkg', FIXTURES)
+        const older = {...ECOSYSTEMS.npm, surface: (s: string) => `// OLDER BUILD\n${s}`}
+
+        const first = ensureIndexed(cache, pkg, older)
+        expect(first.hitCache).toBe(false)
+        const second = ensureIndexed(cache, pkg, ECOSYSTEMS.npm)
+        expect(second.hitCache).toBe(false)
+        expect(second.chunksWritten).toBeGreaterThan(0)
+
+        const rows = cache.db
+            .prepare("SELECT content FROM chunks WHERE ecosystem = 'npm' AND name = ?")
+            .all(pkg.name) as {content: string}[]
+        expect(rows.some(r => r.content.includes('OLDER BUILD'))).toBe(false)
+
+        // Same extractor twice is still a cache hit — the gate has not been widened
+        // into "always re-index".
+        expect(ensureIndexed(cache, pkg, ECOSYSTEMS.npm).hitCache).toBe(true)
     } finally {
         cache.close()
     }
