@@ -6,6 +6,7 @@ import type {AgentToolResult} from '@earendil-works/pi-agent-core'
 import {
     registerPiWorkerDocs,
     packageRootOf,
+    docsCacheKey,
     type PiWorkerDocsInternals
 } from '../../src/workers/pi-worker-docs.js'
 import {openCache} from '../../src/workers/docs-cache.js'
@@ -36,7 +37,7 @@ function makePi(): {
 
 async function runTool(
     internals: PiWorkerDocsInternals,
-    params: {module: string; query: string},
+    params: {module: string; query: string; ecosystem?: 'npm'},
     cwd: string = FIXTURES
 ): Promise<AgentToolResult<unknown>> {
     const {registered, api} = makePi()
@@ -410,4 +411,86 @@ test('a docs ERROR still reports the auto-install provenance its siblings report
     } finally {
         fs.rmSync(dir, {recursive: true, force: true})
     }
+})
+
+test('the description keeps the A/B-validated imperatives verbatim', () => {
+    const {registered, api} = makePi()
+    registerPiWorkerDocs(api as unknown as Parameters<typeof registerPiWorkerDocs>[0], {})
+    const d = (registered[0] as unknown as {description: string}).description
+    for (const line of [
+        'USE THIS BEFORE ANSWERING',
+        'Do NOT answer package APIs from memory',
+        'do NOT run `npm view`/bash to get a package version',
+        'do NOT web-search for an installed package'
+    ]) {
+        expect(d).toContain(line)
+    }
+})
+
+test('the description names the manifests it reads and says it refuses otherwise', () => {
+    const {registered, api} = makePi()
+    registerPiWorkerDocs(api as unknown as Parameters<typeof registerPiWorkerDocs>[0], {})
+    const d = (registered[0] as unknown as {description: string}).description
+    expect(d).toContain('SUPPORTED ECOSYSTEMS: npm (package.json)')
+    expect(d).toContain('REFUSES and installs nothing')
+})
+
+test('a directory with no manifest is refused, and nothing is spawned or fetched', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'docs-no-manifest-'))
+    fs.writeFileSync(path.join(dir, 'foo.txt'), 'not a manifest', 'utf8')
+    let spawns = 0
+    let versionCalls = 0
+    const result = await runTool(
+        {
+            openCache: () => {
+                throw new Error('cache must not open')
+            },
+            npmVersionLookup: async () => {
+                versionCalls++
+                return null
+            },
+            spawn: fakeSpawnByPrompt(() => {
+                spawns++
+                return {stdout: ''}
+            })
+        },
+        {module: 'aeson', query: 'decode a ByteString'},
+        dir
+    )
+    const details = result.details as {resolveError?: string}
+    expect(details.resolveError).toBe('unsupported_ecosystem')
+    const text = (result.content[0] as {type: 'text'; text: string}).text
+    expect(text).toContain('package.json')
+    expect(text).toContain('pi-worker-search')
+    expect(spawns).toBe(0)
+    expect(versionCalls).toBe(0)
+    fs.rmSync(dir, {recursive: true, force: true})
+})
+
+test('an ecosystem the directory does not hold is refused by name', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'docs-not-detected-'))
+    let spawns = 0
+    const result = await runTool(
+        {
+            npmVersionLookup: async () => null,
+            spawn: fakeSpawnByPrompt(() => {
+                spawns++
+                return {stdout: ''}
+            })
+        },
+        {module: 'zod', query: 'z.object', ecosystem: 'npm'},
+        dir
+    )
+    const details = result.details as {resolveError?: string}
+    expect(details.resolveError).toBe('unsupported_ecosystem')
+    expect((result.content[0] as {type: 'text'; text: string}).text).toContain('No npm project')
+    expect(spawns).toBe(0)
+    fs.rmSync(dir, {recursive: true, force: true})
+})
+
+test('naming the ecosystem scopes the cache key; letting the manifest decide does not', () => {
+    expect(docsCacheKey({module: 'zod', query: 'Z Object'})).toBe('zod::z object')
+    expect(docsCacheKey({module: 'zod', query: 'Z Object', ecosystem: 'npm'})).toBe(
+        'npm::zod::z object'
+    )
 })

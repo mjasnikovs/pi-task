@@ -3177,7 +3177,7 @@ async function observeResearchWorkers(
 }
 
 const apisWorker = (obs: Array<{tools: string; prompt: string}>) =>
-    obs.find(o => o.prompt.includes('NPM PACKAGES — use pi-worker-docs'))
+    obs.find(o => o.prompt.includes('content of an APIS section'))
 
 test('APIS worker gains search/fetch tools + hint when a Brave key is configured', async () => {
     await withTmpTaskDir(async cwd => {

@@ -135,13 +135,13 @@ describe('research prompts enforce relevance / size discipline', () => {
     })
 
     test('APIS prompt forbids dumping the whole public surface', () => {
-        const p = RESEARCH_APIS_PROMPT('task')
+        const p = RESEARCH_APIS_PROMPT('task', undefined, ['npm'])
         expect(p).toContain('RELEVANCE')
         expect(p.toLowerCase()).toContain('entire public surface')
     })
 
     test('APIS prompt tells the worker to verify runtime builtin imports, not echo them', () => {
-        const p = RESEARCH_APIS_PROMPT('task')
+        const p = RESEARCH_APIS_PROMPT('task', undefined, ['npm'])
         expect(p).toContain('RUNTIME BUILTINS')
         // `bun:sql` does not resolve on the installed bun; `import { sql } from "bun"`
         // does. Naming both in the prompt is what stops the worker echoing the
@@ -159,9 +159,24 @@ describe('research prompts enforce relevance / size discipline', () => {
      * test/task/apis-contract.test.ts; this only guards against a re-wire.
      */
     test('APIS prompt does NOT carry the (failed, unwired) semantics contract', () => {
-        const p = RESEARCH_APIS_PROMPT('task')
+        const p = RESEARCH_APIS_PROMPT('task', undefined, ['npm'])
         expect(p).not.toContain(APIS_SEMANTICS_CONTRACT)
         expect(p).not.toContain('A TYPE SIGNATURE IS NOT A SEMANTICS CLAUSE')
+    })
+
+    test('the APIS prompt follows the detected manifests, not the model', () => {
+        const npm = RESEARCH_APIS_PROMPT('task', undefined, ['npm'])
+        expect(npm).toContain('LIBRARY PACKAGES — use pi-worker-docs')
+        expect(npm).toContain('RUNTIME BUILTINS')
+
+        // Nothing detected is a real answer, not a missing one: the tool refuses in
+        // such a directory, so the prompt must not send the worker to it.
+        const none = RESEARCH_APIS_PROMPT('task', undefined, [])
+        expect(none).toContain('do NOT look them up')
+        expect(none).not.toContain('RUNTIME BUILTINS')
+        // The project's own source is still readable with no manifest at all.
+        expect(none).toContain('PROJECT SOURCE')
+        expect(none).toContain('content of an APIS section')
     })
 
     test('CONTEXT prompt caps bullets and demands actionable facts', () => {
@@ -174,7 +189,7 @@ describe('research prompts enforce relevance / size discipline', () => {
 describe('research prompts forbid producing the deliverable', () => {
     const cases: Array<[string, string]> = [
         ['FILES', RESEARCH_FILES_PROMPT('task')],
-        ['APIS', RESEARCH_APIS_PROMPT('task')],
+        ['APIS', RESEARCH_APIS_PROMPT('task', undefined, ['npm'])],
         ['CONTEXT', RESEARCH_CONTEXT_PROMPT('task')],
         ['TOOLING', RESEARCH_TOOLING_PROMPT('task')]
     ]

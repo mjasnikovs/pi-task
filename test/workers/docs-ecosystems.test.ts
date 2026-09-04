@@ -4,6 +4,8 @@ import * as os from 'node:os'
 import * as path from 'node:path'
 import {
     ECOSYSTEMS,
+    chooseEcosystem,
+    detectEcosystems,
     npmProfile,
     type EcosystemIo,
     type EcosystemProfile
@@ -157,5 +159,94 @@ describe('a per-call row', () => {
             recent: []
         })
         expect(seen).toEqual(['resolve:anything', 'latest:anything'])
+    })
+})
+
+describe('choosing an ecosystem', () => {
+    // A two-row roster the repo does not ship yet, so ambiguity and the local
+    // tie-break are exercised rather than described.
+    function fakeRow(id: string, manifest: string): EcosystemProfile {
+        return {
+            ...ECOSYSTEMS.npm,
+            id: id as EcosystemProfile['id'],
+            manifestLabel: manifest,
+            detect: cwd => fs.existsSync(path.join(cwd, manifest))
+        }
+    }
+    const ROSTER = [fakeRow('npm', 'package.json'), fakeRow('cargo', 'Cargo.toml')]
+
+    function dirWith(...manifests: string[]): string {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'eco-choose-'))
+        for (const m of manifests) fs.writeFileSync(path.join(dir, m), '', 'utf8')
+        return dir
+    }
+
+    test('detects in roster order', () => {
+        const dir = dirWith('Cargo.toml', 'package.json')
+        expect(detectEcosystems(dir, ROSTER)).toEqual(['npm', 'cargo'] as never)
+        fs.rmSync(dir, {recursive: true, force: true})
+    })
+
+    test('a lone manifest decides', () => {
+        const dir = dirWith('Cargo.toml')
+        const choice = chooseEcosystem({cwd: dir, roster: ROSTER})
+        expect(choice.ok).toBe(true)
+        if (choice.ok) expect(choice.profile.id).toBe('cargo' as never)
+        fs.rmSync(dir, {recursive: true, force: true})
+    })
+
+    test('no manifest refuses and names what it looked for', () => {
+        const dir = dirWith()
+        const choice = chooseEcosystem({cwd: dir, roster: ROSTER})
+        expect(choice.ok).toBe(false)
+        if (!choice.ok) {
+            expect(choice.reason).toBe('none')
+            expect(choice.message).toContain('package.json')
+            expect(choice.message).toContain('Cargo.toml')
+        }
+        fs.rmSync(dir, {recursive: true, force: true})
+    })
+
+    test('a requested ecosystem the directory does not hold is refused', () => {
+        const dir = dirWith('package.json')
+        const choice = chooseEcosystem({cwd: dir, requested: 'cargo' as never, roster: ROSTER})
+        expect(choice.ok).toBe(false)
+        if (!choice.ok) {
+            expect(choice.reason).toBe('not_detected')
+            expect(choice.message).toContain('Cargo.toml')
+        }
+        fs.rmSync(dir, {recursive: true, force: true})
+    })
+
+    test('two manifests fall to whichever already has the package on disk', () => {
+        const dir = dirWith('package.json', 'Cargo.toml')
+        const choice = chooseEcosystem({
+            cwd: dir,
+            roster: ROSTER,
+            resolvesLocally: p => p.id === ('cargo' as never)
+        })
+        expect(choice.ok).toBe(true)
+        if (choice.ok) expect(choice.profile.id).toBe('cargo' as never)
+        fs.rmSync(dir, {recursive: true, force: true})
+    })
+
+    test('two manifests and no local copy is ambiguous, and says how to resolve it', () => {
+        const dir = dirWith('package.json', 'Cargo.toml')
+        const choice = chooseEcosystem({cwd: dir, roster: ROSTER, resolvesLocally: () => false})
+        expect(choice.ok).toBe(false)
+        if (!choice.ok) {
+            expect(choice.reason).toBe('ambiguous')
+            expect(choice.detected).toEqual(['npm', 'cargo'] as never)
+            expect(choice.message).toContain('ecosystem:')
+        }
+        fs.rmSync(dir, {recursive: true, force: true})
+    })
+
+    test('a requested ecosystem the directory does hold wins over ambiguity', () => {
+        const dir = dirWith('package.json', 'Cargo.toml')
+        const choice = chooseEcosystem({cwd: dir, requested: 'npm', roster: ROSTER})
+        expect(choice.ok).toBe(true)
+        if (choice.ok) expect(choice.profile.id).toBe('npm')
+        fs.rmSync(dir, {recursive: true, force: true})
     })
 })

@@ -150,3 +150,94 @@ export function npmProfile(hooks: NpmProfileHooks = {}): EcosystemProfile {
 export const ECOSYSTEMS = {
     npm: npmProfile()
 } as const satisfies Record<EcosystemId, EcosystemProfile>
+
+/** Which ecosystems `cwd` looks like a project of, in roster order. */
+export function detectEcosystems(
+    cwd: string,
+    roster: readonly EcosystemProfile[] = Object.values(ECOSYSTEMS)
+): EcosystemId[] {
+    return roster.filter(p => p.detect(cwd)).map(p => p.id)
+}
+
+export type EcosystemChoice =
+    | {ok: true; profile: EcosystemProfile; detected: EcosystemId[]}
+    | {
+          ok: false
+          reason: 'none' | 'ambiguous' | 'not_detected'
+          detected: EcosystemId[]
+          message: string
+      }
+
+export interface ChooseEcosystemInput {
+    cwd: string
+    /** An explicit ecosystem, for a repo that holds more than one manifest. */
+    requested?: EcosystemId
+    /**
+     * Does this row already have the package on disk? The tie-break for a
+     * polyglot repo, and it must not install: an ambiguous name is exactly the
+     * one that would be installed from the wrong registry.
+     */
+    resolvesLocally?: (profile: EcosystemProfile) => boolean
+    roster?: readonly EcosystemProfile[]
+}
+
+/**
+ * Which ecosystem a lookup belongs to. The MANIFEST decides, never the model:
+ * `text`, `base`, `aeson`, `tokio` and `clap` are all real npm packages as well
+ * as Haskell or Rust ones, so a name alone cannot say which registry was meant,
+ * and guessing npm returns a confident answer about the wrong package.
+ *
+ * A refusal is a result, not a failure: the caller reports it and installs
+ * nothing.
+ */
+export function chooseEcosystem(input: ChooseEcosystemInput): EcosystemChoice {
+    const roster = input.roster ?? (Object.values(ECOSYSTEMS) as EcosystemProfile[])
+    const detected = detectEcosystems(input.cwd, roster)
+    const rowOf = (id: EcosystemId): EcosystemProfile => roster.find(p => p.id === id)!
+    const manifests = roster.map(p => p.manifestLabel).join(', ')
+
+    if (input.requested) {
+        if (detected.includes(input.requested)) {
+            return {ok: true, profile: rowOf(input.requested), detected}
+        }
+        const wanted = roster.find(p => p.id === input.requested)
+        return {
+            ok: false,
+            reason: 'not_detected',
+            detected,
+            message:
+                `No ${input.requested} project here: ${input.cwd} has no `
+                + `${wanted?.manifestLabel ?? input.requested} manifest.`
+        }
+    }
+
+    if (detected.length === 0) {
+        return {
+            ok: false,
+            reason: 'none',
+            detected,
+            message:
+                `${input.cwd} holds no package manifest this tool reads (${manifests}), `
+                + 'so there is no registry to look the name up in and nothing was installed.'
+        }
+    }
+
+    if (detected.length === 1) return {ok: true, profile: rowOf(detected[0]), detected}
+
+    // Several manifests. Whichever registry already has the package on disk is
+    // the one the project actually uses it from.
+    if (input.resolvesLocally) {
+        for (const id of detected) {
+            if (input.resolvesLocally(rowOf(id))) return {ok: true, profile: rowOf(id), detected}
+        }
+    }
+    return {
+        ok: false,
+        reason: 'ambiguous',
+        detected,
+        message:
+            `${input.cwd} is a ${detected.join(' + ')} project and this package is `
+            + 'installed in none of them, so which registry to read is not decidable. '
+            + `Pass ecosystem: "${detected[0]}" (or one of: ${detected.join(', ')}) to say which.`
+    }
+}

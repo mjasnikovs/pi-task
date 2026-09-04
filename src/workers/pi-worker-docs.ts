@@ -35,12 +35,18 @@ const RENDER_QUERY_MAX = 100
 const Params = Type.Object({
     module: Type.String({
         description:
-            'Bare npm module name (e.g. "zod", "@scope/name", "react/jsx-runtime"), OR "." to look up the current project\'s own source code. npm packages must be installed in node_modules.'
+            'Bare package name (e.g. "zod", "@scope/name", "react/jsx-runtime"), OR "." to look up the current project\'s own source code.'
     }),
     query: Type.String({
         description:
             'What to extract from the docs. The child pi reads ranked chunks and returns ONLY content answering this.'
-    })
+    }),
+    ecosystem: Type.Optional(
+        Type.Union([Type.Literal('npm')], {
+            description:
+                'Which registry to read. Only needed in a repo holding more than one package manifest; otherwise the manifest decides.'
+        })
+    )
 })
 
 interface DocsDetails {
@@ -51,7 +57,7 @@ interface DocsDetails {
     childExitCode?: number
     indexingMs?: number
     indexedFiles?: number
-    resolveError?: 'not_installed' | 'invalid_name'
+    resolveError?: 'not_installed' | 'invalid_name' | 'unsupported_ecosystem'
     cacheError?: string
     aborted?: boolean
     autoInstalled?: boolean
@@ -159,18 +165,23 @@ export function registerPiWorkerDocs(
         name: 'pi-worker-docs',
         label: 'Pi Worker Docs',
         description:
-            'Look up an INSTALLED npm package and return a focused, version-pinned '
-            + 'answer from its .d.ts types and README, PLUS the latest published version '
-            + 'from a live npm registry call. USE THIS BEFORE ANSWERING any question '
+            'Look up an INSTALLED package and return a focused, version-pinned '
+            + 'answer from its type declarations and README, PLUS the latest published '
+            + 'version from a live registry call. USE THIS BEFORE ANSWERING any question '
             + 'about how to use a library, what it exports, its types/overloads/config, '
-            + 'or the latest published version of an npm package. Do NOT answer package '
+            + 'or the latest published version of a package. Do NOT answer package '
             + 'APIs from memory, do NOT run `npm view`/bash to get a package version, and '
             + 'do NOT web-search for an installed package — this tool is the source of '
             + 'truth and is version-pinned to what is actually installed (training-data '
             + 'versions and APIs are typically months stale).\n'
+            + 'SUPPORTED ECOSYSTEMS: npm (package.json). The MANIFEST in the working '
+            + 'directory decides which registry a name is looked up in — you do not. If '
+            + 'the directory holds none of those manifests, this tool REFUSES and '
+            + 'installs nothing; use `pi-worker-search` or `pi-worker-fetch` for that '
+            + 'package instead.\n'
             + 'For a non-package framework/runtime version (e.g. Node.js, Ubuntu), use '
             + '`pi-worker-search` instead. If the package is not installed it is '
-            + 'auto-installed via bun add or npm install. The cache lives at '
+            + "auto-installed from the project's own registry. The cache lives at "
             + '~/.cache/pi-worker/docs.sqlite, keyed by exact installed version; the '
             + 'registry lookup is best-effort and silently absent when offline.\n'
             + '\n'
@@ -309,6 +320,7 @@ export function registerPiWorkerDocs(
                 pkg: params.module,
                 query: params.query,
                 cwd: ctx.cwd,
+                ...(params.ecosystem ? {ecosystem: params.ecosystem} : {}),
                 resolvePackage: internals.resolvePackage,
                 ensureIndexed: internals.ensureIndexed,
                 retrieveChunks: internals.retrieveChunks,
@@ -514,11 +526,18 @@ export function docsCacheable(
 /** The docs cache key: a package's answer is per (module, question), with the question
  *  lowercased and its whitespace collapsed so phrasing variants share one entry. Returns
  *  null for the project-source `.` lookup, which is never cached — the working tree
- *  mutates as tasks implement. */
-export function docsCacheKey(params: {module: string; query: string}): string | null {
-    return params.module === '.' ?
-            null
-        :   `${normalizeQuery(params.module)}::${normalizeQuery(params.query)}`
+ *  mutates as tasks implement.
+ *
+ *  The ecosystem joins the key only when the caller named one, so the keys of every
+ *  call that lets the manifest decide are the ones they always were. */
+export function docsCacheKey(params: {
+    module: string
+    query: string
+    ecosystem?: string
+}): string | null {
+    if (params.module === '.') return null
+    const scope = params.ecosystem ? `${params.ecosystem}::` : ''
+    return `${scope}${normalizeQuery(params.module)}::${normalizeQuery(params.query)}`
 }
 
 /** Package provenance for per-entry resume invalidation: the package ROOT of the

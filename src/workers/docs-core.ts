@@ -4,7 +4,14 @@ import * as os from 'node:os'
 import * as path from 'node:path'
 import {openCache as defaultOpenCache, type CacheHandle} from './docs-cache.js'
 import {ensureIndexed as defaultEnsureIndexed, type IndexResult} from './docs-index.js'
-import {npmProfile, ECOSYSTEMS, type EcosystemIo, type EcosystemProfile} from './docs-ecosystems.js'
+import {
+    npmProfile,
+    chooseEcosystem,
+    ECOSYSTEMS,
+    type EcosystemId,
+    type EcosystemIo,
+    type EcosystemProfile
+} from './docs-ecosystems.js'
 import {
     resolvePackage as defaultResolvePackage,
     ResolveError,
@@ -81,7 +88,7 @@ export type DocsRawResult =
     | {
           kind: 'error'
           message: string
-          resolveError?: 'not_installed' | 'invalid_name'
+          resolveError?: 'not_installed' | 'invalid_name' | 'unsupported_ecosystem'
           installError?: string
           version?: string
           hitCache?: boolean
@@ -95,6 +102,8 @@ export interface DocsRawInput {
     pkg: string
     query: string
     cwd: string
+    /** Which registry to read, for a repo holding more than one manifest. */
+    ecosystem?: EcosystemId
     autoInstall?: boolean
     // optional injection hooks for tests:
     resolvePackage?: typeof defaultResolvePackage
@@ -503,10 +512,28 @@ export async function docsRaw(input: DocsRawInput): Promise<DocsRawResult> {
     const spawn = input.spawn ?? (defaultSpawn as unknown as SpawnFn)
     const npmVersionLookup = input.npmVersionLookup ?? defaultNpmVersionLookup
 
-    // A per-call row, not the static one: `resolvePackage` and `npmVersionLookup`
-    // are injection hooks, and a row built from the module-level exports would
-    // route straight past whatever a caller injected.
-    const profile = npmProfile({resolvePackage, npmVersionLookup})
+    // Which registry, decided by the MANIFEST before anything else runs. A refusal
+    // must reach the caller having spawned nothing and asked no registry, so this
+    // sits above the version lookup and the resolve ladder both.
+    const choice = chooseEcosystem({cwd: input.cwd, requested: input.ecosystem})
+    if (!choice.ok) {
+        return {
+            kind: 'error',
+            message:
+                `${choice.message} Use pi-worker-search or pi-worker-fetch for `
+                + `"${input.pkg}" instead.`,
+            resolveError: 'unsupported_ecosystem'
+        }
+    }
+
+    // A per-call row for npm, not the static one: `resolvePackage` and
+    // `npmVersionLookup` are injection hooks, and a row built from the
+    // module-level exports would route straight past whatever a caller injected.
+    // They are npm's hooks, so no other row takes them.
+    const profile =
+        choice.profile.id === 'npm' ?
+            npmProfile({resolvePackage, npmVersionLookup})
+        :   choice.profile
     const io: EcosystemIo = {spawn, signal: input.signal}
 
     // A runtime builtin specifier (`bun:sql`, `node:fs`) is typed by the runtime's
