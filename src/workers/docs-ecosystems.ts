@@ -83,6 +83,25 @@ function existsAtOrAbove(cwd: string, names: readonly string[]): boolean {
 }
 
 /**
+ * The same walk, checking each ancestor's immediate children too.
+ *
+ * npm does not need this — node resolves straight up — but cargo and cabal keep
+ * their manifest in a SIBLING of where a session usually starts. From a Tauri
+ * repo's `src/`, the crate is in `../src-tauri`, and without the sideways step
+ * the project reads as npm-only and `tokio` resolves to npm's web scraper: the
+ * original bug, from one directory over.
+ */
+function foundAtOrAbove(cwd: string, atDir: (dir: string) => boolean): boolean {
+    let dir = cwd
+    while (true) {
+        if (atDir(dir) || childDirs(dir).some(atDir)) return true
+        const up = path.dirname(dir)
+        if (up === dir) return false
+        dir = up
+    }
+}
+
+/**
  * Every filesystem, process and network reach a row is allowed. Rows read no
  * environment and call no global directly, so a test injects a fake registry and
  * a fake extractor instead of needing a real toolchain on the machine.
@@ -185,6 +204,8 @@ export interface EcosystemProfile {
 
     /** Directories the surface walk never descends into: tests, build output. */
     skipDirs: readonly string[]
+    /** What this ecosystem's packages ship, for a "there is nothing to read" answer. */
+    surfaceLabel: string
     /** Which of the PROJECT's own files this ecosystem contributes to its index. */
     projectGlobs: readonly string[]
     /** The project's own name from its manifest, or null when it declares none. */
@@ -247,6 +268,7 @@ export function npmProfile(hooks: NpmProfileHooks = {}): EcosystemProfile {
         commentPrefix: '//',
         // A nested node_modules is another package's surface, never this one's.
         skipDirs: ['node_modules'],
+        surfaceLabel: '.d.ts files or README',
         projectGlobs: ['*.ts', '*.tsx'],
         projectName: npmProjectName,
         declaredDeps: npmDeclaredDeps
@@ -333,6 +355,20 @@ async function acquireCrate(
             stderr: err instanceof Error ? err.message : String(err)
         }
     }
+    return extractArchive(archive, dir, io)
+}
+
+/**
+ * Unpack an archive and then delete it. The extracted tree is what every later
+ * call reads, so keeping the tarball beside it only spends disk — and a `.tar.gz`
+ * sitting among the package directories trips anything that treats the extract
+ * directory as a list of packages.
+ */
+async function extractArchive(
+    archive: string,
+    dir: string,
+    io: EcosystemIo
+): Promise<AcquireResult> {
     const result = await runChild(
         io.spawn,
         {command: 'tar', args: ['-xzf', archive, '-C', dir]},
@@ -340,11 +376,9 @@ async function acquireCrate(
         io.signal,
         {mode: 'text', discardStdout: true}
     )
-    return {
-        success: result.exitCode === 0 && !result.aborted,
-        installDir: dir,
-        stderr: result.stderr
-    }
+    const success = result.exitCode === 0 && !result.aborted
+    if (success) fs.rmSync(archive, {force: true})
+    return {success, installDir: dir, stderr: result.stderr}
 }
 
 const cargoProfile: EcosystemProfile = {
@@ -361,9 +395,7 @@ const cargoProfile: EcosystemProfile = {
 
     // One level down as well: a Tauri repo declares package.json at the root and
     // keeps its crate in `src-tauri/`.
-    detect: cwd =>
-        existsAtOrAbove(cwd, ['Cargo.toml'])
-        || childDirs(cwd).some(d => fs.existsSync(path.join(d, 'Cargo.toml'))),
+    detect: cwd => foundAtOrAbove(cwd, d => fs.existsSync(path.join(d, 'Cargo.toml'))),
     isValidName: isValidCrateName,
     parentPackage: crateOf,
 
@@ -389,6 +421,7 @@ const cargoProfile: EcosystemProfile = {
     declSplitRe: CARGO_DECL_SPLIT_RE,
     commentPrefix: '//',
     skipDirs: ['tests', 'benches', 'examples', 'target'],
+    surfaceLabel: '.rs source or README',
     projectGlobs: ['*.rs'],
     projectName: cargoProjectName,
     declaredDeps: lockedDeps
@@ -405,18 +438,23 @@ async function extractTarball(
     dir: string,
     io: EcosystemIo
 ): Promise<AcquireResult> {
-    const result = await runChild(
-        io.spawn,
-        {command: 'tar', args: ['-xzf', archive, '-C', dir]},
-        dir,
-        io.signal,
-        {mode: 'text', discardStdout: true}
-    )
-    return {
-        success: result.exitCode === 0 && !result.aborted,
-        installDir: dir,
-        stderr: result.stderr
+    // Cabal's own cached tarball must survive; only a copy this tool downloaded
+    // into its own directory is deleted after unpacking.
+    if (path.dirname(archive) !== dir) {
+        const result = await runChild(
+            io.spawn,
+            {command: 'tar', args: ['-xzf', archive, '-C', dir]},
+            dir,
+            io.signal,
+            {mode: 'text', discardStdout: true}
+        )
+        return {
+            success: result.exitCode === 0 && !result.aborted,
+            installDir: dir,
+            stderr: result.stderr
+        }
     }
+    return extractArchive(archive, dir, io)
 }
 
 const hackageProfile: EcosystemProfile = {
@@ -431,7 +469,7 @@ const hackageProfile: EcosystemProfile = {
     registryLabel: 'hackage',
     manifestLabel: '*.cabal',
 
-    detect: cwd => hasCabalManifestAtOrAbove(cwd) || childDirs(cwd).some(hasCabalManifest),
+    detect: cwd => foundAtOrAbove(cwd, hasCabalManifest),
     isValidName: isValidHackageName,
     parentPackage: name => name,
 
@@ -483,6 +521,7 @@ const hackageProfile: EcosystemProfile = {
     declSplitRe: HACKAGE_DECL_SPLIT_RE,
     commentPrefix: '--',
     skipDirs: HACKAGE_SKIP_DIRS,
+    surfaceLabel: '.hs source or README',
     projectGlobs: ['*.hs'],
     projectName: hackageProjectName,
     declaredDeps: resolvedVersions
@@ -504,18 +543,6 @@ function hasCabalManifest(cwd: string): boolean {
             .some(e => e.isFile() && e.name.length > '.cabal'.length && e.name.endsWith('.cabal'))
     } catch {
         return false
-    }
-}
-
-/** The same question walking up. A `.cabal` file is a wildcard, so this cannot
- *  go through `existsAtOrAbove`, which takes exact names. */
-function hasCabalManifestAtOrAbove(cwd: string): boolean {
-    let dir = cwd
-    while (true) {
-        if (hasCabalManifest(dir)) return true
-        const up = path.dirname(dir)
-        if (up === dir) return false
-        dir = up
     }
 }
 
@@ -552,6 +579,11 @@ export interface ChooseEcosystemInput {
      * one that would be installed from the wrong registry.
      */
     resolvesLocally?: (profile: EcosystemProfile) => boolean
+    /**
+     * Does this row's MANIFEST name the package? Stronger evidence than a copy
+     * on disk, and it outranks it below.
+     */
+    declaresPackage?: (profile: EcosystemProfile) => boolean
     roster?: readonly EcosystemProfile[]
 }
 
@@ -598,9 +630,16 @@ export function chooseEcosystem(input: ChooseEcosystemInput): EcosystemChoice {
 
     if (detected.length === 1) return {ok: true, profile: rowOf(detected[0]), detected}
 
-    // Several manifests. Whichever registry already has the package on disk is
-    // the one the project actually uses it from.
-    if (input.resolvesLocally) {
+    // Several manifests. A row whose MANIFEST names the package wins: in a Tauri
+    // repo `semver` is pinned by Cargo.lock at 1.0.28 and merely sits in
+    // node_modules as a transitive copy nothing declared, and taking the npm one
+    // because npm leads the roster is the issue-#18 mistake with both packages
+    // installed instead of neither.
+    const declaring =
+        input.declaresPackage ? detected.filter(id => input.declaresPackage!(rowOf(id))) : []
+    if (declaring.length === 1) return {ok: true, profile: rowOf(declaring[0]), detected}
+    if (declaring.length === 0 && input.resolvesLocally) {
+        // Nobody declares it. A copy on disk is the only evidence left.
         for (const id of detected) {
             if (input.resolvesLocally(rowOf(id))) return {ok: true, profile: rowOf(id), detected}
         }

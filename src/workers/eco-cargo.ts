@@ -106,19 +106,31 @@ export function childDirs(cwd: string): string[] {
  * nothing at all.
  */
 export function findLock(cwd: string): string | null {
+    return findAtOrAbove(cwd, 'Cargo.lock')
+}
+
+/**
+ * The first `<dir>/<name>` at or above `cwd`, checking each ancestor's immediate
+ * children too.
+ *
+ * The sideways step is the Tauri shape: `package.json` at the repo root and the
+ * crate under `src-tauri/`. Checking children of `cwd` alone is not enough —
+ * from the frontend directory `src/`, the crate is in a SIBLING, so the scan has
+ * to happen at every level on the way up or the whole project reads as npm-only.
+ */
+export function findAtOrAbove(cwd: string, ...rel: string[]): string | null {
     let dir = cwd
     while (true) {
-        const candidate = path.join(dir, 'Cargo.lock')
-        if (fs.existsSync(candidate)) return candidate
+        const here = path.join(dir, ...rel)
+        if (fs.existsSync(here)) return here
+        for (const child of childDirs(dir)) {
+            const candidate = path.join(child, ...rel)
+            if (fs.existsSync(candidate)) return candidate
+        }
         const up = path.dirname(dir)
-        if (up === dir) break
+        if (up === dir) return null
         dir = up
     }
-    for (const child of childDirs(cwd)) {
-        const candidate = path.join(child, 'Cargo.lock')
-        if (fs.existsSync(candidate)) return candidate
-    }
-    return null
 }
 
 /**
@@ -357,8 +369,10 @@ export function crateTarballUrl(name: string, version: string): string {
 export const CARGO_DECL_SPLIT_RE =
     /^\s*(?:#\[[^\n]*\]\s*)*(?:pub\s+)?(?:async\s+|unsafe\s+|const\s+|extern\s+)*(?:fn|struct|enum|union|trait|type|impl|mod|const|static)\b/m
 
+// `macro_rules!` carries its own terminator, so it sits OUTSIDE the `\b` — a word
+// boundary after `!` requires a word character next, and what follows is a space.
 const ITEM_HEAD_RE =
-    /^(?:pub(?:\s*\([^)]*\))?\s+)?(?:default\s+|async\s+|unsafe\s+|const\s+|extern\s+"[^"]*"\s+|extern\s+)*(fn|struct|enum|union|trait|impl|mod|type|const|static|use|macro_rules!)\b/
+    /^(?:pub(?:\s*\([^)]*\))?\s+)?(?:default\s+|async\s+|unsafe\s+|const\s+|extern\s+"[^"]*"\s+|extern\s+)*((?:fn|struct|enum|union|trait|impl|mod|type|const|static|use)\b|macro_rules!)/
 
 /** A `pub(crate)`/`pub(super)` item is not part of the crate's public surface. */
 function isPublic(head: string): boolean {
@@ -419,6 +433,15 @@ export function splitRustItems(src: string): Item[] {
             i = end < 0 ? src.length : end + 2
             continue
         }
+        // `r#"…"#` ends only at a quote followed by the same number of hashes, so
+        // a `"` INSIDE one is ordinary text. Treating it as a delimiter re-opens
+        // the scanner, desynchronises brace depth, and swallows the rest of the
+        // file — Tauri's whole WebviewBuilder surface disappears that way.
+        const raw = rawStringEnd(src, i)
+        if (raw >= 0) {
+            i = raw
+            continue
+        }
         if (c === '"') {
             i = skipString(src, i)
             continue
@@ -477,10 +500,35 @@ function skipAttribute(src: string, i: number): number {
             if (depth === 0) return j + 1
         } else if (src[j] === '"') {
             j = skipString(src, j) - 1
+        } else {
+            const raw = rawStringEnd(src, j)
+            if (raw >= 0) j = raw - 1
         }
         j++
     }
     return src.length
+}
+
+/**
+ * End index of a raw or byte string starting at `i`, or -1 when one does not.
+ * Handles `r"…"`, `r#"…"#`, `r##"…"##`, and the `b`-prefixed byte forms.
+ */
+function rawStringEnd(src: string, i: number): number {
+    let j = i
+    if (src[j] === 'b') j++
+    if (src[j] !== 'r') return -1
+    // A preceding identifier character means this is a name, not a prefix.
+    if (i > 0 && /[A-Za-z0-9_]/.test(src[i - 1])) return -1
+    j++
+    let hashes = 0
+    while (src[j] === '#') {
+        hashes++
+        j++
+    }
+    if (src[j] !== '"') return -1
+    const close = `"${'#'.repeat(hashes)}`
+    const end = src.indexOf(close, j + 1)
+    return end < 0 ? src.length : end + close.length
 }
 
 function skipString(src: string, i: number): number {
@@ -528,6 +576,55 @@ function keptPreamble(pending: string): string {
         .join('\n')
 }
 
+/**
+ * This module's own `//!` docs: the ones outside every brace.
+ *
+ * Not a leading RUN — a crate root usually opens with `#![allow(…)]` blocks and
+ * only then documents itself, and tokio's 19 KB of module docs sit below four of
+ * them. Not the whole file either, or a nested `mod`'s docs are hoisted to the
+ * crate root and printed again inside the module.
+ */
+function moduleDocOf(src: string): string {
+    const kept: string[] = []
+    let depth = 0
+    for (const raw of src.split('\n')) {
+        const line = raw.trim()
+        if (depth === 0 && line.startsWith('//!')) {
+            kept.push(line)
+            continue
+        }
+        // Comment lines are skipped whole: a `//` line may hold an unbalanced
+        // brace, and only real code should move the depth.
+        if (line.startsWith('//')) continue
+        for (const c of raw) {
+            if (c === '{') depth++
+            else if (c === '}') depth--
+        }
+    }
+    return kept.join('\n')
+}
+
+/** The type an `impl` block is FOR: after `for` when present, else after `impl`. */
+function implTarget(head: string): string | null {
+    const after = / for\s+([^\s{<]+)/.exec(head) ?? /^impl(?:\s*<[^>]*>)?\s+([^\s{<]+)/.exec(head)
+    if (!after) return null
+    const parts = after[1].split('::')
+    return parts[parts.length - 1] || null
+}
+
+/** Type names this block declares WITHOUT `pub`. An impl for one of them is not API. */
+function privateTypeNames(items: Item[]): Set<string> {
+    const out = new Set<string>()
+    for (const item of items) {
+        const m =
+            /^(?:pub(?:\s*\([^)]*\))?\s+)?(?:struct|enum|union|trait|type)\s+([A-Za-z_][\w]*)/.exec(
+                item.head
+            )
+        if (m && !isPublic(item.head)) out.add(m[1])
+    }
+    return out
+}
+
 const BODY_KINDS = new Set(['struct', 'enum', 'union', 'trait', 'impl', 'mod', 'extern'])
 
 /**
@@ -552,19 +649,36 @@ const LIST_KINDS = new Set(['use'])
  */
 export function rustSurface(src: string, insideTrait = false, topLevel = true): string {
     const out: string[] = []
+    const items = splitRustItems(src)
+    const privateTypes = privateTypeNames(items)
     // `//!` documents the module, not the item under it, so it survives whether or
     // not the first item does — and only at the top, never again per nested block.
-    const moduleDoc = src
-        .split('\n')
-        .filter(l => l.trim().startsWith('//!'))
-        .map(l => l.trim())
-        .join('\n')
+    // Only the `//!` lines before the first item belong to THIS module. Scanning
+    // the whole text hoists a nested `mod`'s doc to the crate root and prints it
+    // again inside the module.
+    const moduleDoc = moduleDocOf(src)
     if (topLevel && moduleDoc) out.push(moduleDoc)
-    for (const item of splitRustItems(src)) {
+    for (const item of items) {
         const headMatch = ITEM_HEAD_RE.exec(item.head)
         if (!headMatch) continue
         const kind = headMatch[1]
-        if (kind === 'macro_rules!') continue
+        // A `#[macro_export]` macro IS the crate's API — `anyhow::bail!`,
+        // `serde_json::json!`. Dropping every macro answered "no such thing"
+        // for 714 exported macros across a third of the crates on this box.
+        if (kind === 'macro_rules!') {
+            if (!/#\[macro_export\]/.test(item.pending)) continue
+            const preamble = keptPreamble(item.pending)
+            out.push(
+                `${preamble ? `${preamble}\n` : ''}${item.head.replace(/\s+/g, ' ').trim()} `
+                    + '{ /* macro arms elided */ }'
+            )
+            continue
+        }
+        // An `impl` on a type this module keeps private is not reachable from
+        // outside it, so publishing its constructor invites a call that cannot
+        // compile.
+        const target = kind === 'impl' ? implTarget(item.head) : null
+        if (kind === 'impl' && target && privateTypes.has(target)) continue
         const keep = insideTrait || kind === 'impl' || isPublic(item.head)
         if (!keep) continue
 
@@ -597,53 +711,89 @@ export function rustSurface(src: string, insideTrait = false, topLevel = true): 
 }
 
 /**
- * A struct's fields or an enum's variants. A struct field is public only when it
- * says `pub`; an enum variant carries no such keyword and is always public.
+ * A struct's fields or an enum's variants.
  *
- * Split on COMMAS, not on lines: `pub struct Cfg { pub n: u32, secret: u8 }` is
- * one line holding two fields, and a line filter keeps or drops both together.
- * The split tracks `<>()[]{}` depth so `HashMap<String, u8>` stays one field.
+ * Split on top-level COMMAS across the whole body, not line by line. A field
+ * whose type wraps (`pub map: HashMap<\n String,\n u8,\n>`) or a struct variant
+ * (`A { x: u8 }`) spans several lines, and a per-line splitter cuts it at the
+ * newline and emits `pub map: HashMap<` — a type that does not exist.
+ *
+ * A struct field is public only when `isPublic` says so, which rejects
+ * `pub(crate)`; an enum variant carries no keyword and is always public.
  */
 function fieldsOf(body: string, requirePub: boolean): string {
     const out: string[] = []
     let doc: string[] = []
-    for (const raw of body.split('\n')) {
-        const line = raw.trim()
-        if (!line) continue
-        if (line.startsWith('///')) {
-            doc.push(line)
+    for (const field of splitFields(body)) {
+        if (field.doc.length && (!requirePub || isPublic(field.text))) doc = field.doc
+        else if (field.doc.length) doc = []
+        if (requirePub && !isPublic(field.text)) {
+            doc = []
             continue
         }
-        if (line.startsWith('//') || line.startsWith('#[')) continue
-        const kept = splitFields(line).filter(f => !requirePub || /^pub\b/.test(f))
-        if (kept.length) out.push(...doc, kept.map(f => `${f.replace(/,+$/, '')},`).join(' '))
+        out.push(...doc, `${field.text},`)
         doc = []
     }
     return out.join('\n').trim()
 }
 
+interface Field {
+    /** `///` lines immediately above this field. */
+    doc: string[]
+    /** The field or variant, whitespace collapsed. */
+    text: string
+}
+
 const OPENERS: Record<string, string> = {'<': '>', '(': ')', '[': ']', '{': '}'}
 
-/** One line of a field or variant list, cut at its top-level commas. */
-function splitFields(line: string): string[] {
-    const out: string[] = []
+/**
+ * Cut a field or variant list at its top-level commas.
+ *
+ * Depth is tracked over `<>()[]{}` so `HashMap<String, u8>` stays one field, and
+ * `->` is skipped because a return arrow is not a closing generic — counting it
+ * drives the depth negative and the rest of the list stops splitting.
+ */
+function splitFields(body: string): Field[] {
+    const out: Field[] = []
+    let doc: string[] = []
+    let buf = ''
     let depth = 0
-    let start = 0
-    for (let i = 0; i < line.length; i++) {
-        const c = line[i]
-        // `->` is a return arrow, not a closing generic: counting it drives the
-        // depth negative and the rest of the line stops splitting.
-        if (OPENERS[c]) depth++
-        else if (c === '>' && line[i - 1] !== '-') depth--
-        else if (c === ')' || c === ']' || c === '}') depth--
-        else if (c === ',' && depth === 0) {
-            out.push(line.slice(start, i).trim())
-            start = i + 1
+
+    const flush = (): void => {
+        const text = buf.replace(/\s+/g, ' ').trim()
+        buf = ''
+        if (!text) {
+            doc = []
+            return
         }
+        out.push({doc, text})
+        doc = []
     }
-    const tail = line.slice(start).trim()
-    if (tail) out.push(tail)
-    return out.filter(Boolean)
+
+    for (const raw of body.split('\n')) {
+        const line = raw.trim()
+        if (depth === 0 && buf.trim() === '') {
+            if (line.startsWith('///')) {
+                doc.push(line)
+                continue
+            }
+            if (line.startsWith('//') || line.startsWith('#[')) continue
+        }
+        for (let i = 0; i < line.length; i++) {
+            const c = line[i]
+            if (OPENERS[c]) depth++
+            else if (c === '>' && line[i - 1] !== '-') depth--
+            else if (c === ')' || c === ']' || c === '}') depth--
+            else if (c === ',' && depth === 0) {
+                flush()
+                continue
+            }
+            buf += c
+        }
+        buf += '\n'
+    }
+    flush()
+    return out
 }
 
 function indent(s: string): string {

@@ -195,6 +195,39 @@ describe('the surface', () => {
         expect(equation).not.toContain('1 + 2')
     })
 
+    test('code inside a block comment is NOT resurrected as API', () => {
+        // The worst answer this tool can give: a plausible signature for a
+        // function that does not exist. `vector` ships `thawMany` commented out,
+        // and it surfaced between two real functions, indistinguishable.
+        const out2 = haskellSurface(
+            'module M where\n\n{-\nfoo :: Int -> Int\nfoo = id\n-}\n\nbar :: Int\nbar = 1\n'
+        )
+        expect(out2).toContain('bar :: Int')
+        expect(out2).not.toContain('foo')
+
+        // Nested blocks close in the right order.
+        const nested = haskellSurface(
+            'module M where\n{- outer {- inner -} still comment\nghost :: Int\n-}\nreal :: Int\nreal = 1\n'
+        )
+        expect(nested).toContain('real :: Int')
+        expect(nested).not.toContain('ghost')
+    })
+
+    test('block haddock is kept — it is how a module documents itself', () => {
+        const out2 = haskellSurface(
+            'module M where\n\n{-| Decode a value.\n\n  More docs.\n-}\n'
+                + 'decode :: ByteString -> Maybe a\ndecode = undefined\n'
+        )
+        expect(out2).toContain('Decode a value.')
+        expect(out2).toContain('More docs.')
+        expect(out2).toContain('decode :: ByteString -> Maybe a')
+    })
+
+    test('a LANGUAGE pragma is not mistaken for a comment open', () => {
+        const out2 = haskellSurface('{-# LANGUAGE GADTs #-}\nmodule M where\nx :: Int\nx = 1\n')
+        expect(out2).toContain('x :: Int')
+    })
+
     test('drops equations, instance bodies, imports and pragmas', () => {
         expect(out).not.toContain('let body')
         expect(out).not.toContain('Quiet -> body')

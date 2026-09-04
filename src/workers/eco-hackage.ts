@@ -19,7 +19,7 @@
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 import {ResolveError, type ResolvedPackage} from './docs-resolve.js'
-import {childDirs} from './eco-cargo.js'
+import {findAtOrAbove} from './eco-cargo.js'
 import type {NpmVersionInfo} from './npm-version.js'
 
 const HACKAGE = 'https://hackage.haskell.org/package'
@@ -43,21 +43,9 @@ function safeRead(file: string): string | null {
     }
 }
 
-/** The first existing file at `rel` at or above `cwd`, or one level below it. */
+/** The first existing file at `rel` at or above `cwd`, siblings included. */
 function findUpOrDown(cwd: string, rel: string[]): string | null {
-    let dir = cwd
-    while (true) {
-        const candidate = path.join(dir, ...rel)
-        if (fs.existsSync(candidate)) return candidate
-        const up = path.dirname(dir)
-        if (up === dir) break
-        dir = up
-    }
-    for (const child of childDirs(cwd)) {
-        const candidate = path.join(child, ...rel)
-        if (fs.existsSync(candidate)) return candidate
-    }
-    return null
+    return findAtOrAbove(cwd, ...rel)
 }
 
 interface CabalPlan {
@@ -361,7 +349,73 @@ const HADDOCK_RE = /^--\s*[|^]/
  * name — and an `instance` body is the same thing under another keyword, which
  * is why only its head survives.
  */
-export function haskellSurface(src: string): string {
+/**
+ * Blank out `{- … -}` block comments, nesting included, keeping line count.
+ *
+ * Without this, code inside a comment is read as real API. `vector`'s
+ * `thawMany` is commented out and surfaced as a genuine signature sitting
+ * between two real functions — a plausible declaration for a function that does
+ * not exist, which is the worst answer this tool can give.
+ *
+ * `{-|` and `{-^` are haddock, not commentary, and are handled by the caller.
+ */
+export function stripBlockComments(src: string): string {
+    const out: string[] = []
+    let depth = 0
+    for (const line of src.split('\n')) {
+        let kept = ''
+        let i = 0
+        while (i < line.length) {
+            if (line.startsWith('{-', i) && !isHaddockOpen(line, i)) {
+                depth++
+                i += 2
+                continue
+            }
+            if (line.startsWith('-}', i) && depth > 0) {
+                depth--
+                i += 2
+                continue
+            }
+            // A `--` line comment outside a block runs to end of line, and may
+            // legitimately contain `{-`.
+            if (depth === 0 && line.startsWith('--', i)) {
+                kept += line.slice(i)
+                break
+            }
+            if (depth === 0) kept += line[i]
+            i++
+        }
+        out.push(kept)
+    }
+    return out.join('\n')
+}
+
+/** `{-|` and `{-^` open haddock; `{-#` opens a pragma, which is not a comment. */
+function isHaddockOpen(line: string, i: number): boolean {
+    const c = line[i + 2]
+    return c === '|' || c === '^' || c === '#'
+}
+
+/** A `{-| … -}` haddock block, flattened to the `-- |` form the rest of the pass keeps. */
+function haddockBlockAt(lines: string[], start: number): {text: string[]; next: number} | null {
+    if (!/^\{-[|^]/.test(lines[start].trim())) return null
+    const text: string[] = []
+    for (let i = start; i < lines.length; i++) {
+        const closed = lines[i].includes('-}')
+        text.push(
+            `-- ${lines[i]
+                .replace(/^\s*\{-[|^]?/, '')
+                .replace(/-\}\s*$/, '')
+                .trim()}`
+        )
+        if (closed) return {text: text.filter(l => l.trim() !== '--'), next: i + 1}
+    }
+    return {text: text.filter(l => l.trim() !== '--'), next: lines.length}
+}
+
+export function haskellSurface(rawSrc: string): string {
+    // Haddock blocks survive; ordinary `{- … -}` commentary does not.
+    const src = stripBlockComments(rawSrc)
     const lines = src.split('\n')
     const out: string[] = []
     let i: number
@@ -405,6 +459,15 @@ export function haskellSurface(src: string): string {
         if (HADDOCK_RE.test(line)) {
             pending.push(line)
             i++
+            continue
+        }
+        // `{-| … -}` is how most modules write their documentation, and the
+        // module header block above all. Dropping it loses the part a reader
+        // actually wants.
+        const haddockBlock = haddockBlockAt(lines, i)
+        if (haddockBlock) {
+            pending.push(...haddockBlock.text)
+            i = haddockBlock.next
             continue
         }
         if (line.startsWith('--') || line.startsWith('{-#') || /^import\s/.test(line)) {

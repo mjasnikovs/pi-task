@@ -565,7 +565,9 @@ export async function docsRaw(input: DocsRawInput): Promise<DocsRawResult> {
             } catch {
                 return false
             }
-        }
+        },
+        declaresPackage: candidate =>
+            candidate.declaredRange(candidate.parentPackage(requested), input.cwd) !== null
     })
     if (!choice.ok) {
         return {
@@ -867,7 +869,8 @@ export async function docsFocused(input: DocsFocusedInput): Promise<DocsFocusedR
     }
     if (rawResult.kind === 'no_chunks') {
         throw new Error(
-            `Package ${rawResult.pkg.name}@${rawResult.pkg.version} has no .d.ts files or README.`
+            `Package ${rawResult.pkg.name}@${rawResult.pkg.version} has no `
+                + `${ECOSYSTEMS[rawResult.pkg.ecosystem].surfaceLabel}.`
         )
     }
 

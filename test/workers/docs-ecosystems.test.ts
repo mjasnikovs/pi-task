@@ -256,6 +256,49 @@ describe('choosing an ecosystem', () => {
         fs.rmSync(dir, {recursive: true, force: true})
     })
 
+    test('a manifest in a SIBLING directory is found from anywhere in the repo', () => {
+        // The Tauri shape: package.json at the root, the crate under src-tauri/.
+        // From the frontend directory the crate is in a sibling, and checking only
+        // the cwd's own children reads the project as npm-only — which is the
+        // original bug, one directory over.
+        const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'eco-sibling-'))
+        fs.writeFileSync(path.join(repo, 'package.json'), '{}', 'utf8')
+        fs.mkdirSync(path.join(repo, 'src-tauri'), {recursive: true})
+        fs.writeFileSync(path.join(repo, 'src-tauri', 'Cargo.toml'), '[package]\n', 'utf8')
+        fs.mkdirSync(path.join(repo, 'src', 'components'), {recursive: true})
+
+        for (const dir of [repo, path.join(repo, 'src'), path.join(repo, 'src', 'components')]) {
+            expect(detectEcosystems(dir)).toEqual(['npm', 'cargo'])
+        }
+        fs.rmSync(repo, {recursive: true, force: true})
+    })
+
+    test('the manifest that NAMES the package outranks a copy on disk', () => {
+        // Both registries hold `semver` in a Tauri repo — Cargo.lock pins it,
+        // node_modules has a transitive copy nothing declared. Taking npm because
+        // npm leads the roster ignores the only evidence of intent there is.
+        const dir = dirWith('package.json', 'Cargo.toml')
+        const declaresCargo = chooseEcosystem({
+            cwd: dir,
+            roster: ROSTER,
+            resolvesLocally: () => true,
+            declaresPackage: p => p.id === ('cargo' as never)
+        })
+        expect(declaresCargo.ok).toBe(true)
+        if (declaresCargo.ok) expect(declaresCargo.profile.id).toBe('cargo' as never)
+
+        // Both declaring it is real ambiguity, and is refused rather than guessed.
+        const both = chooseEcosystem({
+            cwd: dir,
+            roster: ROSTER,
+            resolvesLocally: () => true,
+            declaresPackage: () => true
+        })
+        expect(both.ok).toBe(false)
+        if (!both.ok) expect(both.reason).toBe('ambiguous')
+        fs.rmSync(dir, {recursive: true, force: true})
+    })
+
     test('a requested ecosystem the directory does hold wins over ambiguity', () => {
         const dir = dirWith('package.json', 'Cargo.toml')
         const choice = chooseEcosystem({cwd: dir, requested: 'npm', roster: ROSTER})

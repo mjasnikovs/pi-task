@@ -205,6 +205,69 @@ describe('the surface', () => {
         expect(generics).not.toContain('hidden')
     })
 
+    test('a raw string is opaque — a quote inside one is not a delimiter', () => {
+        // `skipString` scanning for the next `"` re-opens on the quote INSIDE
+        // r#"…"# , brace depth desynchronises, and the rest of the file is
+        // swallowed. Tauri's whole WebviewBuilder surface went that way.
+        const out2 = rustSurface(
+            'pub fn quote() { let s = r#"a"b{"#; }\npub struct Wanted { pub x: u8 }\n'
+        )
+        expect(out2).toContain('pub fn quote()')
+        expect(out2).toContain('pub struct Wanted')
+        expect(
+            rustSurface('#[doc = r##"has "quotes" and { braces"##]\npub fn documented();')
+        ).toContain('pub fn documented')
+    })
+
+    test('an exported macro is API; an unexported one is not', () => {
+        const out2 = rustSurface(
+            '/// Return early.\n#[macro_export]\nmacro_rules! bail { ($m:literal) => {} }\n'
+                + 'macro_rules! private_helper { () => {} }\n'
+        )
+        expect(out2).toContain('/// Return early.')
+        expect(out2).toContain('macro_rules! bail')
+        expect(out2).not.toContain('private_helper')
+    })
+
+    test('an impl on a private type is not published as callable API', () => {
+        const out2 = rustSurface(
+            'struct Secret { x: u8 }\nimpl Secret { pub fn new() -> Self { Secret{x:0} } }\n'
+                + 'pub struct Open;\nimpl Open { pub fn go() {} }\n'
+        )
+        expect(out2).not.toContain('Secret')
+        expect(out2).toContain('impl Open')
+        expect(out2).toContain('pub fn go()')
+    })
+
+    test('a field whose type wraps across lines survives whole', () => {
+        const out2 = rustSurface(
+            'pub struct S {\n    /// the map\n    pub map: HashMap<\n        String,\n'
+                + '        u8,\n    >,\n    pub(crate) hidden: u8,\n    pub b: u8,\n}'
+        )
+        expect(out2).toContain('/// the map')
+        expect(out2).toContain('String, u8,')
+        // `pub(crate)` is not the crate's public surface.
+        expect(out2).not.toContain('hidden')
+        // The truncation this replaced emitted `pub map: HashMap<,`.
+        expect(out2).not.toContain('HashMap<,')
+        expect(
+            rustSurface('pub enum E {\n    A {\n        x: u8,\n    },\n    B(u8),\n}')
+        ).not.toContain('A {,')
+    })
+
+    test('module docs belong to their own module, once', () => {
+        // Not a leading RUN: a crate root opens with `#![allow(…)]` blocks and
+        // documents itself below them.
+        const belowAttrs = rustSurface('#![allow(dead_code)]\n//! Crate doc.\npub fn a() {}\n')
+        expect(belowAttrs).toContain('//! Crate doc.')
+
+        const nested = rustSurface(
+            '//! Crate doc.\npub mod inner {\n    //! Inner doc.\n    pub fn a() {}\n}\n'
+        )
+        expect(nested.split('//! Inner doc.').length - 1).toBe(1)
+        expect(nested.indexOf('//! Inner doc.')).toBeGreaterThan(nested.indexOf('pub mod inner'))
+    })
+
     test('a brace inside a string or a char literal does not end an item', () => {
         // `let brace = '{';` sits inside greet's body. A scanner that counts it
         // never finds greet's closing brace and swallows the rest of the file.

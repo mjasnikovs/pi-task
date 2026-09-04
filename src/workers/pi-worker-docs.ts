@@ -380,7 +380,9 @@ export function registerPiWorkerDocs(
                 return workerAnswer(
                     banner
                         + npmHeader
-                        + `Package ${rawResult.pkg.name}@${rawResult.pkg.version} has no .d.ts files or README. Use pi-worker to read source directly.`,
+                        + `Package ${rawResult.pkg.name}@${rawResult.pkg.version} has no `
+                        + `${ECOSYSTEMS[rawResult.pkg.ecosystem].surfaceLabel}. Use pi-worker to `
+                        + 'read source directly.',
                     {
                         version: rawResult.pkg.version,
                         ecosystem: rawResult.pkg.ecosystem,
