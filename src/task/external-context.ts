@@ -181,6 +181,21 @@ export async function buildExternalContext(
         )
     ])
 
+    // A docs target that came back WITHOUT a version — a refused ecosystem, a dead
+    // registry — was dropped from `extraVersionPkgs` on the assumption docs would
+    // supply it. Ask for it now, or its block is silently lost.
+    const missedVersionPkgs =
+        versionLookup ?
+            enrichTargets.versionPackages.filter(
+                p =>
+                    docsTargets.has(p)
+                    && !targets.some((t, i) => t.name === p && targetResults[i]?.npmVersion)
+            )
+        :   []
+    const missedVersionResults = await Promise.all(
+        missedVersionPkgs.map(pkg => versionLookup!(pkg).catch(() => null))
+    )
+
     const sections: string[] = []
 
     // npm version blocks lead the section so the model anchors on live version
@@ -191,7 +206,7 @@ export async function buildExternalContext(
     for (const r of targetResults) {
         if (r?.npmVersion) sections.push(formatNpmVersionSection(r.npmVersion, r.registryLabel))
     }
-    for (const v of extraVersionResults) {
+    for (const v of [...extraVersionResults, ...missedVersionResults]) {
         if (v) sections.push(formatNpmVersionSection(v.info, v.label))
     }
 

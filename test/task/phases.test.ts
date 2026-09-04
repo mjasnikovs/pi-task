@@ -1413,18 +1413,20 @@ describe('phaseResearch enrichment DI', () => {
                         chunks: [{filePath: 'x', kind: 'dts', content: 'DOCS_ONLY', rank: 0}],
                         hitCache: true,
                         npmVersion: null
-                    })
+                    }),
+                    // A docs target with no version falls through to the standalone
+                    // lookup, so this has to be injected or the test goes live.
+                    npmVersionLookup: async () => null
                 },
                 'pin `zod` to exact version'
             )
             const withMarker = promptsSeen.filter(p => p.includes('DOCS_ONLY'))
             expect(withMarker.length).toBe(4)
-            // A successful lookup would have inserted "### npm: zod" followed
-            // by a "latest: <ver>" line into EXTERNAL CONTEXT. Verify neither
-            // appears in any of the four worker prompts. (The unrelated string
-            // "### npm: <pkg>" appears as a template instruction in the CONTEXT
-            // prompt — that's fine; we only care about the concrete `zod`
-            // injection.)
+            // Neither lookup produced a version, so no "### npm: zod" block and no
+            // "latest: <ver>" line reaches any of the four worker prompts. (The
+            // unrelated string "### npm: <pkg>" appears as a template instruction
+            // in the CONTEXT prompt — that's fine; we only care about the concrete
+            // `zod` injection.)
             for (const p of promptsSeen) {
                 expect(p).not.toContain('### npm: zod')
             }

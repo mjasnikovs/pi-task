@@ -276,14 +276,20 @@ export function resolveHackage(
     const extractDir = hackageExtractDir(dirs.modulesDir)
     const pinned = hackageVersion(name, cwd)
     const exact = pinned ? path.join(extractDir, `${name}-${pinned}`) : null
+    // A pin that is not unpacked is not_installed, NOT an invitation to answer from
+    // whatever version another build left behind. Nothing marks that substitution,
+    // so the version banner stays empty and the swap reaches the model silently.
     const found =
-        exact && fs.existsSync(exact) ?
-            {root: exact, version: pinned!}
+        exact ?
+            fs.existsSync(exact) ?
+                {root: exact, version: pinned!}
+            :   null
         :   newestExtracted(extractDir, name)
     if (!found) {
         throw new ResolveError(
             'not_installed',
-            `Hackage package "${name}" is not unpacked under ${extractDir}.`
+            `Hackage package "${name}"${pinned ? ` v${pinned}` : ''} is not unpacked under `
+                + `${extractDir}.`
         )
     }
     return {
@@ -424,6 +430,16 @@ export function haskellSurface(rawSrc: string): string {
     // however many lines it takes to balance the parentheses.
     const moduleStart = lines.findIndex(l => /^module\s/.test(l))
     if (moduleStart >= 0) {
+        // The `{-| Module : … -}` header sits ABOVE the `module` keyword, and for
+        // most Hackage packages it IS the headline documentation. Emitting from
+        // `module` down dropped every line of it.
+        for (let h = 0; h < moduleStart; h++) {
+            const block = haddockBlockAt(lines, h)
+            if (!block) continue
+            out.push(...block.text)
+            h = block.next - 1
+        }
+        if (out.length) out.push('')
         let depth = 0
         let seenParen = false
         for (i = moduleStart; i < lines.length; i++) {

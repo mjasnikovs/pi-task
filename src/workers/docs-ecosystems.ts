@@ -413,7 +413,11 @@ const cargoProfile: EcosystemProfile = {
     // Cargo has already resolved every version; the lock IS the pin.
     declaredRange: (name, cwd) => lockedVersion(name, cwd),
     acquire: async (name, range, io) => {
-        const version = range ?? (await cratesLatest(name, io.fetch, io.signal))?.latest
+        // Asked even when the range is known: the download host wants the name as
+        // PUBLISHED, and only the API knows whether that is `tokio-util` or
+        // `tokio_util`. A null answer falls back to the caller's spelling.
+        const info = await cratesLatest(name, io.fetch, io.signal)
+        const version = range ?? info?.latest
         if (!version) {
             return {
                 success: false,
@@ -421,7 +425,7 @@ const cargoProfile: EcosystemProfile = {
                 stderr: `No published version found for crate "${crateOf(name)}".`
             }
         }
-        return acquireCrate(name, version, io)
+        return acquireCrate(info?.pkg ?? name, version, io)
     },
     latest: (name, io) => cratesLatest(name, io.fetch, io.signal),
 

@@ -189,6 +189,18 @@ export function splitBullets(context: string): string[] {
     return splitBulletSpans(context).map(s => s.text)
 }
 
+/**
+ * A version block is headed by its REGISTRY, so the heading is open-ended
+ * (`crates.io`, `hackage`). Anything else is one: the widened pattern also reads
+ * headings out of a retrieved README or page BODY, and calling those `docs` would
+ * let a package's own text forge the block that sources a semantics claim.
+ */
+function blockKind(heading: string): ContextBlock['kind'] {
+    if (heading === 'freshness-check') return 'freshness-skipped'
+    if (heading === 'docs' || heading === 'url' || heading === 'service') return heading
+    return 'npm'
+}
+
 /** Parse the `### npm:` / `### docs:` / `### url:` / `### service:` blocks out of an EXTERNAL CONTEXT header. */
 export function parseContextBlocks(externalContext: string): ContextBlock[] {
     const out: ContextBlock[] = []
@@ -198,11 +210,7 @@ export function parseContextBlocks(externalContext: string): ContextBlock[] {
     const re = /^###\s+([A-Za-z][\w.-]*)\s*:?\s*(.*)$/gim
     let m: RegExpExecArray | null
     while ((m = re.exec(externalContext)) !== null) {
-        const kind = m[1].toLowerCase()
-        out.push({
-            kind: kind === 'freshness-check' ? 'freshness-skipped' : (kind as ContextBlock['kind']),
-            subject: m[2].trim()
-        })
+        out.push({kind: blockKind(m[1].toLowerCase()), subject: m[2].trim()})
     }
     return out
 }

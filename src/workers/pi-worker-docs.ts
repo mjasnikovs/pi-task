@@ -276,7 +276,8 @@ export function registerPiWorkerDocs(
                 if (projectResult.kind === 'no_chunks') {
                     // The project IS indexed and has nothing — a real answer.
                     return workerAnswer(
-                        `Project "${projectResult.projectName}" has no .ts/.tsx files indexed.`,
+                        `Project "${projectResult.projectName}" has no `
+                            + `${projectResult.sourceLabel} files indexed.`,
                         {
                             hitCache: projectResult.hitCache,
                             indexedFiles: projectResult.filesIngested

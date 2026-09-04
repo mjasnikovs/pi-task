@@ -35,11 +35,11 @@ export function crateOf(name: string): string {
     return name.split('::')[0]
 }
 
-/** Compare two `major.minor.patch[-pre]` strings numerically, newest last. */
+/** Compare two `major.minor.patch[-pre][+build]` strings numerically, newest last. */
 function compareVersions(a: string, b: string): number {
     const parts = (v: string): number[] =>
         v
-            .split('-')[0]
+            .split(/[-+]/)[0]
             .split('.')
             .map(n => Number(n) || 0)
     const [pa, pb] = [parts(a), parts(b)]
@@ -208,10 +208,16 @@ function registryRoots(cargoHome: string): string[] {
     }
 }
 
-/** `<name>-<version>`, split at the first dash a digit follows. Splitting at the
- *  LAST dash instead cuts a prerelease in half: `clap-4.0.0-rc.1` becomes name
- *  `clap-4.0.0` and version `rc.1`, and the crate is then invisible on disk. */
-const CHECKOUT_DIR_RE = /^(.*?)-(\d[^\s]*)$/
+/**
+ * `<name>-<version>`, split at the first dash a full `x.y.z` follows.
+ *
+ * Neither greediness alone works. Splitting at the LAST dash cuts a prerelease in
+ * half (`clap-4.0.0-rc.1` → version `rc.1`); splitting at the first dash ANY digit
+ * follows cuts the name in half (`md-5-0.10.6` → name `md`), and md-5, sha-1 and
+ * utf-8 are all real crates. Requiring three numeric components is what tells the
+ * two apart, and it keeps `toml-0.9.12+spec-1.1.0` whole as build metadata.
+ */
+const CHECKOUT_DIR_RE = /^(.*?)-(\d+\.\d+\.\d+(?:[-+][^\s]*)?)$/
 
 /**
  * Find a crate's checkout directory. Only the NAME half is canonicalised — a
@@ -307,13 +313,15 @@ export function resolveCrate(name: string, cwd: string, dirs: CargoResolveDirs):
     const fetched = path.join(dirs.modulesDir, 'cargo')
     const roots = [...registryRoots(dirs.cargoHome), fetched]
 
-    const found =
-        (pinned ? findSourceDir(roots, crate, pinned) : null) ?? findSourceDir(roots, crate)
+    // A pin that is not on disk is not_installed, NOT an invitation to answer from
+    // whatever copy another checkout left behind. Nothing marks that substitution,
+    // so the version banner stays empty and the swap reaches the model silently.
+    const found = pinned ? findSourceDir(roots, crate, pinned) : findSourceDir(roots, crate)
     if (!found) {
         throw new ResolveError(
             'not_installed',
-            `Crate "${crate}" has no source checkout under ${dirs.cargoHome} or ${fetched}. `
-                + 'Run `cargo fetch` in the project and retry.'
+            `Crate "${crate}" has no ${pinned ? `v${pinned} ` : ''}source checkout under `
+                + `${dirs.cargoHome} or ${fetched}. Run \`cargo fetch\` in the project and retry.`
         )
     }
     return {
@@ -327,7 +335,12 @@ export function resolveCrate(name: string, cwd: string, dirs: CargoResolveDirs):
 }
 
 interface CratesApiResponse {
-    crate?: {max_stable_version?: unknown; newest_version?: unknown}
+    crate?: {
+        name?: unknown
+        id?: unknown
+        max_stable_version?: unknown
+        newest_version?: unknown
+    }
     versions?: Array<{num?: unknown; created_at?: unknown}>
 }
 
@@ -347,6 +360,11 @@ export async function cratesLatest(
         const body = (await response.json()) as CratesApiResponse
         const latest = body.crate?.max_stable_version ?? body.crate?.newest_version
         if (typeof latest !== 'string' || latest.length === 0) return null
+        // The registry's OWN spelling. crates.io's API normalises `-` and `_`, but
+        // static.crates.io does not — it answers 403 for the path that does not
+        // match what was published, and `use tokio_util::…` is how Rust source
+        // spells `tokio-util`.
+        const registryName = body.crate?.name ?? body.crate?.id
         const versions = body.versions ?? []
         const recent = versions
             .map(v => v.num)
@@ -354,7 +372,7 @@ export async function cratesLatest(
             .slice(0, 10)
         const publishedAt = versions.find(v => v.num === latest)?.created_at
         return {
-            pkg: crate,
+            pkg: typeof registryName === 'string' && registryName ? registryName : crate,
             latest,
             recent,
             ...(typeof publishedAt === 'string' ? {publishedAt} : {})
@@ -371,9 +389,14 @@ export function crateTarballUrl(name: string, version: string): string {
 
 // ── surface extraction ──────────────────────────────────────────────────────
 
-/** Where a Rust declaration begins, so a chunk never splits a signature. */
+/**
+ * Where a Rust declaration begins, so a chunk never splits a signature. Column 0
+ * only: `rustSurface` INDENTS the members of an impl or a trait, so an `^\s*`
+ * anchor cut every method into its own chunk — an orphan signature with no
+ * receiver type, carrying the next method's doc comment.
+ */
 export const CARGO_DECL_SPLIT_RE =
-    /^\s*(?:#\[[^\n]*\]\s*)*(?:pub\s+)?(?:async\s+|unsafe\s+|const\s+|extern\s+)*(?:fn|struct|enum|union|trait|type|impl|mod|const|static)\b/m
+    /^(?:#\[[^\n]*\]\s*)*(?:pub\s+)?(?:async\s+|unsafe\s+|const\s+|extern\s+)*(?:fn|struct|enum|union|trait|type|impl|mod|const|static)\b/m
 
 // `macro_rules!` carries its own terminator, so it sits OUTSIDE the `\b` — a word
 // boundary after `!` requires a word character next, and what follows is a space.

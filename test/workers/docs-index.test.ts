@@ -192,6 +192,22 @@ test('a changed surface extractor re-indexes a package that has not moved', () =
     }
 })
 
+test('a changed CHUNKER re-indexes too — the cache holds chunks, not surface', () => {
+    // The hash surfaced the entry file but stopped there, so a fix to the split
+    // regex left every already-indexed package with the chunks the broken one cut.
+    const cache = openCache(':memory:')
+    try {
+        const pkg = resolvePackage('tiny-pkg', FIXTURES)
+        const older = {...ECOSYSTEMS.npm, declSplitRe: /^export\s+function\s+/m}
+
+        expect(ensureIndexed(cache, pkg, older).hitCache).toBe(false)
+        expect(ensureIndexed(cache, pkg, ECOSYSTEMS.npm).hitCache).toBe(false)
+        expect(ensureIndexed(cache, pkg, ECOSYSTEMS.npm).hitCache).toBe(true)
+    } finally {
+        cache.close()
+    }
+})
+
 describe('one name, two registries', () => {
     // The bug this whole table exists for: `aeson`, `tokio`, `text` and `base` are
     // all real npm packages AND real Rust/Haskell ones. Live, npm's `tokio` is a

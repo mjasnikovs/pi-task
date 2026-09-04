@@ -46,6 +46,13 @@ function extensionOf(glob: string): string {
     return glob.replace(/^\*/, '')
 }
 
+/** The extensions a given project is indexed for — `.ts/.tsx`, `.rs`, `.hs`. */
+export function projectSourceLabel(cwd: string): string {
+    return [...new Set(projectProfiles(cwd).flatMap(p => p.projectGlobs))]
+        .map(extensionOf)
+        .join('/')
+}
+
 /** Which row chunks a given project file, by its extension. */
 function profileForFile(file: string, profiles: EcosystemProfile[]): EcosystemProfile {
     for (const profile of profiles) {
@@ -92,24 +99,27 @@ export function getProjectFiles(cwd: string): string[] {
                 .map(f => path.join(cwd, f))
         }
     } catch {}
-    return walkSourceFiles(cwd, globs.map(extensionOf), projectProfiles(cwd))
+    return walkSourceFiles(cwd, globs.map(extensionOf))
 }
 
-function walkSourceFiles(
-    root: string,
-    extensions: string[],
-    profiles: EcosystemProfile[]
-): string[] {
-    // The rows' own skip lists ride along, or a cargo project's `target/` and a
-    // cabal project's `dist-newstyle/` index as if they were project source.
-    const SKIP = new Set([
-        'node_modules',
-        '.git',
-        'dist',
-        'build',
-        'coverage',
-        ...profiles.flatMap(p => p.skipDirs)
-    ])
+/**
+ * Build output, per ecosystem. NOT `profile.skipDirs` — that list says which
+ * directories of a DOWNLOADED package are not its published API, and `tests/`
+ * and `examples/` of the project's OWN repo are exactly what a question about
+ * the project may be asking. `git ls-files` filters none of them either.
+ */
+const BUILD_OUTPUT_DIRS = [
+    'node_modules',
+    '.git',
+    'dist',
+    'build',
+    'coverage',
+    'target',
+    'dist-newstyle'
+]
+
+function walkSourceFiles(root: string, extensions: string[]): string[] {
+    const SKIP = new Set(BUILD_OUTPUT_DIRS)
     const out: string[] = []
     const stack: string[] = [root]
     while (stack.length) {
@@ -244,6 +254,8 @@ export type ProjectDocsRawResult =
           version: string
           hitCache: boolean
           filesIngested: number
+          /** The extensions this project was actually searched for, e.g. `.rs`. */
+          sourceLabel: string
       }
     | {kind: 'error'; projectName: string; message: string}
 
@@ -288,7 +300,8 @@ export function projectDocsRaw(
             cacheKey,
             version,
             hitCache: indexResult.hitCache,
-            filesIngested: indexResult.filesIngested
+            filesIngested: indexResult.filesIngested,
+            sourceLabel: projectSourceLabel(cwd)
         }
     }
 
@@ -317,7 +330,8 @@ export function projectDocsRaw(
             cacheKey,
             version,
             hitCache: indexResult.hitCache,
-            filesIngested: indexResult.filesIngested
+            filesIngested: indexResult.filesIngested,
+            sourceLabel: projectSourceLabel(cwd)
         }
     }
 

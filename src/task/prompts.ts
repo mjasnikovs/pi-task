@@ -132,7 +132,7 @@ ${
     :   'LIBRARY PACKAGES — do NOT look them up: this directory holds no package manifest, so `pi-worker-docs` has no registry to read and will refuse. Do not list an external library API you cannot check here.'
 }
 
-PROJECT SOURCE — use pi-worker-docs with module ".", NOT file reads: for any function, class, type, or interface defined in THIS project's own .ts/.tsx source (e.g. "what does requireAuth check?", "what does CreateListingSchema look like?", "what does the listings query module export?"), call \`pi-worker-docs(".", query)\` instead of reading the file. The tool indexes all git-tracked source files and returns only the relevant chunks — far cheaper than reading whole files.
+PROJECT SOURCE — use pi-worker-docs with module ".", NOT file reads: for any function, class, type, or interface defined in THIS project's own source (e.g. "what does requireAuth check?", "what does CreateListingSchema look like?", "what does the listings query module export?"), call \`pi-worker-docs(".", query)\` instead of reading the file. The tool indexes all git-tracked source files and returns only the relevant chunks — far cheaper than reading whole files.
 
 ${
     ecosystems.includes('npm') ?

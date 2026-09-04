@@ -139,14 +139,29 @@ describe('gatherExternalContext', () => {
         expect(out).toContain('- Stripe')
     })
 
-    test('tolerates a failing lookup and yields no block for it', async () => {
+    test('a failing docs lookup yields no BODY, but still yields the version', async () => {
+        // Every named dep gets a version block. A docs lookup that blew up is
+        // exactly when the standalone lookup has to cover for it — dropping both
+        // leaves the model told to quote a block that is not there.
         const out = await gatherExternalContext('use `zod` for validation', {
             ...deps,
             docsRaw: async () => {
                 throw new Error('lookup blew up')
-            }
+            },
+            npmVersionLookup: async pkg => ({pkg, latest: '3.25.0', recent: ['3.25.0']})
         })
-        // The package was a target, but its lookup failed -> nothing to assemble.
+        expect(out).toContain('### npm: zod')
+        expect(out).not.toContain('### docs: zod')
+    })
+
+    test('a failing docs lookup with no version either yields nothing', async () => {
+        const out = await gatherExternalContext('use `zod` for validation', {
+            ...deps,
+            docsRaw: async () => {
+                throw new Error('lookup blew up')
+            },
+            npmVersionLookup: async () => null
+        })
         expect(out).toBe('')
     })
 })
@@ -205,6 +220,33 @@ describe('buildExternalContext policy', () => {
         )
         expect(out).toContain('### crates.io: serde')
         expect(out).not.toContain('### npm: serde')
+    })
+
+    test('a docs target that came back WITHOUT a version still gets one', async () => {
+        // `extraVersionPkgs` drops every docs target on the assumption the docs
+        // result carries the version. In a directory with no manifest docsRaw
+        // refuses before it asks any registry, so that block was silently lost.
+        const asked: string[] = []
+        const out = await buildExternalContext(
+            'use `hono`',
+            deps,
+            {
+                ...lookups(newCalls()),
+                docs: async () => ({body: 'hono body'})
+            },
+            {
+                versionLookup: pkg => {
+                    asked.push(pkg)
+                    return Promise.resolve({
+                        info: {pkg, latest: '4.9.0', recent: []},
+                        label: 'npm'
+                    })
+                }
+            }
+        )
+        expect(asked).toContain('hono')
+        expect(out).toContain('### npm: hono')
+        expect(out).toContain('### docs: hono')
     })
 
     test('every named dep still gets a version block in a POLYGLOT repo', async () => {

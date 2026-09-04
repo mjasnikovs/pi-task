@@ -13,11 +13,13 @@ import {
     cratesLatest,
     crateTarballUrl,
     rustSurface,
-    cargoProjectName
+    cargoProjectName,
+    CARGO_DECL_SPLIT_RE
 } from '../../src/workers/eco-cargo.js'
 import {ECOSYSTEMS, defaultEcosystemIo} from '../../src/workers/docs-ecosystems.js'
 import {docsRaw} from '../../src/workers/docs-core.js'
 import {openCache} from '../../src/workers/docs-cache.js'
+import {chunkDeclarations} from '../../src/workers/docs-chunk.js'
 import {ResolveError} from '../../src/workers/docs-resolve.js'
 import {fakeSpawnByPrompt} from '../test-utils/fake-spawn.js'
 
@@ -137,6 +139,68 @@ describe('finding a crate on disk', () => {
         })
         expect(pkg.name).toBe('clap')
         expect(pkg.version).toBe('4.0.0-rc.1')
+        fs.rmSync(modulesDir, {recursive: true, force: true})
+    })
+
+    test('a crate whose NAME ends in a dash and a digit is found', () => {
+        // `md-5-0.10.6` split at the FIRST dash a digit follows gives name "md"
+        // and version "5-0.10.6", so md-5, sha-1 and utf-8 all read as absent.
+        const modulesDir = fs.mkdtempSync(path.join(os.tmpdir(), 'eco-cargo-dash-'))
+        fs.mkdirSync(path.join(modulesDir, 'cargo', 'md-5-0.10.6', 'src'), {recursive: true})
+        fs.writeFileSync(
+            path.join(modulesDir, 'cargo', 'md-5-0.10.6', 'src', 'lib.rs'),
+            'pub fn digest() {}',
+            'utf8'
+        )
+        const pkg = resolveCrate('md-5', modulesDir, {
+            cargoHome: path.join(os.tmpdir(), 'no-cargo-home'),
+            modulesDir
+        })
+        expect(pkg.name).toBe('md-5')
+        expect(pkg.version).toBe('0.10.6')
+        fs.rmSync(modulesDir, {recursive: true, force: true})
+    })
+
+    test('build metadata sorts by its RELEASE, not as a missing patch', () => {
+        // `2.0.16+zstd.1.5.7` splits on `.` into 2, 0, "16+zstd", 1, 5, 7 — the
+        // patch reads as NaN, coerced to 0, so 2.0.16 loses to 2.0.9.
+        const modulesDir = fs.mkdtempSync(path.join(os.tmpdir(), 'eco-cargo-meta-'))
+        for (const dir of ['zstd-sys-2.0.9', 'zstd-sys-2.0.16+zstd.1.5.7']) {
+            fs.mkdirSync(path.join(modulesDir, 'cargo', dir, 'src'), {recursive: true})
+            fs.writeFileSync(
+                path.join(modulesDir, 'cargo', dir, 'src', 'lib.rs'),
+                'pub fn z() {}',
+                'utf8'
+            )
+        }
+        const pkg = resolveCrate('zstd-sys', modulesDir, {
+            cargoHome: path.join(os.tmpdir(), 'no-cargo-home'),
+            modulesDir
+        })
+        expect(pkg.version).toBe('2.0.16+zstd.1.5.7')
+        fs.rmSync(modulesDir, {recursive: true, force: true})
+    })
+
+    test('a lock pin the disk does not hold is not_installed, not a substitute', () => {
+        // Answering from another checkout's newer copy sets no install pin, so
+        // buildVersionBanner emits nothing and the swap is silent.
+        const modulesDir = fs.mkdtempSync(path.join(os.tmpdir(), 'eco-cargo-pin-'))
+        fs.mkdirSync(path.join(modulesDir, 'cargo', 'tiny-crate-9.9.9', 'src'), {recursive: true})
+        fs.writeFileSync(
+            path.join(modulesDir, 'cargo', 'tiny-crate-9.9.9', 'src', 'lib.rs'),
+            'pub fn newer() {}',
+            'utf8'
+        )
+        try {
+            resolveCrate('tiny-crate', CARGO_PROJECT, {
+                cargoHome: path.join(os.tmpdir(), 'no-cargo-home'),
+                modulesDir
+            })
+            expect.unreachable()
+        } catch (err) {
+            expect(err).toBeInstanceOf(ResolveError)
+            expect((err as ResolveError).kind).toBe('not_installed')
+        }
         fs.rmSync(modulesDir, {recursive: true, force: true})
     })
 
@@ -279,6 +343,33 @@ describe('the surface', () => {
     })
 })
 
+describe('chunking the surface', () => {
+    test('a nested method is not its own chunk', () => {
+        // `^\s*` matched INDENTED items too, so every method of an impl or a
+        // trait became a chunk — an orphan signature with no receiver type, and
+        // the next method's doc comment glued to its tail.
+        const surface = rustSurface(
+            'pub struct Foo { pub id: u64 }\n'
+                + 'impl Foo {\n'
+                + '    /// build\n'
+                + '    pub fn new(id: u64) -> Self { Self { id } }\n'
+                + '    /// take\n'
+                + '    pub fn take(&self) -> u8 { 1 }\n'
+                + '}\n'
+                + 'pub trait Go { fn go(&self) -> u8; }\n'
+        )
+        const chunks = chunkDeclarations(surface, 'lib.rs', CARGO_DECL_SPLIT_RE, '//')
+        const impl = chunks.filter(c => c.includes('impl Foo'))
+        expect(impl).toHaveLength(1)
+        expect(impl[0]).toContain('pub fn new')
+        expect(impl[0]).toContain('pub fn take')
+        expect(chunks.some(c => /^\/\/ lib\.rs\npub fn new/.test(c))).toBe(false)
+        expect(chunks.filter(c => c.includes('fn go')).every(c => c.includes('trait Go'))).toBe(
+            true
+        )
+    })
+})
+
 describe('acquiring a crate', () => {
     test('downloads the .crate to a file and hands it to tar', async () => {
         const modulesDir = fs.mkdtempSync(path.join(os.tmpdir(), 'eco-cargo-acq-'))
@@ -315,6 +406,43 @@ describe('acquiring a crate', () => {
             modulesDir
         })
         expect(resolved.version).toBe('0.1.0')
+        fs.rmSync(modulesDir, {recursive: true, force: true})
+    })
+
+    test("the download uses the REGISTRY spelling, not the caller's", async () => {
+        // `use tokio_util::codec` is how the crate is written in Rust source, and
+        // crateOf yields that. The crates.io API normalises `_` to `-`; the CDN
+        // does not — it answers 403 for the underscore path.
+        const modulesDir = fs.mkdtempSync(path.join(os.tmpdir(), 'eco-cargo-name-'))
+        const urls: string[] = []
+        const io = defaultEcosystemIo({
+            cargoHome: CARGO_HOME,
+            modulesDir,
+            fetch: (async (url: string) => {
+                urls.push(url)
+                if (url.includes('/api/v1/crates/')) {
+                    return {
+                        ok: true,
+                        status: 200,
+                        json: async () => ({
+                            crate: {name: 'tokio-util', max_stable_version: '0.7.13'},
+                            versions: [{num: '0.7.13'}]
+                        })
+                    }
+                }
+                if (url.includes('tokio_util-')) return {ok: false, status: 403}
+                return {
+                    ok: true,
+                    status: 200,
+                    arrayBuffer: async () => new Uint8Array([1, 2, 3]).buffer
+                }
+            }) as unknown as typeof fetch,
+            spawn: fakeSpawnByPrompt(() => ({stdout: '', exitCode: 0}))
+        })
+
+        const result = await ECOSYSTEMS.cargo.acquire('tokio_util', null, io)
+        expect(result.success).toBe(true)
+        expect(urls).toContain('https://static.crates.io/crates/tokio-util/tokio-util-0.7.13.crate')
         fs.rmSync(modulesDir, {recursive: true, force: true})
     })
 

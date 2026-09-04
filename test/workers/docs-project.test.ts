@@ -139,6 +139,47 @@ test('the project walk skips a cargo target/ and a cabal dist-newstyle/', () => 
     fs.rmSync(dir, {recursive: true, force: true})
 })
 
+test('the empty answer names the extensions THIS project was searched for', () => {
+    // The wording was written when only .ts/.tsx were ever indexed. A cargo-only
+    // project was told the tool had looked for TypeScript.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'docs-project-empty-'))
+    fs.writeFileSync(path.join(dir, 'Cargo.toml'), '[package]\nname = "app"\n', 'utf8')
+    const cache = openCache(':memory:')
+    try {
+        const result = projectDocsRaw(cache, dir, 'anything', undefined, () => [])
+        expect(result.kind).toBe('no_chunks')
+        if (result.kind !== 'no_chunks') return
+        expect(result.sourceLabel).toContain('.rs')
+        expect(result.sourceLabel).not.toContain('.tsx')
+    } finally {
+        cache.close()
+        fs.rmSync(dir, {recursive: true, force: true})
+    }
+})
+
+test("a dependency's skip list does not hide the PROJECT's own tests", () => {
+    // `skipDirs` says which directories of a DOWNLOADED package are not its API.
+    // Folded into the project's own walk, a Tauri repo stopped indexing its own
+    // TypeScript tests and examples because cargo's row names those directories.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'docs-project-both-'))
+    fs.writeFileSync(path.join(dir, 'package.json'), '{"name":"app"}', 'utf8')
+    fs.mkdirSync(path.join(dir, 'src-tauri'), {recursive: true})
+    fs.writeFileSync(path.join(dir, 'src-tauri', 'Cargo.toml'), '[package]\nname="a"\n', 'utf8')
+    fs.mkdirSync(path.join(dir, 'tests'), {recursive: true})
+    fs.writeFileSync(path.join(dir, 'tests', 'login.test.ts'), 'export const t = 1', 'utf8')
+    fs.mkdirSync(path.join(dir, 'examples'), {recursive: true})
+    fs.writeFileSync(path.join(dir, 'examples', 'demo.ts'), 'export const d = 1', 'utf8')
+    fs.mkdirSync(path.join(dir, 'target'), {recursive: true})
+    fs.writeFileSync(path.join(dir, 'target', 'out.rs'), 'fn main() {}', 'utf8')
+
+    const files = getProjectFiles(dir).map(f => path.relative(dir, f).replace(/\\/g, '/'))
+    expect(files).toContain('tests/login.test.ts')
+    expect(files).toContain('examples/demo.ts')
+    // Build output is still not project source.
+    expect(files.some(f => f.startsWith('target/'))).toBe(false)
+    fs.rmSync(dir, {recursive: true, force: true})
+})
+
 test("a binary crate's OWN source indexes — private items are the question there", () => {
     // `profile.surface` strips a DEPENDENCY down to its published API. Applying it
     // to the project's own code indexed a Rust `main.rs` to nothing at all, and

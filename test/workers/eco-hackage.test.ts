@@ -176,6 +176,37 @@ describe('the surface', () => {
         expect(out).toContain('-- | Build a greeting for a name.')
     })
 
+    test('the module header haddock above the `module` keyword survives', () => {
+        // For most Hackage packages that block IS the headline documentation, and
+        // emitting from `module` down dropped every line of it.
+        const header = haskellSurface(
+            '{-# LANGUAGE CPP #-}\n'
+                + '{-|\nModule      : Data.Aeson\nDescription : Working with JSON data.\n-}\n'
+                + 'module Data.Aeson (decode) where\n\n'
+                + '-- | Decode a value.\ndecode :: ByteString -> Maybe a\ndecode = undefined\n'
+        )
+        expect(header).toContain('Description : Working with JSON data.')
+        expect(header).toContain('module Data.Aeson (decode) where')
+        // A pragma is not documentation.
+        expect(header).not.toContain('LANGUAGE CPP')
+    })
+
+    test('a pin the disk does not hold is not_installed, not a substitute', () => {
+        // Answering from another version's unpack sets no install pin, so
+        // buildVersionBanner emits nothing and the swap is silent.
+        const modulesDir = fs.mkdtempSync(path.join(os.tmpdir(), 'eco-hs-pin-'))
+        const root = path.join(modulesDir, 'hackage', 'tiny-hs-9.9.9')
+        fs.mkdirSync(path.join(root, 'src'), {recursive: true})
+        fs.writeFileSync(path.join(root, 'src', 'X.hs'), 'module X where\n', 'utf8')
+        try {
+            resolveHackage('tiny-hs', HS_PROJECT, {modulesDir})
+            expect.unreachable()
+        } catch (err) {
+            expect((err as ResolveError).kind).toBe('not_installed')
+        }
+        fs.rmSync(modulesDir, {recursive: true, force: true})
+    })
+
     test('a signature whose :: wrapped onto the next line survives, haddock and all', () => {
         // How most multi-constraint signatures are written. Matching only the head
         // line drops the whole declaration and its docs with it.

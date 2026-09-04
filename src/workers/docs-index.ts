@@ -40,12 +40,17 @@ interface IngestResult {
  * still match. Surfacing here costs one file and makes the hash answer the
  * question actually being asked: would re-reading produce the same chunks?
  *
+ * The CHUNKER counts too, for the same reason: the rows are chunks, not surface,
+ * so a fix to where a declaration is cut leaves stale rows behind on its own.
+ *
  * It is not total. An extractor change that alters only files BELOW the entry
  * goes unnoticed; deleting the cache is still the escape hatch for that.
  */
 function computeContentHash(pkg: ResolvedPackage, profile: EcosystemProfile): string {
     const hash = createHash('sha256')
     hash.update(Buffer.from(`${pkg.name}@${pkg.version}`, 'utf8'))
+    hash.update(ZERO_SEP)
+    hash.update(Buffer.from(`${profile.declSplitRe.source}\u0000${profile.commentPrefix}`, 'utf8'))
     hash.update(ZERO_SEP)
     if (pkg.entry && fs.existsSync(pkg.entry)) {
         try {
