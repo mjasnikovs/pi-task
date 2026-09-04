@@ -1217,7 +1217,8 @@ describe('phaseResearch enrichment DI', () => {
                                 name: pkg,
                                 version: '1.0.0',
                                 root: '/tmp',
-                                entryDts: null,
+                                ecosystem: 'npm',
+                                entry: null,
                                 readme: null
                             },
                             chunks: [{filePath: 'x', kind: 'dts', content: 'fake docs', rank: 0}],
@@ -1275,7 +1276,8 @@ describe('phaseResearch enrichment DI', () => {
                             name: pkg,
                             version: '1.0.0',
                             root: '/tmp',
-                            entryDts: null,
+                            ecosystem: 'npm',
+                            entry: null,
                             readme: null
                         },
                         chunks: [{filePath: 'x', kind: 'dts', content: 'ZOD_DOCS_MARKER', rank: 0}],
@@ -1332,7 +1334,8 @@ describe('phaseResearch enrichment DI', () => {
                             name: pkg,
                             version: '1.0.0',
                             root: '/tmp',
-                            entryDts: null,
+                            ecosystem: 'npm',
+                            entry: null,
                             readme: null
                         },
                         chunks: [{filePath: 'x', kind: 'dts', content: 'DOCS_BODY', rank: 0}],
@@ -1403,7 +1406,8 @@ describe('phaseResearch enrichment DI', () => {
                             name: pkg,
                             version: '1.0.0',
                             root: '/tmp',
-                            entryDts: null,
+                            ecosystem: 'npm',
+                            entry: null,
                             readme: null
                         },
                         chunks: [{filePath: 'x', kind: 'dts', content: 'DOCS_ONLY', rank: 0}],
@@ -1649,7 +1653,8 @@ describe('phaseResearch enrichment DI', () => {
                             name: pkg,
                             version: '1.0.0',
                             root: '/tmp',
-                            entryDts: null,
+                            ecosystem: 'npm',
+                            entry: null,
                             readme: null
                         },
                         chunks: [{filePath: 'x', kind: 'dts', content: 'ZOD_DOCS_MARKER', rank: 0}],
@@ -1706,7 +1711,8 @@ describe('phaseResearch enrichment DI', () => {
                             name: pkg,
                             version: '1.0.0',
                             root: '/tmp',
-                            entryDts: null,
+                            ecosystem: 'npm',
+                            entry: null,
                             readme: null
                         },
                         chunks: [{filePath: 'x', kind: 'dts', content: 'fake docs', rank: 0}],
@@ -1802,7 +1808,8 @@ describe('phaseAutoAnswer integration-unknown routing', () => {
                             name: pkg,
                             version: '1.0.0',
                             root: '/tmp',
-                            entryDts: null,
+                            ecosystem: 'npm',
+                            entry: null,
                             readme: null
                         },
                         version: '1.0.0',
@@ -1871,7 +1878,8 @@ describe('phaseAutoAnswer enrichment', () => {
                             name: pkg,
                             version: '1.0.0',
                             root: '/tmp',
-                            entryDts: null,
+                            ecosystem: 'npm',
+                            entry: null,
                             readme: null
                         },
                         version: '1.0.0',

@@ -2,13 +2,11 @@ import {createHash} from 'node:crypto'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 import type {CacheHandle} from './docs-cache.js'
-import {isDtsFile, type ResolvedPackage} from './docs-resolve.js'
+import {type ResolvedPackage} from './docs-resolve.js'
 import {chunkDeclarations, chunkReadme} from './docs-chunk.js'
+import {ECOSYSTEMS, type EcosystemProfile} from './docs-ecosystems.js'
 
 const ZERO_SEP = Buffer.from([0])
-
-/** Scope value for rows resolved from npm. See the schema in docs-cache. */
-export const NPM_SCOPE = 'npm'
 
 export interface IndexResult {
     hitCache: boolean
@@ -18,7 +16,7 @@ export interface IndexResult {
 }
 
 interface CollectedFiles {
-    dts: string[]
+    surface: string[]
     readme: string | null
 }
 
@@ -36,8 +34,8 @@ function computeContentHash(pkg: ResolvedPackage): string {
     const hash = createHash('sha256')
     hash.update(Buffer.from(`${pkg.name}@${pkg.version}`, 'utf8'))
     hash.update(ZERO_SEP)
-    if (pkg.entryDts && fs.existsSync(pkg.entryDts)) {
-        hash.update(fs.readFileSync(pkg.entryDts))
+    if (pkg.entry && fs.existsSync(pkg.entry)) {
+        hash.update(fs.readFileSync(pkg.entry))
     }
     hash.update(ZERO_SEP)
     if (pkg.readme && fs.existsSync(pkg.readme)) {
@@ -46,7 +44,7 @@ function computeContentHash(pkg: ResolvedPackage): string {
     return hash.digest('hex')
 }
 
-function walkDts(root: string): string[] {
+function walkSurface(root: string, isSurfaceFile: (name: string) => boolean): string[] {
     const out: string[] = []
     const stack: string[] = [root]
     while (stack.length) {
@@ -71,19 +69,19 @@ function walkDts(root: string): string[] {
                 if (relReal.startsWith('..')) continue
                 const stat = fs.statSync(realPath)
                 if (stat.isDirectory()) stack.push(realPath)
-                else if (stat.isFile() && isDtsFile(realPath)) out.push(realPath)
+                else if (stat.isFile() && isSurfaceFile(realPath)) out.push(realPath)
                 continue
             }
             if (entry.isDirectory()) stack.push(full)
-            else if (entry.isFile() && isDtsFile(entry.name)) out.push(full)
+            else if (entry.isFile() && isSurfaceFile(entry.name)) out.push(full)
         }
     }
     return out.sort()
 }
 
-function collectFiles(pkg: ResolvedPackage): CollectedFiles {
+function collectFiles(pkg: ResolvedPackage, profile: EcosystemProfile): CollectedFiles {
     return {
-        dts: walkDts(pkg.root),
+        surface: walkSurface(pkg.root, profile.isSurfaceFile),
         readme: pkg.readme
     }
 }
@@ -91,9 +89,10 @@ function collectFiles(pkg: ResolvedPackage): CollectedFiles {
 function ingestBody(
     cache: CacheHandle,
     pkg: ResolvedPackage,
-    ecosystem: string,
+    profile: EcosystemProfile,
     contentHash: string
 ): IngestResult {
+    const ecosystem = profile.id
     const inside = cache.db
         .prepare(
             'SELECT content_hash FROM packages WHERE ecosystem = ? AND name = ? AND version = ?'
@@ -105,13 +104,13 @@ function ingestBody(
     cache.db
         .prepare('DELETE FROM chunks WHERE ecosystem = ? AND name = ? AND version = ?')
         .run(ecosystem, pkg.name, pkg.version)
-    const files = collectFiles(pkg)
+    const files = collectFiles(pkg, profile)
     let chunksWritten = 0
     let filesIngested = 0
     const insertChunk = cache.db.prepare(
         'INSERT INTO chunks (ecosystem, name, version, file_path, kind, content) VALUES (?, ?, ?, ?, ?, ?)'
     )
-    for (const abs of files.dts) {
+    for (const abs of files.surface) {
         // Normalise the separator before storing, so the same package indexes to
         // the same rows whatever built the path. The value is a MODEL-FACING
         // label: chunkDeclarations turns it into the chunk's `// <path>` header,
@@ -123,7 +122,12 @@ function ingestBody(
         } catch {
             continue
         }
-        const chunks = chunkDeclarations(raw, rel)
+        const chunks = chunkDeclarations(
+            profile.surface(raw),
+            rel,
+            profile.declSplitRe,
+            profile.commentPrefix
+        )
         if (!chunks.length) continue
         filesIngested++
         for (const c of chunks) {
@@ -154,8 +158,9 @@ function ingestBody(
 export function ensureIndexed(
     cache: CacheHandle,
     pkg: ResolvedPackage,
-    ecosystem: string = NPM_SCOPE
+    profile: EcosystemProfile = ECOSYSTEMS[pkg.ecosystem]
 ): IndexResult {
+    const ecosystem = profile.id
     const contentHash = computeContentHash(pkg)
     const existing = cache.db
         .prepare(
@@ -169,7 +174,7 @@ export function ensureIndexed(
     cache.db.exec('BEGIN IMMEDIATE')
     let result: IngestResult
     try {
-        result = ingestBody(cache, pkg, ecosystem, contentHash)
+        result = ingestBody(cache, pkg, profile, contentHash)
         cache.db.exec('COMMIT')
     } catch (err) {
         cache.db.exec('ROLLBACK')

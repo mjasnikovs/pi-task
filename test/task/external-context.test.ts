@@ -11,7 +11,14 @@ const deps = {cwd: '/tmp', signal: new AbortController().signal}
 function docsOk(pkg: string, content: string, npmLatest?: string): PhaseDeps['docsRaw'] {
     return async () => ({
         kind: 'ok',
-        pkg: {name: pkg, version: '1.0.0', root: '/tmp', entryDts: null, readme: null},
+        pkg: {
+            ecosystem: 'npm' as const,
+            name: pkg,
+            version: '1.0.0',
+            root: '/tmp',
+            entry: null,
+            readme: null
+        },
         chunks: [{filePath: 'x', kind: 'dts', content, rank: 0}],
         hitCache: true,
         ...(npmLatest ? {npmVersion: {pkg, latest: npmLatest, recent: [npmLatest]}} : {})
@@ -66,7 +73,8 @@ describe('gatherExternalContext', () => {
                             name: pkg,
                             version: '1.0.0',
                             root: '/tmp',
-                            entryDts: null,
+                            ecosystem: 'npm',
+                            entry: null,
                             readme: null
                         },
                         chunks: [{filePath: 'x', kind: 'dts', content: `${pkg} docs`, rank: 0}],

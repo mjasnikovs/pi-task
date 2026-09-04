@@ -10,6 +10,7 @@ import {docsLookup, type DocsCorpus} from '../../src/workers/docs-lookup.js'
 import {packageCorpus} from '../../src/workers/docs-core.js'
 import {projectCorpus} from '../../src/workers/docs-project.js'
 import type {SpawnFn} from '../../src/shared/child-process.js'
+import type {ResolvedPackage} from '../../src/workers/docs-resolve.js'
 import {EventEmitter} from 'node:events'
 
 /** A child that answers with `<answer>`/`<excerpt>`, capturing its prompt. */
@@ -54,11 +55,12 @@ const run = (corpus: DocsCorpus, child: ReturnType<typeof fakeChild>) =>
         groupArgs: ['--thinking', 'off']
     })
 
-const PKG = {
+const PKG: ResolvedPackage = {
     name: 'greeter',
     version: '1.2.3',
     root: '/x/greeter',
-    entryDts: null,
+    ecosystem: 'npm',
+    entry: null,
     readme: null
 }
 

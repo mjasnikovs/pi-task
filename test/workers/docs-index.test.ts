@@ -4,7 +4,7 @@ import * as os from 'node:os'
 import * as path from 'node:path'
 import {openCache} from '../../src/workers/docs-cache.js'
 import {ensureIndexed} from '../../src/workers/docs-index.js'
-import {resolvePackage} from '../../src/workers/docs-resolve.js'
+import {resolvePackage, type ResolvedPackage} from '../../src/workers/docs-resolve.js'
 
 const FIXTURES = path.resolve(__dirname, '__fixtures__')
 
@@ -58,11 +58,12 @@ test('ensureIndexed re-ingests when content hash changes', () => {
             JSON.stringify({name: 'mut-pkg', version: '1.0.0', types: 'index.d.ts'})
         )
         fs.writeFileSync(path.join(tmpPkgRoot, 'index.d.ts'), 'export function v1(): void')
-        const pkg1 = {
+        const pkg1: ResolvedPackage = {
             name: 'mut-pkg',
             version: '1.0.0',
             root: tmpPkgRoot,
-            entryDts: path.join(tmpPkgRoot, 'index.d.ts'),
+            ecosystem: 'npm',
+            entry: path.join(tmpPkgRoot, 'index.d.ts'),
             readme: null
         }
         const r1 = ensureIndexed(cache, pkg1)

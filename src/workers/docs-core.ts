@@ -3,11 +3,11 @@ import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import {openCache as defaultOpenCache, type CacheHandle} from './docs-cache.js'
-import {ensureIndexed as defaultEnsureIndexed, NPM_SCOPE, type IndexResult} from './docs-index.js'
+import {ensureIndexed as defaultEnsureIndexed, type IndexResult} from './docs-index.js'
+import {npmProfile, ECOSYSTEMS, type EcosystemIo, type EcosystemProfile} from './docs-ecosystems.js'
 import {
     resolvePackage as defaultResolvePackage,
     ResolveError,
-    isDtsFile,
     resolveTypeSource,
     typesPackageName,
     splitRuntimeNamespace,
@@ -388,8 +388,11 @@ export interface AcquireInput {
     name: string
     cwd: string
     spawn: SpawnFn
-    resolvePackage: typeof defaultResolvePackage
+    /** Overrides `profile.resolve` when given, for callers that inject a resolver. */
+    resolvePackage?: typeof defaultResolvePackage
     signal: AbortSignal | undefined
+    /** Which registry to acquire from. */
+    profile?: EcosystemProfile
 }
 
 /**
@@ -414,8 +417,12 @@ export interface AcquireInput {
  */
 export async function acquirePackage(input: AcquireInput): Promise<AcquireOutcome> {
     const {name, cwd, spawn, resolvePackage, signal} = input
+    const profile = input.profile ?? ECOSYSTEMS.npm
+    const io: EcosystemIo = {spawn, signal}
+    const resolve = (from: string): ResolvedPackage =>
+        resolvePackage ? resolvePackage(name, from) : profile.resolve(name, from, io)
     try {
-        return {ok: true, pkg: resolvePackage(name, cwd), autoInstalled: false}
+        return {ok: true, pkg: resolve(cwd), autoInstalled: false}
     } catch (firstErr) {
         if (!(firstErr instanceof ResolveError) || firstErr.kind !== 'not_installed') {
             return {ok: false, stage: 'resolve', err: firstErr}
@@ -424,23 +431,20 @@ export async function acquirePackage(input: AcquireInput): Promise<AcquireOutcom
         // dep is declared in the project's package.json, install that range so a
         // scaffolding answer is grounded in the project's major, not whatever npm
         // currently tags `latest`.
-        const asked = extractParentPackage(name)
-        const declaredRange = findDeclaredRange(asked, cwd)
+        const asked = profile.parentPackage(name)
+        const declaredRange = profile.declaredRange(asked, cwd)
         const pin: AutoInstallPin =
             declaredRange ?
                 {source: 'declared-range', range: declaredRange, asked}
             :   {source: 'npm-latest', asked}
-        const install = await runAutoInstall(spawn, asked, {
-            signal,
-            versionRange: declaredRange ?? undefined
-        })
+        const install = await profile.acquire(asked, declaredRange, io)
         if (!install.success) {
             return {ok: false, stage: 'install', stderr: install.stderr, pin, asked}
         }
         try {
             return {
                 ok: true,
-                pkg: resolvePackage(name, install.installDir),
+                pkg: resolve(install.installDir),
                 autoInstalled: true,
                 pin
             }
@@ -469,7 +473,7 @@ async function tryResolveOrInstall(
 /** The docs pipeline's adapter over the shared redirect walk (docs-resolve.ts):
  *  hops resolve through the auto-installing lookup, so a declaration package that is
  *  declared but not yet on disk is fetched rather than abandoned. */
-async function resolveTypeSourceForDocs(
+export async function resolveTypeSourceForDocs(
     pkg: ResolvedPackage,
     requested: string,
     cwd: string,
@@ -499,6 +503,12 @@ export async function docsRaw(input: DocsRawInput): Promise<DocsRawResult> {
     const spawn = input.spawn ?? (defaultSpawn as unknown as SpawnFn)
     const npmVersionLookup = input.npmVersionLookup ?? defaultNpmVersionLookup
 
+    // A per-call row, not the static one: `resolvePackage` and `npmVersionLookup`
+    // are injection hooks, and a row built from the module-level exports would
+    // route straight past whatever a caller injected.
+    const profile = npmProfile({resolvePackage, npmVersionLookup})
+    const io: EcosystemIo = {spawn, signal: input.signal}
+
     // A runtime builtin specifier (`bun:sql`, `node:fs`) is typed by the runtime's
     // own types package, not a literal package of that colon-name — so resolve the
     // runtime instead. This is what turns a `bun:sql` lookup into Bun's real SQL
@@ -508,9 +518,9 @@ export async function docsRaw(input: DocsRawInput): Promise<DocsRawResult> {
 
     // Fire the npm registry lookup in parallel with resolve/index/retrieve.
     // It returns null on any failure, so it never blocks the local pipeline.
-    const npmVersionPromise = npmVersionLookup(extractParentPackage(requested), {
-        signal: input.signal
-    }).catch<NpmVersionInfo | null>(() => null)
+    const npmVersionPromise = profile
+        .latest(profile.parentPackage(requested), io)
+        .catch<NpmVersionInfo | null>(() => null)
 
     // Step 1: acquire the package — resolve, or install-at-the-declared-range and
     // resolve again. The ladder is `acquirePackage`; this maps its stages onto the
@@ -519,8 +529,8 @@ export async function docsRaw(input: DocsRawInput): Promise<DocsRawResult> {
         name: requested,
         cwd: input.cwd,
         spawn,
-        resolvePackage,
-        signal: input.signal
+        signal: input.signal,
+        profile
     })
     if (!got.ok) {
         if (got.stage === 'install') {
@@ -576,18 +586,13 @@ export async function docsRaw(input: DocsRawInput): Promise<DocsRawResult> {
     // @types/<name> + triple-slash `<reference types>` chain to the package that
     // actually holds the declarations (e.g. bun -> @types/bun -> bun-types).
     // Best-effort: any failure leaves the original resolution untouched.
-    const viaTypes = await resolveTypeSourceForDocs(
-        pkg,
-        requested,
-        input.cwd,
-        spawn,
-        resolvePackage,
-        input.signal
-    )
-    pkg = viaTypes.pkg
-    if (viaTypes.installed) {
-        autoInstalled = true
-        autoInstallPin ??= viaTypes.pin
+    const viaTypes = await profile.afterResolve?.(pkg, requested, input.cwd, io)
+    if (viaTypes) {
+        pkg = viaTypes.pkg
+        if (viaTypes.installed) {
+            autoInstalled = true
+            autoInstallPin ??= viaTypes.pin
+        }
     }
 
     // Step 2: open cache
@@ -601,8 +606,16 @@ export async function docsRaw(input: DocsRawInput): Promise<DocsRawResult> {
 
     const result =
         cache ?
-            docsRawCached(cache, pkg, input.query, ensureIndexed, retrieveChunks, autoInstalled)
-        :   docsRawUncached(pkg, cacheError ?? 'unknown cache error', autoInstalled)
+            docsRawCached(
+                cache,
+                pkg,
+                profile,
+                input.query,
+                ensureIndexed,
+                retrieveChunks,
+                autoInstalled
+            )
+        :   docsRawUncached(pkg, profile, cacheError ?? 'unknown cache error', autoInstalled)
     result.npmVersion = await npmVersionPromise
     if (autoInstallPin) result.autoInstallPin = autoInstallPin
     return result
@@ -611,6 +624,7 @@ export async function docsRaw(input: DocsRawInput): Promise<DocsRawResult> {
 function docsRawCached(
     cache: CacheHandle,
     pkg: ResolvedPackage,
+    profile: EcosystemProfile,
     query: string,
     ensureIndexed: typeof defaultEnsureIndexed,
     retrieveChunks: typeof defaultRetrieveChunks,
@@ -619,7 +633,7 @@ function docsRawCached(
     let indexResult: IndexResult
     const t0 = Date.now()
     try {
-        indexResult = ensureIndexed(cache, pkg)
+        indexResult = ensureIndexed(cache, pkg, profile)
     } catch (err) {
         return {
             kind: 'error',
@@ -635,7 +649,7 @@ function docsRawCached(
                 .prepare(
                     'SELECT count(*) AS c FROM chunks WHERE ecosystem = ? AND name = ? AND version = ?'
                 )
-                .get(NPM_SCOPE, pkg.name, pkg.version) as {c: number} | null
+                .get(profile.id, pkg.name, pkg.version) as {c: number} | null
         )?.c ?? 0
     if (chunkCount === 0) {
         return {
@@ -650,7 +664,7 @@ function docsRawCached(
     let chunks: RetrievedChunk[]
     try {
         chunks = retrieveChunks(cache, {
-            ecosystem: NPM_SCOPE,
+            ecosystem: profile.id,
             name: pkg.name,
             version: pkg.version,
             query,
@@ -687,13 +701,14 @@ function docsRawCached(
 
 function docsRawUncached(
     pkg: ResolvedPackage,
+    profile: EcosystemProfile,
     cacheError: string,
     autoInstalled: boolean
 ): DocsRawResult {
     const parts: string[] = []
-    const dtsFiles = walkDtsAlpha(pkg.root)
+    const surfaceFiles = walkSurfaceAlpha(pkg.root, profile.isSurfaceFile)
     const entryFirst =
-        pkg.entryDts ? [pkg.entryDts, ...dtsFiles.filter(f => f !== pkg.entryDts)] : dtsFiles
+        pkg.entry ? [pkg.entry, ...surfaceFiles.filter(f => f !== pkg.entry)] : surfaceFiles
     for (const abs of entryFirst) {
         let raw: string
         try {
@@ -702,7 +717,7 @@ function docsRawUncached(
             continue
         }
         const rel = path.relative(pkg.root, abs)
-        parts.push(`// ${rel}\n${raw}`)
+        parts.push(`${profile.commentPrefix} ${rel}\n${profile.surface(raw)}`)
     }
     if (pkg.readme) {
         const rel = path.relative(pkg.root, pkg.readme)
@@ -738,7 +753,7 @@ function docsRawUncached(
     }
 }
 
-function walkDtsAlpha(root: string): string[] {
+function walkSurfaceAlpha(root: string, isSurfaceFile: (name: string) => boolean): string[] {
     const out: string[] = []
     const stack: string[] = [root]
     while (stack.length) {
@@ -753,7 +768,7 @@ function walkDtsAlpha(root: string): string[] {
             if (entry.name === 'node_modules') continue
             const full = path.join(dir, entry.name)
             if (entry.isDirectory()) stack.push(full)
-            else if (entry.isFile() && isDtsFile(entry.name)) out.push(full)
+            else if (entry.isFile() && isSurfaceFile(entry.name)) out.push(full)
         }
     }
     return out.sort()
