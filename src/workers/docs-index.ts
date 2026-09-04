@@ -7,6 +7,9 @@ import {chunkDeclarations, chunkReadme} from './docs-chunk.js'
 
 const ZERO_SEP = Buffer.from([0])
 
+/** Scope value for rows resolved from npm. See the schema in docs-cache. */
+export const NPM_SCOPE = 'npm'
+
 export interface IndexResult {
     hitCache: boolean
     filesIngested: number
@@ -85,19 +88,28 @@ function collectFiles(pkg: ResolvedPackage): CollectedFiles {
     }
 }
 
-function ingestBody(cache: CacheHandle, pkg: ResolvedPackage, contentHash: string): IngestResult {
+function ingestBody(
+    cache: CacheHandle,
+    pkg: ResolvedPackage,
+    ecosystem: string,
+    contentHash: string
+): IngestResult {
     const inside = cache.db
-        .prepare('SELECT content_hash FROM packages WHERE name = ? AND version = ?')
-        .get(pkg.name, pkg.version) as PackageRow | null
+        .prepare(
+            'SELECT content_hash FROM packages WHERE ecosystem = ? AND name = ? AND version = ?'
+        )
+        .get(ecosystem, pkg.name, pkg.version) as PackageRow | null
     if (inside && inside.content_hash === contentHash) {
         return {hitCache: true, filesIngested: 0, chunksWritten: 0}
     }
-    cache.db.prepare('DELETE FROM chunks WHERE name = ? AND version = ?').run(pkg.name, pkg.version)
+    cache.db
+        .prepare('DELETE FROM chunks WHERE ecosystem = ? AND name = ? AND version = ?')
+        .run(ecosystem, pkg.name, pkg.version)
     const files = collectFiles(pkg)
     let chunksWritten = 0
     let filesIngested = 0
     const insertChunk = cache.db.prepare(
-        'INSERT INTO chunks (name, version, file_path, kind, content) VALUES (?, ?, ?, ?, ?)'
+        'INSERT INTO chunks (ecosystem, name, version, file_path, kind, content) VALUES (?, ?, ?, ?, ?, ?)'
     )
     for (const abs of files.dts) {
         // Normalise the separator before storing, so the same package indexes to
@@ -115,7 +127,7 @@ function ingestBody(cache: CacheHandle, pkg: ResolvedPackage, contentHash: strin
         if (!chunks.length) continue
         filesIngested++
         for (const c of chunks) {
-            insertChunk.run(pkg.name, pkg.version, rel, 'dts', c)
+            insertChunk.run(ecosystem, pkg.name, pkg.version, rel, 'dts', c)
             chunksWritten++
         }
     }
@@ -126,24 +138,30 @@ function ingestBody(cache: CacheHandle, pkg: ResolvedPackage, contentHash: strin
         if (chunks.length) {
             filesIngested++
             for (const c of chunks) {
-                insertChunk.run(pkg.name, pkg.version, rel, 'readme', c)
+                insertChunk.run(ecosystem, pkg.name, pkg.version, rel, 'readme', c)
                 chunksWritten++
             }
         }
     }
     cache.db
         .prepare(
-            'INSERT OR REPLACE INTO packages (name, version, content_hash, indexed_at) VALUES (?, ?, ?, ?)'
+            'INSERT OR REPLACE INTO packages (ecosystem, name, version, content_hash, indexed_at) VALUES (?, ?, ?, ?, ?)'
         )
-        .run(pkg.name, pkg.version, contentHash, Date.now())
+        .run(ecosystem, pkg.name, pkg.version, contentHash, Date.now())
     return {hitCache: false, filesIngested, chunksWritten}
 }
 
-export function ensureIndexed(cache: CacheHandle, pkg: ResolvedPackage): IndexResult {
+export function ensureIndexed(
+    cache: CacheHandle,
+    pkg: ResolvedPackage,
+    ecosystem: string = NPM_SCOPE
+): IndexResult {
     const contentHash = computeContentHash(pkg)
     const existing = cache.db
-        .prepare('SELECT content_hash FROM packages WHERE name = ? AND version = ?')
-        .get(pkg.name, pkg.version) as PackageRow | null
+        .prepare(
+            'SELECT content_hash FROM packages WHERE ecosystem = ? AND name = ? AND version = ?'
+        )
+        .get(ecosystem, pkg.name, pkg.version) as PackageRow | null
     if (existing && existing.content_hash === contentHash) {
         return {hitCache: true, filesIngested: 0, chunksWritten: 0, contentHash}
     }
@@ -151,7 +169,7 @@ export function ensureIndexed(cache: CacheHandle, pkg: ResolvedPackage): IndexRe
     cache.db.exec('BEGIN IMMEDIATE')
     let result: IngestResult
     try {
-        result = ingestBody(cache, pkg, contentHash)
+        result = ingestBody(cache, pkg, ecosystem, contentHash)
         cache.db.exec('COMMIT')
     } catch (err) {
         cache.db.exec('ROLLBACK')

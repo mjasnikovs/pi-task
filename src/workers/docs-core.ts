@@ -3,7 +3,7 @@ import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import {openCache as defaultOpenCache, type CacheHandle} from './docs-cache.js'
-import {ensureIndexed as defaultEnsureIndexed, type IndexResult} from './docs-index.js'
+import {ensureIndexed as defaultEnsureIndexed, NPM_SCOPE, type IndexResult} from './docs-index.js'
 import {
     resolvePackage as defaultResolvePackage,
     ResolveError,
@@ -632,8 +632,10 @@ function docsRawCached(
     const chunkCount =
         (
             cache.db
-                .prepare('SELECT count(*) AS c FROM chunks WHERE name = ? AND version = ?')
-                .get(pkg.name, pkg.version) as {c: number} | null
+                .prepare(
+                    'SELECT count(*) AS c FROM chunks WHERE ecosystem = ? AND name = ? AND version = ?'
+                )
+                .get(NPM_SCOPE, pkg.name, pkg.version) as {c: number} | null
         )?.c ?? 0
     if (chunkCount === 0) {
         return {
@@ -648,6 +650,7 @@ function docsRawCached(
     let chunks: RetrievedChunk[]
     try {
         chunks = retrieveChunks(cache, {
+            ecosystem: NPM_SCOPE,
             name: pkg.name,
             version: pkg.version,
             query,

@@ -16,6 +16,13 @@ import type {DocsCorpus} from './docs-lookup.js'
 const DEFAULT_LIMIT = PROJECT_RETRIEVE_LIMIT
 const DEFAULT_BUDGET = RETRIEVE_CONTENT_BUDGET
 
+/**
+ * Scope value for project-source rows. It sits in the same column as a registry
+ * id because these rows share the tables, but it is NOT one: a project is keyed
+ * by a hash of its cwd, so no registry could name it.
+ */
+export const PROJECT_SCOPE = 'project'
+
 export function getProjectName(cwd: string): string {
     try {
         const pkg = JSON.parse(fs.readFileSync(path.join(cwd, 'package.json'), 'utf8')) as {
@@ -123,8 +130,10 @@ export function ensureProjectIndexed(
     cwd: string
 ): ProjectIndexResult {
     const existing = cache.db
-        .prepare('SELECT content_hash FROM packages WHERE name = ? AND version = ?')
-        .get(name, version) as PackageRow | null
+        .prepare(
+            'SELECT content_hash FROM packages WHERE ecosystem = ? AND name = ? AND version = ?'
+        )
+        .get(PROJECT_SCOPE, name, version) as PackageRow | null
     if (existing) return {hitCache: true, filesIngested: 0, chunksWritten: 0}
 
     const t0 = Date.now()
@@ -132,11 +141,15 @@ export function ensureProjectIndexed(
     try {
         // Delete by NAME with no version: unlike the package index, a project
         // keeps only its newest max-mtime version, so every older one goes.
-        cache.db.prepare('DELETE FROM chunks WHERE name = ?').run(name)
-        cache.db.prepare('DELETE FROM packages WHERE name = ?').run(name)
+        cache.db
+            .prepare('DELETE FROM chunks WHERE ecosystem = ? AND name = ?')
+            .run(PROJECT_SCOPE, name)
+        cache.db
+            .prepare('DELETE FROM packages WHERE ecosystem = ? AND name = ?')
+            .run(PROJECT_SCOPE, name)
 
         const insertChunk = cache.db.prepare(
-            'INSERT INTO chunks (name, version, file_path, kind, content) VALUES (?, ?, ?, ?, ?)'
+            'INSERT INTO chunks (ecosystem, name, version, file_path, kind, content) VALUES (?, ?, ?, ?, ?, ?)'
         )
         let filesIngested = 0
         let chunksWritten = 0
@@ -153,16 +166,16 @@ export function ensureProjectIndexed(
             if (!chunks.length) continue
             filesIngested++
             for (const c of chunks) {
-                insertChunk.run(name, version, rel, 'dts', c)
+                insertChunk.run(PROJECT_SCOPE, name, version, rel, 'dts', c)
                 chunksWritten++
             }
         }
 
         cache.db
             .prepare(
-                'INSERT OR REPLACE INTO packages (name, version, content_hash, indexed_at) VALUES (?, ?, ?, ?)'
+                'INSERT OR REPLACE INTO packages (ecosystem, name, version, content_hash, indexed_at) VALUES (?, ?, ?, ?, ?)'
             )
-            .run(name, version, version, Date.now())
+            .run(PROJECT_SCOPE, name, version, version, Date.now())
 
         cache.db.exec('COMMIT')
         return {hitCache: false, filesIngested, chunksWritten, indexingMs: Date.now() - t0}
@@ -222,8 +235,10 @@ export function projectDocsRaw(
     const chunkCount =
         (
             cache.db
-                .prepare('SELECT count(*) AS c FROM chunks WHERE name = ? AND version = ?')
-                .get(cacheKey, version) as {c: number} | null
+                .prepare(
+                    'SELECT count(*) AS c FROM chunks WHERE ecosystem = ? AND name = ? AND version = ?'
+                )
+                .get(PROJECT_SCOPE, cacheKey, version) as {c: number} | null
         )?.c ?? 0
 
     if (chunkCount === 0) {
@@ -240,6 +255,7 @@ export function projectDocsRaw(
     let chunks: RetrievedChunk[]
     try {
         chunks = retrieveChunksFn(cache, {
+            ecosystem: PROJECT_SCOPE,
             name: cacheKey,
             version,
             query,
