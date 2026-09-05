@@ -299,7 +299,13 @@ which is why this took a whole run to surface: the trail looks healthy right up 
 
 **The fix is to drive the real terminal.** `tmux` is present in the container, so the
 driver starts pi in a tmux session and uses `send-keys`. That is also the path a user
-actually takes, which the bridge never was.
+actually takes, which the bridge never was. Confirmed working — the run now reaches
+`state: in_progress` and proceeds past the point the bridge run died.
+
+Two details the tmux path needs. The line must be sent with `send-keys -l` and Enter as
+a separate call, or the feature text's own characters are read as tmux key names. And pi
+needs about 25 seconds to boot before the prompt accepts anything — a line sent into a
+starting TUI is silently dropped, with no error in the pane or the trail.
 
 ## Six tasks from four obligations — the count control did not hold
 
@@ -310,7 +316,36 @@ The plan came out at **six** tasks, one per extracted requirement:
 ```
 
 The floor was 3 and the model chose 6. So `granularityFloor` bounds the plan from below
-and nothing bounds it from above — confirming there is no cap. The spec has to shrink:
-the mapping observed here is roughly one task per extracted requirement, and four written
-obligations extract six. To land at four tasks, the feature needs about **three**
-written obligations.
+and nothing bounds it from above — confirming there is no cap.
+
+**Shrinking the clause count does not shrink the requirement count.** The spec was
+rewritten from four numbered clauses to three, and extraction went *up*:
+
+| spec | numbered clauses | extracted | floor |
+|---|---|---|---|
+| v1 | 4 | 6 | 3 |
+| v2 | 3 | **7** | **4** |
+
+Because v2 compressed rather than removed — clause 2 became "returns the config as JSON
+on success **and** HTTP 400 with the issues when invalid", which is two obligations in
+one clause. The extractor counts obligations in the prose; the numbering is decoration.
+
+So the lever for task count is **how many things the feature asks for**, not how they are
+punctuated. A spec cannot be held to N tasks by renumbering it. That is worth knowing
+before anyone tries to bound a run by editing its formatting.
+
+## The plan is six tasks whichever spec is used
+
+| spec | clauses | extracted | floor | tasks planned |
+|---|---|---|---|---|
+| v1 | 4 | 6 | 3 | 6 |
+| v2 | 3 | 7 | 4 | 6 |
+
+Six both times. The floor moved, the extraction count moved, the plan did not. What the
+model appears to settle on is one task per *deliverable it can name* — scaffold, schema,
+loader, app, error path, tests — and for a feature of this shape that is six, whatever
+the floor underneath it says.
+
+The consequence for anyone trying to bound a run: neither the clause count nor the
+granularity floor is a task-count control. The only reliable lever is asking for fewer
+deliverables.
