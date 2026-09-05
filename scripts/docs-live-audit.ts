@@ -236,23 +236,17 @@ function auditProject(runRoot: string, spec: ProjectSpec, build: boolean): Proje
         }
     }
 
-    if (build) {
-        const [cmd, ...args] = spec.testCommand.split(' ')
-        try {
-            const out = execFileSync(cmd, args, {
-                cwd: root,
-                encoding: 'utf8',
-                stdio: 'pipe',
-                timeout: 900_000
-            })
-            rep.build = {ok: true, output: out.slice(-800)}
-        } catch (err) {
-            const e = err as {stdout?: string; stderr?: string; message: string}
-            rep.build = {
-                ok: false,
-                output: `${e.stdout ?? ''}${e.stderr ?? ''}${e.message}`.slice(-800)
-            }
+    // READ, never re-run. The toolchains live in the container the runs happened
+    // in; a build here would be a different machine's answer. `docs-live-build.ts`
+    // records the verdict next to the run, and this scores what it recorded — the
+    // same discipline as the answer log.
+    const buildFile = path.join(runRoot, `${spec.id}.build.json`)
+    if (build && fs.existsSync(buildFile)) {
+        const b = JSON.parse(fs.readFileSync(buildFile, 'utf8')) as {
+            ok: boolean
+            output: string
         }
+        rep.build = {ok: b.ok, output: b.output.slice(-800)}
     }
 
     // Verdict.
