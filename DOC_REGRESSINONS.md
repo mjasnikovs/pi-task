@@ -493,3 +493,36 @@ same pressure behind the ranking misses recorded earlier in this file.
 
 These two compound: half the index is redundant, and a sixth of it describes a major the
 project is not using.
+
+## The wrong answer did not produce wrong code
+
+The code that came out of TASK_0002:
+
+```ts
+export const configSchema = z.object({
+  name: z.string(),
+  port: z.number().int().min(1).max(65535),
+  adminEmail: z.email(),
+});
+```
+
+`z.email()` — the **correct** zod 4 form. Not the `z.string().email()` the docs answer had
+just "confirmed".
+
+This has to be stated plainly, because it cuts against the finding above. The docs answer
+was wrong and the delivered code was right. Whatever the model used to choose `z.email()`,
+it was not the sentence that confirmed the deprecated idiom.
+
+Two things are visible in the same records that plausibly did the work: an earlier answer
+said `int()` is "marked legacy (prefer `z.int()`)", and a later one surfaced
+`/** Consider z.strictObject(A.shape) instead */`. The deprecation *convention* reached the
+model even where the specific `@deprecated Use z.email()` line did not.
+
+Note the other half, though: the schema uses `z.number().int()`, which is precisely the
+form the docs answer called legacy. So the model took the modern form where the docs were
+wrong and the legacy form where the docs were right.
+
+**What this means for the verdict.** The stale-major sweep is a check on the delivered
+tree, and on this evidence it will pass. The defect is real, measured, and reproducible —
+and it did not, this time, reach the artifact. Both facts belong in the report. A finding
+that has to be inflated to matter is not worth having.
