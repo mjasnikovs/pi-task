@@ -373,3 +373,35 @@ Worth checking every time: `tmux new-session` inherits the environment of the tm
 **server**, not the client that asks for the session. If a server is already running from
 an earlier shell, the variables exported next to the `new-session` call never reach the
 process. Here the server was created by the driver itself, so they did.
+
+## TASK_0001: the apis worker read `package.json` instead of asking docs
+
+First task of the TypeScript run — "scaffold the project with hono and zod". The research
+fan-out ran all four workers, `worker:apis` among them, and made **zero** docs calls:
+
+```
+worker:apis: start
+worker:apis: read: node_modules/zod/package.json
+worker:apis: read: node_modules/hono/package.json
+worker:apis: writing answer…
+worker:apis: done exit=0 work=113977ms
+```
+
+Nothing in the whole task trail matches `pi-worker-docs`. The worker whose job is the API
+surface reached for the plain `read` tool on two package manifests — files that contain no
+API — and wrote its answer from those.
+
+**Not yet a defect.** This task is scaffolding: tsconfig, directory layout, dependency
+entries. There may be no API to look up, and 114 seconds of a read-only worker is cheap.
+The tasks that need zod's and hono's actual surface are 2 through 5, and whether *those*
+call docs is the real question. Recorded now so the comparison is on the record either way.
+
+## Harness leak: the tty capture was inside the tree
+
+`worker:files` read `/home/agent/docs-live/run/ts/.pi-tty.log` as project source, next to
+`config.json` and `FEATURE.txt` — a 168 KB terminal capture left by the previous, failed
+run. The harness had put itself into the context it was measuring.
+
+Fixed: the capture is written outside the project root as `<root>/../<id>.tty.log`, and
+the stale files were deleted from all three trees. Anything a driver writes into the
+project under test is research input, not a side file.

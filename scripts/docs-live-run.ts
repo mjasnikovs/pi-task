@@ -129,9 +129,12 @@ async function main(): Promise<void> {
     const verdict = await waitForSettle(root, quietMin * 60_000, hardDeadline)
     console.log(`    ${verdict}`)
 
-    // The pane is kept on a hard deadline so a wedged run can be read afterwards.
+    // Written OUTSIDE the project, and this is not tidiness. A capture left in the
+    // tree is a file the run's own research worker reads as project source — the
+    // first run's `worker:files` read `.pi-tty.log` alongside config.json — so the
+    // harness ends up in the context it is trying to measure.
     fs.writeFileSync(
-        path.join(root, '.pi-tty.log'),
+        path.join(path.dirname(root), `${path.basename(root)}.tty.log`),
         tmux('capture-pane', '-p', '-S', '-20000', '-t', session),
         'utf8'
     )
