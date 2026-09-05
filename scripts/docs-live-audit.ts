@@ -116,12 +116,18 @@ function resolvedPins(root: string, spec: ProjectSpec): Record<string, string | 
             }
         }
     } else {
+        // Parsed, not pattern-matched. plan.json keys the version as a separate
+        // `pkg-version` field, so a regex looking for `"<name>-<version>"` finds
+        // nothing and reports every pin as missing — a false HARD FAIL, which is
+        // worse than no check at all.
         const plan = path.join(root, 'dist-newstyle', 'cache', 'plan.json')
         if (fs.existsSync(plan)) {
-            const text = fs.readFileSync(plan, 'utf8')
-            for (const pkg of Object.keys(out)) {
-                const m = new RegExp(`"${pkg}-([0-9.]+)"`).exec(text)
-                out[pkg] = m?.[1] ?? null
+            const parsed = JSON.parse(fs.readFileSync(plan, 'utf8')) as {
+                'install-plan'?: Array<{'pkg-name'?: string; 'pkg-version'?: string}>
+            }
+            for (const e of parsed['install-plan'] ?? []) {
+                const name = e['pkg-name']
+                if (name && name in out) out[name] = e['pkg-version'] ?? null
             }
         }
     }

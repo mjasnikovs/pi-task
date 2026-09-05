@@ -23,6 +23,9 @@ function record(runRoot: string): void {
         let ok = true
         let output = ''
         try {
+            // execSync, not execFileSync: the Haskell command is a `&&` chain,
+            // because compiling the source and running the tests are two steps
+            // and only the pair is a real verdict.
             output = execSync(spec.testCommand, {
                 cwd: dir,
                 encoding: 'utf8',

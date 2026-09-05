@@ -15,7 +15,16 @@ export interface ProjectSpec {
     ecosystem: EcosystemId
     /** Packages the task must use, pinned to the major the model predates. */
     pins: Record<string, string>
-    /** The command that decides build/test green. */
+    /**
+     * The command that decides build/test green.
+     *
+     * It must COMPILE the code the run wrote, not just run whatever the test
+     * target happens to reference. The Haskell run made this concrete: its
+     * test-suite stanza does not depend on the library, and `test/Spec.hs` was
+     * left as `main = pure ()`, so `cabal test` exited 0 while `cabal build all`
+     * failed with four errors in the run's own source. A verify that cannot fail
+     * is not a verify.
+     */
     testCommand: string
 }
 
@@ -67,7 +76,7 @@ export const PROJECTS: readonly ProjectSpec[] = [
         id: 'hs',
         ecosystem: 'hackage',
         pins: {aeson: '2.2.5.1', scotty: '0.30'},
-        testCommand: 'cabal test'
+        testCommand: 'cabal build all && cabal test'
     }
 ]
 
