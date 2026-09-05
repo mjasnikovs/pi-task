@@ -405,3 +405,91 @@ run. The harness had put itself into the context it was measuring.
 Fixed: the capture is written outside the project root as `<root>/../<id>.tty.log`, and
 the stale files were deleted from all three trees. Anything a driver writes into the
 project under test is research input, not a side file.
+
+---
+
+# The two real defects
+
+Both found by TASK_0002 of the TypeScript run, both measured, both general.
+
+## 1. A dead major is indexed as if it were the current API
+
+`zod@4.5.4` ships a `v3/` directory for back-compat. The docs index takes it:
+
+```
+zod chunk files, by count
+  v4/core/schemas.d.ts     283      v3/types.d.ts    146
+  v4/core/schemas.d.cts    283      v3/types.d.cts   146
+  ...
+  v3 chunks: 414     v4 chunks: 2138
+```
+
+414 chunks of zod 3's API sit in the index for a package the banner announces as
+`zod@4.5.4`. BM25 cannot tell them apart — they are the same identifiers, in the same
+package, at a path no ranking signal reads.
+
+**And it showed up in an answer.** The worker asked whether `z.string().email()` is valid
+in zod 4. It got back, under a `Per zod@4.5.4:` header:
+
+> (1) z.string().email() is confirmed — `ZodString.email(message?): ZodString` is a check
+> method returning `ZodString`.
+
+That signature is **zod 3's**, verbatim in shape:
+
+```
+v3/types.d.ts:214      email(message?: errorUtil.ErrMessage): ZodString;
+
+v4/classic/schemas.d.ts:111   /** @deprecated Use `z.email()` instead. */
+v4/classic/schemas.d.ts:112   email(params?: string | core.$ZodCheckEmailParams): this;
+```
+
+Three things wrong in one sentence: the parameter is `params?`, not `message?`; the return
+is `this`, not `ZodString`; and the declaration carries **`@deprecated Use z.email()
+instead`** on the line directly above it, which the answer does not mention at all. It
+says "confirmed".
+
+This is the exact mechanism the stale-API pins were chosen to expose. A model handed that
+answer writes `z.string().email()` — the deprecated v3 idiom — and believes it checked.
+
+**One honest caveat.** The excerpt guard did fire on this answer:
+
+```
+WARNING: cited excerpt not found verbatim in source content — the child pi may have
+paraphrased or hallucinated.
+```
+
+So the citation was not grounded, and whether the v3 signature came from the indexed v3
+chunk or from the model's own memory of zod 3 cannot be separated from this record alone.
+It does not matter much: the v3 chunks are indexed and retrievable, so the failure is
+available either way. What the record does prove is that **the warning did not stop the
+answer** — the prose still asserts "confirmed", and the caller gets a confident wrong API
+with a warning above it.
+
+Worth noting the tool also behaved well twice in the same task. An earlier query said
+plainly "the content contains no declaration for z.string().email() … so those parts are
+unclear" rather than guessing, and a later one surfaced
+`/** Consider z.strictObject(A.shape) instead */`. The abstention path works. It is the
+answer that *does* commit that carries the wrong major.
+
+## 2. Every `.d.cts` is indexed as a second copy of its `.d.ts`
+
+Same package, counting distinct chunk bodies rather than rows:
+
+| package | chunks | distinct bodies | `.d.cts` chunks |
+|---|---|---|---|
+| zod | 2565 | **1215** | 1280 |
+| hono | 708 | 704 | 0 |
+
+**53% of zod's index is duplicate content.** Modern packages ship parallel `.d.ts` and
+`.d.cts` declarations for ESM and CJS; they are the same API written twice, and
+`isDtsFile` accepts both (`.d.ts|.d.mts|.d.cts`).
+
+hono ships no `.d.cts` and has no duplication, which is what makes the cause unambiguous.
+
+The cost is not disk. Retrieval returns the top **8** chunks
+(`PACKAGE_RETRIEVE_LIMIT = 8`), so a package indexed twice can spend two of those eight
+slots on the same text. The effective breadth of every zod lookup is halved, which is the
+same pressure behind the ranking misses recorded earlier in this file.
+
+These two compound: half the index is redundant, and a sixth of it describes a major the
+project is not using.
