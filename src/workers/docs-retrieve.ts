@@ -50,11 +50,30 @@ const MIN_TOKEN_LEN = 2
  * aliased members spend the whole budget on hops.
  */
 const MAX_ALIAS_HOPS = 3
+/**
+ * How many smallest-first candidates the value hop reads before giving up.
+ *
+ * A whole-word check cannot be pushed into SQL, so it runs over the shortest few.
+ * Only a name whose every shorter occurrence is a substring of a longer identifier
+ * needs more than a handful, and that name is not the one the query asked about.
+ */
+const VALUE_CHUNK_CANDIDATES = 8
 /** Backstop for a caller that names no ecosystem; every real one passes its own. */
 const DEFAULT_TYPE_KEYWORDS = ['interface', 'type', 'class', 'enum'] as const
 /** A member declared as a bare capitalised type: `get: HandlerInterface<…>`. */
 const MEMBER_TYPE_RE =
     /^\s*(?:readonly\s+)?([A-Za-z_$][\w$]*)\??\s*:\s*([A-Z][A-Za-z0-9_]*)\s*[<;,)|&]/gm
+/**
+ * A token that is a symbol rather than English: capitalised, or carrying an
+ * underscore or an internal capital.
+ *
+ * `/^[A-Z]/` alone was the whole rule, and it reached none of the 17 declarations
+ * the 2026-09-06 run named and never retrieved — `safeParse`, `from_str`,
+ * `into_make_service`, `parseJSON`. Widening to every token instead would hop on
+ * `signature` and `return`, spending a slot on whichever prose chunk is shortest.
+ */
+const IDENTIFIER_SHAPED =
+    /^(?:[A-Z][A-Za-z0-9_]{2,}|[a-z][A-Za-z0-9]*(?:_[A-Za-z0-9_]+|[A-Z][A-Za-z0-9_]*)[A-Za-z0-9_]*)$/
 const TYPE_DECL_RE =
     /\b(?:interface|type|class|data|newtype|struct|trait|enum)\s+([A-Z][A-Za-z0-9_]*)/g
 /** The `<E extends Env, BasePath extends string>` a declaration introduces itself. */
@@ -176,15 +195,20 @@ function hopNames(text: string, tokens: string[]): string[] {
     }
     const asked = new Set(tokens.map(t => t.toLowerCase()))
     const out: string[] = []
-    // A capitalised name the QUERY itself asks about. scotty's seven failures were
-    // all of this shape: `type ActionM = ActionT IO` sits in one chunk of 312
-    // while 67 chunks USE the name, and a chunk carrying BOTH query terms
+    // A name the QUERY itself asks about. scotty's seven failures were all of this
+    // shape: `type ActionM = ActionT IO` sits in one chunk of 312 while 67 chunks
+    // USE the name, and a chunk carrying BOTH query terms
     // (`get :: RoutePattern -> ActionM () -> ScottyM ()`) outranks the definition
     // every time. Reading the ranked output, all eight slots went to uses.
+    // Not capped. MAX_ALIAS_HOPS bounds hops DERIVED from a chunk, where one chunk
+    // full of aliased members could generate them without end; a query names the
+    // handful of symbols it names, and that is the bound. Capping these at 3 as well
+    // cost 4 of the 6 recoveries this hop exists for — measured on the 2026-09-06
+    // run's own 35 named declarations: 17 missed uncapped-baseline, 15 at a cap of
+    // 3, 11 at a cap of 8. The content budget is what stops it running long.
     for (const t of tokens) {
-        if (!/^[A-Z][A-Za-z0-9_]{2,}$/.test(t) || declared.has(t) || out.includes(t)) continue
+        if (!IDENTIFIER_SHAPED.test(t) || declared.has(t) || out.includes(t)) continue
         out.push(t)
-        if (out.length >= MAX_ALIAS_HOPS) return out
     }
     for (const m of text.matchAll(MEMBER_TYPE_RE)) {
         const [, member, typeName] = m
@@ -220,8 +244,57 @@ function definitionChunk(
             opts.version,
             ...keywords.map(k => `*${k} ${name}[ <={(=]*`)
         ) as ChunkRow | undefined
+    if (row) {
+        return {
+            filePath: row.file_path,
+            kind: row.kind,
+            content: row.content,
+            rank: row.rank
+        }
+    }
+    return valueChunk(cache, opts, name)
+}
+
+/**
+ * The smallest chunk declaring `name` where `name` is a VALUE, not a type.
+ *
+ * The keyword GLOB above finds `type ActionM` and `struct Config`; nothing it can
+ * spell finds `pub fn from_str<'a, T>` or `decodeValue :: String -> …`, and those
+ * were 17 of the 35 declarations the 2026-09-06 run named and never retrieved.
+ *
+ * Smallest-first is the same reasoning as the type path, and it is what makes this
+ * safe without a per-language declaration grammar: the surface extractor emits one
+ * declaration per chunk, so the short chunk carrying the name IS its declaration and
+ * the long ones are the prose that merely mentions it.
+ */
+function valueChunk(
+    cache: CacheHandle,
+    opts: RetrieveOptions,
+    name: string
+): RetrievedChunk | null {
+    const rows = cache.db
+        .prepare(
+            `SELECT file_path, kind, content, 0 AS rank FROM chunks
+             WHERE ecosystem = ?1 AND name = ?2 AND version = ?3 AND content LIKE ?4
+             ORDER BY length(content) LIMIT ?5`
+        )
+        .all(
+            opts.ecosystem,
+            opts.name,
+            opts.version,
+            `%${name}%`,
+            VALUE_CHUNK_CANDIDATES
+        ) as ChunkRow[]
+    // LIKE has no word boundary, so `decodeFile` matches `decodeFileStrict` — the
+    // wrong declaration, and the exact confusion these runs keep producing.
+    const whole = new RegExp(`(?<![A-Za-z0-9_])${escapeRe(name)}(?![A-Za-z0-9_])`)
+    const row = rows.find(r => whole.test(r.content))
     if (!row) return null
     return {filePath: row.file_path, kind: row.kind, content: row.content, rank: row.rank}
+}
+
+function escapeRe(s: string): string {
+    return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
 export function retrieveChunks(cache: CacheHandle, opts: RetrieveOptions): RetrievedChunk[] {

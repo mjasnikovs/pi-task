@@ -244,3 +244,89 @@ test('retrieveChunks fetches the definition of a type the query names', () => {
         cache.close()
     }
 })
+
+// Live re-run 2026-09-06. Of 35 symbols the run's own queries NAMED and whose
+// declaration was in the index, 17 were never retrieved — `safeParse` three times,
+// `from_str` twice, `IntoResponse`, `ServiceExt`, `parseJSON`. The definition hop
+// existed already and could not reach any of them: `hopNames` only accepts a name
+// matching /^[A-Z]/, and `definitionChunk` only finds a TYPE declaration.
+//
+// Measured on serde_json's real index, same corpus, two queries:
+//   "exact signature of from_str? What error type..."  -> NOT RETRIEVED of 6
+//   "from_str"                                          -> rank 1 of 17
+// The 91-byte declaration loses to a 1159-byte chunk whose doc comments match
+// `signature`, `error`, `type` and `return`. BM25 gives the English half of the
+// question as much say as the symbol, and the English half matches the chunks that
+// talk ABOUT the API rather than the one that IS it.
+test('retrieveChunks fetches the definition of a FUNCTION the query names', () => {
+    const cache = openCache(':memory:')
+    try {
+        const pkg = resolveHackage('tiny-hs', HS_MODULES, {modulesDir: HS_MODULES})
+        ensureIndexed(cache, pkg, ECOSYSTEMS.hackage)
+        const chunks = retrieveChunks(cache, {
+            ecosystem: 'hackage',
+            name: pkg.name,
+            version: pkg.version,
+            query: 'What is the exact signature of decodeValue? What error type does it return?',
+            limit: PACKAGE_RETRIEVE_LIMIT,
+            contentBudget: RETRIEVE_CONTENT_BUDGET
+        })
+        const joined = chunks.map(c => c.content).join('\n')
+        expect(joined).toContain('decodeValue :: String -> Either String Int')
+    } finally {
+        cache.close()
+    }
+})
+
+// The hop is for a symbol the question NAMES. An English word is not one, and
+// hopping on it spends a slot on whatever prose chunk is shortest.
+test('retrieveChunks does not hop on an English word in the query', () => {
+    const cache = openCache(':memory:')
+    try {
+        const pkg = resolveHackage('tiny-hs', HS_MODULES, {modulesDir: HS_MODULES})
+        ensureIndexed(cache, pkg, ECOSYSTEMS.hackage)
+        const chunks = retrieveChunks(cache, {
+            ecosystem: 'hackage',
+            name: pkg.name,
+            version: pkg.version,
+            query: 'what does the decoder return on error',
+            limit: PACKAGE_RETRIEVE_LIMIT,
+            contentBudget: RETRIEVE_CONTENT_BUDGET
+        })
+        expect(chunks.every(c => c.rank !== 0 || c.kind === 'readme')).toBe(true)
+    } finally {
+        cache.close()
+    }
+})
+
+// The cap is what made the hop useless, not the hop. On the 2026-09-06 run's own 35
+// named declarations: 17 missed before the hop reached values at all, 15 with these
+// hops capped at 3, 11 at 8, and 8 with the query's own symbols uncapped. A query
+// names the handful of symbols it names; MAX_ALIAS_HOPS is there for the OTHER
+// source, a chunk of aliased members, which has no such bound.
+test('retrieveChunks hops to more query-named definitions than the alias cap', () => {
+    const cache = openCache(':memory:')
+    try {
+        const pkg = resolveHackage('tiny-hs', HS_MODULES, {modulesDir: HS_MODULES})
+        ensureIndexed(cache, pkg, ECOSYSTEMS.hackage)
+        const chunks = retrieveChunks(cache, {
+            ecosystem: 'hackage',
+            name: pkg.name,
+            version: pkg.version,
+            query: 'signatures of decodeValue decodeValueStrict ActionM ScottyM Greeting',
+            limit: PACKAGE_RETRIEVE_LIMIT,
+            contentBudget: RETRIEVE_CONTENT_BUDGET
+        })
+        const joined = chunks.map(c => c.content).join('\n')
+        for (const decl of [
+            'decodeValue :: String -> Either String Int',
+            'decodeValueStrict :: String -> Either String Int',
+            'type ActionM = ActionT IO',
+            'type ScottyM = ScottyT IO'
+        ]) {
+            expect(joined).toContain(decl)
+        }
+    } finally {
+        cache.close()
+    }
+})

@@ -1108,8 +1108,49 @@ matches the chunks that talk *about* the API rather than the one that *is* it.
 
 This is the same class as the open `Data.Aeson` note, but sharper and measurable, and
 it costs a ground-truth symbol on the ecosystem where the model has fallback
-knowledge to hide it. Stopword stripping is already refuted; weighting symbol-shaped
-tokens above English ones is untested. **Not fixed — measured only.**
+knowledge to hide it.
+
+### Fixed in the index, UNPROVEN in the answers
+
+Base rate, over every symbol the run's own 33 queries NAMED whose declaration was in
+the index: **17 of 35 declarations were never retrieved, 48.6%** — `safeParse` three
+times, `from_str` twice, `IntoResponse`, `ServiceExt`, `parseJSON`, `defaultOptions`.
+
+A definition hop already existed and could reach none of them. Two reasons, both
+narrow:
+
+- `hopNames` only accepted a name matching `/^[A-Z]/`, so `from_str`, `safeParse`,
+  `into_make_service` and `parseJSON` were never candidates;
+- `definitionChunk` only found a TYPE declaration — nothing it can spell finds
+  `pub fn from_str<'a, T>` or `decodeValue :: String -> …`.
+
+Widened to identifier-shaped names (an underscore or an internal capital, which
+`signature` and `return` do not have), with a smallest-first whole-word fallback for
+values. Whole-word matters: `LIKE '%decodeFile%'` finds `decodeFileStrict`, the exact
+confusion these runs keep producing.
+
+Then the cap turned out to be the binding constraint, so it was swept rather than
+guessed:
+
+| query-named hops capped at | declarations missed of 35 |
+|---|---|
+| (no hop reached them) | 17 — 48.6% |
+| 3, the alias cap | 15 |
+| 5 | 12 |
+| 8 | 11 |
+| **uncapped** | **8 — 22.9%** |
+
+`MAX_ALIAS_HOPS` exists because one chunk of aliased members can generate hops without
+end. A query names the handful of symbols it names, so it carries its own bound, and
+the cap now applies only to the alias source.
+
+Cost, same 22 queries: mean chunks 7.9 → 10.6, mean bytes **15,965 → 16,083, +0.7%**,
+max still inside the 24,000 budget. The hops are one-line declarations.
+
+**This is an index-side measurement.** It says the declaration now reaches the
+extraction child. It does not say an answer got better, and the last run is exactly
+why that distinction is kept: serde_json lost 51 duplicate chunks and its `from_str`
+answer did not move. Delivery is for the next live run to show.
 
 ## Defect 12. A facade package indexes to nothing — OPEN
 
