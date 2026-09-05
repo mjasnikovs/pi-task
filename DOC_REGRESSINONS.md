@@ -844,3 +844,65 @@ cheap and local, and either alone removes eight of the ten above. The remaining 
 already uses elsewhere: enrich only names that appear in the project's **declared**
 dependencies, which `declaredDeps(cwd)` already provides. That single change fixes this
 defect and defect 4 together.
+
+---
+
+# 6. Seven attempts at one signature, and the code was invented anyway
+
+The Haskell run asked scotty for the same thing seven times: the type of `json`, and the
+definitions of `ScottyM` / `ActionM`.
+
+```
+[2]  ok       "scotty :: Port -> ScottyM () -> IO () from Web.Scotty
+              (which is `type ScottyM = ScottyT IO`)"
+[10] unclear
+[12] partial  "Only a few of the requested signatures are present: scottyApp and options"
+[14] partial  "does not include the definitions of ScottyM/ActionM … nor the signature
+              of the json handler"
+[16] partial  "does not contain a type signature for a json function or a type
+              declaration for ScottyM a / ActionM"
+[18] unclear
+[20] unclear
+```
+
+Four outright non-answers, three partials, and across all seven the signature
+`json :: ToJSON a => a -> ActionM ()` never appeared.
+
+**The content was there the whole time.** Measured directly against the index:
+
+```
+scotty chunks indexed:        312
+chunks containing ActionM:     67
+  Web/Scotty.hs | type ActionM = ActionT IO
+```
+
+Sixty-seven chunks hold the term, one of them holds the definition, and seven ranked
+retrievals at top-8 never surfaced it. This is the ranking miss found in pre-flight —
+`ActionM` missed on short queries — reproduced at scale in a real run, and it did not
+improve when the model rewrote the query six times.
+
+**And it reached the artifact.** `src/Server.hs`:
+
+```haskell
+import Network.Scotty (Scotty, ScottyT, get, json, liftIO, status, statusCode)
+
+configApp :: Scotty
+configRoute :: ScottyT () ()
+errRoute msg = do
+  status statusCode400
+```
+
+Every one of those is wrong. The module is `Web.Scotty`, not `Network.Scotty`. There is no
+type `Scotty`. `ScottyT` takes one parameter, not two. `statusCode400` does not exist —
+it is `status400`. `genericToJSON`, `defaultOptions`, `Value`, `.=` and `Key` are all used
+without imports.
+
+Note the second failure layered on the first: answer [2] gave the module correctly as
+**`Web.Scotty`**, and the model still wrote `Network.Scotty`. So the docs were right once,
+and ignored; then wrong or silent six times, and improvised over.
+
+**This is the clearest answer the exercise produced.** For Haskell the docs were not
+sufficient — not marginally, not in one call, but across seven consecutive attempts at a
+single signature that was sitting in the index the entire time. Where TypeScript had
+enough model knowledge to paper over the gaps, Haskell did not, and the gap went straight
+into the source file.
