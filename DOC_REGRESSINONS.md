@@ -906,3 +906,86 @@ sufficient — not marginally, not in one call, but across seven consecutive att
 single signature that was sitting in the index the entire time. Where TypeScript had
 enough model knowledge to paper over the gaps, Haskell did not, and the gap went straight
 into the source file.
+
+---
+
+# Final result
+
+Three greenfield projects, one per ecosystem, each pinned to a library major the local
+Qwen3.8-27B predates. Real `/task-auto` runs in the mx5-n container — yolo mode, full
+trail, auto-commit — driven through a real terminal. 13 tasks, 56 docs calls, 3h36m.
+
+| | TypeScript | Rust | Haskell |
+|---|---|---|---|
+| verdict | **PASS** | **HARD FAIL** | **HARD FAIL** |
+| tasks | 6/6 | 4/4 | 3/3 |
+| wall clock | 1h26m | 56m | 1h14m |
+| docs calls | 17 | 17 | 22 |
+| abstained | 4 (24%) | 5 (29%) | **12 (55%)** |
+| invented symbols | 0/13 | 0/12 | 0/10 |
+| pins intact | 2/2 | 3/3 | 2/2 |
+| stale-major API | none | none | none |
+| build/test | green | **RED** | **RED** |
+
+Per package, the abstention rate is where the story is:
+
+```
+hs   aeson            11 calls,  8 abstained     73%
+hs   scotty            7 calls,  3 abstained     43%
+ts   hono              6 calls,  3 abstained     50%
+rs   axum              6 calls,  2 abstained     33%
+rs   tower             4 calls,  1 abstained     25%
+ts   zod               5 calls,  0 abstained      0%
+```
+
+## Were the docs answers sufficient?
+
+**No — and the shortfall tracks the model's own knowledge exactly inversely to where it
+was needed.**
+
+- **TypeScript passed**, with three of six hono lookups returning nothing and one zod
+  answer confirming a deprecated API with a zod-3 signature. The model knew hono and zod
+  well enough to write correct code anyway. The docs tool was not load-bearing here.
+- **Rust failed** on a missing `tower` dependency. The docs tool answered correctly about
+  `tower::util::ServiceExt` — and it should not have answered at all, because `tower` is a
+  transitive lock entry, not a declared dependency. The answer made an uncompilable import
+  look verified.
+- **Haskell failed** hardest, and here the docs tool is squarely responsible. Twelve of
+  twenty-two calls returned nothing. Seven consecutive attempts at `json`'s signature
+  produced it not once, while `ActionM` sat in 67 of scotty's 312 indexed chunks. The model
+  had no fallback knowledge for scotty 0.30, so it invented `Network.Scotty`, a `Scotty`
+  type, and `statusCode400`, and the library does not compile.
+
+That is the shape of the whole result. **Where the model already knew the library, the docs
+tool's failures were invisible. Where it did not, they went straight into the source file.**
+A tool that only works when it is not needed is the failure mode this exercise was built to
+detect, and it detected it.
+
+Two things worth crediting, both real. The **abstention path is honest** — 21 non-answers
+across three runs and not one invented API in the answers themselves (0 invented symbols in
+35 scored answers). And **version resolution is exact**: every package resolved to its pin
+from three different version sources, and no run drifted off a pinned major.
+
+## The six defects, ranked by what they cost
+
+1. **Backticked filenames installed as npm packages.** Ten registry installs across the
+   runs — `config.ts`, `app.ts`, `tsconfig.json`, `name`, `port`, `lib`, `fetch` — each a
+   real unrelated package, indexed as this project's documentation. Invisible to both
+   sinks. Fetch targets chosen by model-written strings.
+2. **Answering about undeclared transitive dependencies.** Caused the Rust HARD FAIL.
+   Measured on npm too: a project with 23 declared dependencies exposes 106 packages the
+   tool will confidently describe and that must not be imported.
+3. **Retrieval cannot follow a type alias.** hono declares every verb as an interface
+   alias; the signatures are one hop away and the top-8 never brings both. Three
+   non-answers on the task that needed hono most.
+4. **Ranking misses content that is indexed.** Seven scotty attempts, 67 candidate chunks,
+   zero deliveries. Reproduced offline: short generic queries miss where longer ones hit.
+5. **A dead major is indexed as current.** 414 of zod's chunks are zod 3, and an answer
+   reproduced zod 3's `email(message?): ZodString` under a `Per zod@4.5.4:` header,
+   omitting the `@deprecated` line sitting directly above the real declaration.
+6. **Every `.d.cts` is a second copy of its `.d.ts`.** 2565 zod chunks, 1215 distinct
+   bodies — 53% duplication, halving the effective breadth of a top-8 retrieval.
+
+Defects 1 and 2 share a fix: enrich and answer only for names in the project's **declared**
+dependencies, which `declaredDeps(cwd)` already provides. Defects 3, 4 and 6 are all
+pressure on the same eight-chunk budget.
