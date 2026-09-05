@@ -349,3 +349,27 @@ the floor underneath it says.
 The consequence for anyone trying to bound a run: neither the clause count nor the
 granularity floor is a task-count control. The only reliable lever is asking for fewer
 deliverables.
+
+## Cache isolation, as it actually ended up
+
+The plan called for a redirected `XDG_CACHE_HOME`. The runs do not set it, and that is
+the right outcome: they run inside the container, so `~/.cache/pi-worker/docs.sqlite`
+there is already isolated from the host's 301 MB cache. All three runs share the
+container's own cache, which keeps them comparable to each other.
+
+The pre-flight probes used a separate `docs-live/cache`, so each run starts **cold** on
+the packages it looks up — real first-call ingestion cost included, which is what a user
+sees on a fresh project.
+
+Verified on the live process rather than assumed:
+
+```
+/proc/<pi>/environ:
+  PI_TASK_TYPEONLY_LOG=/home/agent/docs-live/ts.jsonl
+  PI_TASK_DEBUG_LOG=full
+```
+
+Worth checking every time: `tmux new-session` inherits the environment of the tmux
+**server**, not the client that asks for the session. If a server is already running from
+an earlier shell, the variables exported next to the `new-session` call never reach the
+process. Here the server was created by the driver itself, so they did.
