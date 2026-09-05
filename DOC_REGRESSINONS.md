@@ -662,3 +662,30 @@ The second half is not a defence of the first. A tool that can be ignored withou
 consequence on an easy task is a tool whose failures will surface on a hard one, where the
 model has nothing to fall back on. The Rust and Haskell runs are exactly that harder case:
 axum 0.8 and scotty 0.30 are far outside a 27B local model's confident knowledge.
+
+## Minor: the plan's `## tasks` section carries the model's raw deliberation
+
+In the Rust run's `TASK_AUTO_0001.md`, the `## tasks` section holds two real entries and
+twenty-eight lines of the model's own reasoning, all rendered as markdown checkboxes:
+
+```
+- [x] TASK_0001  The crate has `axum`, `tokio`, `serde_json`, and `serde` as dep…
+- [ ] TASK_0002  There's a `config.json` at the crate root with `adminEmail`…
+- [ ] No `lib.rs` exists yet — needed for integration tests to import from
+- [ ] First task: Create `src/lib.rs` with the `Config` struct…
+- [ ] Task 1: Create `src/lib.rs` with `Config` struct + `load_config_from(path)`…
+- [ ] Requirement (1) — tasks 1 and 2
+- [ ] "Build a config module in Rust." [prose] — covered implicitly by all tas…
+```
+
+Only the two `TASK_NNNN`-prefixed lines are tasks. Anything counting checkboxes in that
+section reads 30 where the answer is 2 — which is exactly the mistake made while auditing
+this run, before checking against the `TASK_*.md` files on disk.
+
+Cosmetic for the pipeline, since nothing downstream parses it that way, but the plan file
+is the artifact a human opens to see what was decided, and this one is mostly noise.
+
+Also worth recording for the task-count question: the Rust spec extracted **4** ownable
+requirements against TypeScript's 7, from a feature of the same shape and length. No
+granularity floor line was emitted at all, which means it was 0. Requirement extraction is
+not stable across ecosystems for the same task.
