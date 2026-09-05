@@ -1,72 +1,42 @@
 /**
  * Drive one seeded project through a real `/task-auto` run, headlessly.
  *
- * `pi -p "/task-auto …"` does NOT work: print mode hands the text to the model as
- * an ordinary message and never dispatches the command. The command only reaches
- * its handler through the remote bridge, which `registerBridgeCommand` populates
- * alongside `pi.registerCommand`. So this starts pi under a pty, waits for the
- * remote server, and sends the line over its WebSocket exactly as a browser would.
+ * TWO PATHS DO NOT WORK, and both fail late enough to waste a run:
+ *
+ *   `pi -p "/task-auto …"` hands the text to the model as an ordinary message.
+ *   Print mode dispatches no commands at all.
+ *
+ *   The remote bridge reaches the handler, but a line arriving before any terminal
+ *   command is handed a shimmed ctx whose `newSession` throws "Run /remote in the
+ *   terminal once". `/task-auto` needs a session per task, so the run dies — after
+ *   planning has completed and written a full plan, which is what makes it costly.
+ *
+ * So this drives the real terminal: pi in a tmux session, and `send-keys`. That is
+ * the path a user takes, and the only one where ctx is the genuine article.
  *
  *   bun scripts/docs-live-run.ts <project-root> <feature-file> [--timeout-min 90]
  *
  * `bun run test` globs `scripts/`, so nothing here runs on import.
  */
 
-import {spawn} from 'node:child_process'
+import {execFileSync} from 'node:child_process'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 
-/** First port the remote server tries; it retries upward from here. */
-const REMOTE_BASE_PORT = 8800
-const REMOTE_PORT_SPAN = 20
-const WS_PATH = '/ws'
-
-async function portOpen(port: number): Promise<boolean> {
-    try {
-        const res = await fetch(`http://127.0.0.1:${port}/push-key`, {
-            signal: AbortSignal.timeout(1000)
-        })
-        return res.status < 500
-    } catch {
-        return false
-    }
+function tmux(...args: string[]): string {
+    return execFileSync('tmux', args, {encoding: 'utf8'})
 }
 
 /**
- * The port pi actually bound. Scanned rather than assumed: a stale pi, or a
- * sibling run, takes 8800 and the next one lands on 8801 with no warning.
+ * Type the line into pi's prompt and press Enter.
+ *
+ * Sent as a literal (`-l`) so nothing in the feature text is read as a tmux key
+ * name, and Enter goes as its own call — a trailing newline inside a literal
+ * send is swallowed by the prompt's own paste handling.
  */
-async function findRemotePort(deadline: number): Promise<number> {
-    while (Date.now() < deadline) {
-        for (let p = REMOTE_BASE_PORT; p < REMOTE_BASE_PORT + REMOTE_PORT_SPAN; p++) {
-            if (await portOpen(p)) return p
-        }
-        await new Promise(r => setTimeout(r, 2000))
-    }
-    throw new Error('remote server never bound')
-}
-
-function sendLine(port: number, text: string): Promise<void> {
-    return new Promise((resolve, reject) => {
-        const ws = new WebSocket(`ws://127.0.0.1:${port}${WS_PATH}`)
-        const fail = setTimeout(() => reject(new Error('ws send timed out')), 20_000)
-        ws.onopen = () => {
-            // The server sends one authoritative snapshot on connect; the line is
-            // sent after a beat so it is never racing that write.
-            setTimeout(() => {
-                ws.send(JSON.stringify({type: 'message', text}))
-                setTimeout(() => {
-                    clearTimeout(fail)
-                    ws.close()
-                    resolve()
-                }, 2000)
-            }, 800)
-        }
-        ws.onerror = e => {
-            clearTimeout(fail)
-            reject(new Error(`ws error: ${String(e)}`))
-        }
-    })
+function sendLine(session: string, text: string): void {
+    tmux('send-keys', '-t', session, '-l', text)
+    tmux('send-keys', '-t', session, 'Enter')
 }
 
 /**
@@ -137,31 +107,35 @@ async function main(): Promise<void> {
     const quietMin = qIdx === -1 ? 8 : Number(process.argv[qIdx + 1])
 
     const feature = fs.readFileSync(featureFile, 'utf8').trim()
-    const ttyLog = path.join(root, '.pi-tty.log')
+    const session = `docslive-${path.basename(root)}`
 
     console.log(`=== ${root}`)
-    // A pty, because pi's TUI exits immediately on a plain pipe. `script` is the
-    // portable one; the log is kept for post-mortems.
-    const child = spawn('script', ['-qec', 'pi', '/dev/null'], {
-        cwd: root,
-        stdio: ['ignore', fs.openSync(ttyLog, 'w'), fs.openSync(ttyLog, 'a')],
-        detached: true
-    })
-    child.unref()
+    try {
+        tmux('kill-session', '-t', session)
+    } catch {
+        // no such session, which is the normal case
+    }
+    // A wide window: pi's TUI wraps to the terminal, and a narrow one turns the
+    // trail into unreadable reflowed fragments.
+    tmux('new-session', '-d', '-s', session, '-c', root, '-x', '200', '-y', '50', 'pi')
+
+    // pi has to finish booting before the prompt will accept a line — a send into
+    // a starting TUI is simply lost, with no error anywhere.
+    await new Promise(r => setTimeout(r, 25_000))
+    console.log('    pi up in tmux, typing /task-auto')
+    sendLine(session, `/task-auto ${feature}`)
 
     const hardDeadline = Date.now() + timeoutMin * 60_000
-    const port = await findRemotePort(Date.now() + 120_000)
-    console.log(`    pi up on ${port}, dispatching /task-auto`)
-    await sendLine(port, `/task-auto ${feature}`)
-
     const verdict = await waitForSettle(root, quietMin * 60_000, hardDeadline)
     console.log(`    ${verdict}`)
 
-    try {
-        process.kill(-child.pid!, 'SIGTERM')
-    } catch {
-        // already gone
-    }
+    // The pane is kept on a hard deadline so a wedged run can be read afterwards.
+    fs.writeFileSync(
+        path.join(root, '.pi-tty.log'),
+        tmux('capture-pane', '-p', '-S', '-20000', '-t', session),
+        'utf8'
+    )
+    if (!verdict.startsWith('HARD')) tmux('kill-session', '-t', session)
 }
 
 if (import.meta.main) await main()

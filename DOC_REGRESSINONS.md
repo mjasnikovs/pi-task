@@ -216,3 +216,101 @@ rs  PASS
 
 A verify that cannot fail is not a verify, and a scorer that fails a correct tree is
 just as useless. Both directions were checked before the instrument was trusted.
+
+## Pre-flight: all three ecosystems resolve to the exact pin
+
+Run against the seeded fixtures with the container's own pi-task 0.40.1, before any
+`/task-auto` run, with `XDG_CACHE_HOME` redirected so the real cache is untouched:
+
+```
+ok    zod          npm zod@4.5.4              chunks=8
+ok    hono         npm hono@4.13.7            chunks=8
+ok    axum         cargo axum@0.8.9           chunks=8
+ok    serde_json   cargo serde_json@1.0.151   chunks=8
+ok    aeson        hackage aeson@2.2.5.1      chunks=8
+ok    scotty       hackage scotty@0.30        chunks=8
+```
+
+Every one resolved to the manifest's pin, from three different version sources —
+`package.json`, `Cargo.lock`, and `dist-newstyle/cache/plan.json`.
+
+The container's cabal (3.16) files tarballs under `~/.cache/cabal/packages`, not
+`~/.cabal/packages`. `defaultCabalPackageDirs` already covers that XDG path, so
+hackage resolution worked with no configuration.
+
+## Retrieval recall 11/12 — and the one miss is BM25, not extraction
+
+Scoring the twelve truth symbols against the chunks each lookup returned:
+
+```
+HIT  zod safeParse · zod issues · hono Hono · hono json
+HIT  axum Router · axum Json · serde_json from_str · tokio TcpListener
+HIT  aeson eitherDecode · aeson FromJSON · scotty scotty
+MISS scotty ActionM
+```
+
+`ActionM` is **not** missing from the index. The scotty package has 312 chunks and
+**67 of them contain `ActionM`**, including the declaration itself:
+
+```
+Web/Scotty.hs | type ActionM = ActionT IO
+```
+
+So the Haskell surface extractor is fine. This is a **ranking** miss. Query sensitivity,
+same package, same index:
+
+| query | |
+|---|---|
+| `the handler monad` | MISS |
+| `handler type for a route` | MISS |
+| `ActionM handler type` | HIT |
+| `what monad do route handlers run in` | HIT |
+| `get route handler json response` | HIT |
+
+The pattern is length. Both misses are short queries built from common English words;
+the longer ones retrieve it even though none of them names the type either. With a
+top-8 limit and 312 chunks, a three-token query of high-frequency words cannot separate
+the 67 relevant chunks from the rest.
+
+**How much this matters is not yet settled.** Real worker queries in existing trails are
+long and symbol-heavy — `bun "sql tagged template literal, SQL class, import { sql } from…"` —
+which is the regime that retrieves correctly here. Whether a worker ever writes a query
+short enough to trip this is a question for the run's own logs, not for these synthetic
+ones. The audit scores the queries the run actually made, so it will answer it.
+
+## The remote-bridge path cannot start `/task-auto` — corrects the finding above
+
+The WebSocket dispatch **does** reach the handler, but the run dies immediately:
+
+```
+Error: TASK_AUTO_0001 stopped:
+  Run /remote in the terminal once to enable /task, /task-auto, and /new from remote.
+```
+
+`/task-auto` needs `ctx.newSession` to open a session per task. A line arriving over the
+bridge before any terminal command has run is handed the **shimmed** ctx built from an
+event ctx, and its `newSession` is a function that throws exactly that message
+(`remote/bridge.ts:411-415`). `b.currentCtx` is only populated by a command invoked from
+the terminal — `if (!isRemoteOrigin(ctx)) b.currentCtx = ctx`.
+
+So remote dispatch works for commands that need no new session, and cannot start a task
+run cold. The planning phase completed anyway and wrote a full plan before the failure,
+which is why this took a whole run to surface: the trail looks healthy right up to the end.
+
+**The fix is to drive the real terminal.** `tmux` is present in the container, so the
+driver starts pi in a tmux session and uses `send-keys`. That is also the path a user
+actually takes, which the bridge never was.
+
+## Six tasks from four obligations — the count control did not hold
+
+The plan came out at **six** tasks, one per extracted requirement:
+
+```
+6 grounded requirement(s): 6 task-mapped, 0 cross-cutting, 0 unowned
+```
+
+The floor was 3 and the model chose 6. So `granularityFloor` bounds the plan from below
+and nothing bounds it from above — confirming there is no cap. The spec has to shrink:
+the mapping observed here is roughly one task per extracted requirement, and four written
+obligations extract six. To land at four tasks, the feature needs about **three**
+written obligations.

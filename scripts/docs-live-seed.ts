@@ -5,11 +5,11 @@
  * its dependencies already installed. The pin is the instrument: a task that can
  * only be completed by reading the docs is the only task that measures the docs.
  *
- * FOUR REQUIREMENTS, DELIBERATELY. `granularityFloor` (task/decompose-granularity)
- * returns 0 below five ownable requirements and ceil(n/2) above, and
- * `planShapeIsHostsToAnswer` uses the same cut. There is no cap on task count —
- * MAX_TASKS was removed — so the spec is the only lever, and a fifth requirement
- * would put a floor of 3 under the plan and grow from there.
+ * THREE OBLIGATIONS, DELIBERATELY. There is no cap on task count — MAX_TASKS was
+ * removed — so the spec is the only lever, and the plan came out at roughly one
+ * task per EXTRACTED requirement. The extractor does not map one written clause to
+ * one requirement: a first draft of four obligations extracted six and planned six
+ * tasks. Three obligations is what lands near four.
  *
  *   bun scripts/docs-live-seed.ts <root>            # seed all three
  *   bun scripts/docs-live-seed.ts <root> ts rs      # seed a subset
@@ -25,32 +25,32 @@ import {PROJECTS, type ProjectSpec} from './docs-live-truth.js'
 /**
  * The feature text handed to `/task-auto`, one per project.
  *
- * Written as exactly four obligations. They are the same four everywhere —
- * validate, serve, JSON, test — so a per-language failure stands out against the
- * other two rather than being explained by a different task.
+ * The same three obligations everywhere — load and validate, serve both responses,
+ * test them — so a per-language failure stands out against the other two rather
+ * than being explained away by a different task.
  */
 const FEATURES: Record<ProjectSpec['id'], string> = {
     ts:
-        'Build a small config service in TypeScript. It must:'
-        + ' (1) read config.json from the project root and validate it with zod,'
-        + ' requiring a string name, a port number between 1 and 65535, and an admin email;'
-        + ' (2) serve GET /config on a hono app, returning the validated config as JSON;'
-        + ' (3) return HTTP 400 with the validation issues as JSON when config.json is invalid;'
-        + ' (4) cover all three of those with tests in test/config.test.ts that pass under `bun test`.',
+        'Build a config module in TypeScript. It must:'
+        + ' (1) export loadConfig() that reads config.json from the project root and validates it'
+        + ' with zod, requiring a string name, a port between 1 and 65535, and an admin email;'
+        + ' (2) export a hono app serving GET /config, which returns the config as JSON on success'
+        + ' and HTTP 400 with the zod validation issues when config.json is invalid;'
+        + ' (3) cover both responses in test/config.test.ts, passing under `bun test`.',
     rs:
-        'Build a small config service in Rust. It must:'
-        + ' (1) read config.json from the crate root and deserialize it with serde into a Config'
-        + ' struct holding a String name, a u16 port and a String admin_email;'
-        + ' (2) serve GET /config on an axum router, returning the config as JSON;'
-        + ' (3) return HTTP 400 with a JSON error body when config.json fails to parse;'
-        + ' (4) cover all three of those with tests in tests/config.rs that pass under `cargo test`.',
+        'Build a config module in Rust. It must:'
+        + ' (1) expose load_config() that reads config.json from the crate root and deserializes it'
+        + ' with serde into a Config struct holding a String name, a u16 port and a String admin_email;'
+        + ' (2) expose an axum Router serving GET /config, which returns the config as JSON on success'
+        + ' and HTTP 400 with a JSON error body when config.json fails to parse;'
+        + ' (3) cover both responses in tests/config.rs, passing under `cargo test`.',
     hs:
-        'Build a small config service in Haskell. It must:'
-        + ' (1) read config.json from the project root and decode it with aeson into a Config'
-        + ' record holding a Text name, an Int port and a Text adminEmail;'
-        + ' (2) serve GET /config with scotty, returning the config as JSON;'
-        + ' (3) return HTTP 400 with a JSON error body when config.json fails to decode;'
-        + ' (4) cover all three of those with tests in test/Spec.hs that pass under `cabal test`.'
+        'Build a config module in Haskell. It must:'
+        + ' (1) expose loadConfig that reads config.json from the project root and decodes it with'
+        + ' aeson into a Config record holding a Text name, an Int port and a Text adminEmail;'
+        + ' (2) expose a scotty application serving GET /config, which returns the config as JSON on'
+        + ' success and HTTP 400 with a JSON error body when config.json fails to decode;'
+        + ' (3) cover both responses in test/Spec.hs, passing under `cabal test`.'
 }
 
 /** A valid config every project reads, so the happy path needs no invention. */
