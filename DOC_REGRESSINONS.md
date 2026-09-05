@@ -689,3 +689,78 @@ Also worth recording for the task-count question: the Rust spec extracted **4** 
 requirements against TypeScript's 7, from a feature of the same shape and length. No
 granularity floor line was emitted at all, which means it was 0. Requirement extraction is
 not stable across ecosystems for the same task.
+
+---
+
+# 4. The docs tool answers about crates the project cannot use
+
+**This one reached the artifact.** The Rust run is a HARD FAIL, and the docs tool is in the
+causal chain.
+
+The sequence, entirely from the run's own records:
+
+1. The model asked for the import path of `ServiceExt`, needed to call `.oneshot()` on a
+   `Router` in a test:
+
+   ```
+   [5] tower  unclear=true   "ServiceExt oneshot method for testing axum Router:
+                              full import path (tower::util::ServiceExt or to…"
+   ```
+
+   Abstained.
+
+2. It asked again, more narrowly, and got a correct and precise answer:
+
+   ```
+   [7] tower  unclear=false  "the trait `ServiceExt<Request>` is defined in
+                              `src/util/mod.rs`, so its path is `tower::util::ServiceExt`.
+                              The `oneshot` method signature is `fn oneshot(…`"
+   ```
+
+3. It wrote exactly that:
+
+   ```rust
+   tests/config.rs:6    use tower::util::ServiceExt;
+   ```
+
+4. The crate does not compile:
+
+   ```
+   error[E0433]: cannot find module or crate `tower` in this scope
+    --> tests/config.rs:6:5
+   error[E0599]: no method named `oneshot` found for struct `Router<S>`
+       help: trait `ServiceExt` which provides `oneshot` is implemented but not in scope;
+             perhaps you want to import it
+             1 + use tower::util::ServiceExt;
+   ```
+
+**Why.** `tower 0.5.3` is in `Cargo.lock` — pulled in transitively by axum — but it is not
+in `[dependencies]`:
+
+```toml
+[dependencies]
+axum = "0.8.9"
+tokio = { version = "1.53.1", features = ["full"] }
+serde_json = "1.0.151"
+serde = { version = "1", features = ["derive"] }
+```
+
+`resolveCrate` finds a version through `lockedVersion`, which reads the lock file — and a
+lock file is the whole transitive closure, not the crate's own dependency list. So the tool
+resolved `tower`, indexed it, and answered about it in full confidence. Nothing in the
+answer says the crate cannot `use` it.
+
+The compiler's own diagnostic is the tell: it knows the trait *is implemented* for `Router`
+and suggests the exact import the model already wrote. The code is right about the API and
+wrong about the manifest, and the docs answer is what made that combination look safe.
+
+**This is not cargo-specific.** `resolvePackage` walks `node_modules`, which likewise holds
+the entire transitive closure. An npm project can ask about — and get a confident answer
+about — a package that is present on disk only because something else depends on it, and
+that it must not import.
+
+**The fix has a natural shape.** Each ecosystem profile already has `declaredDeps(cwd)`,
+distinct from what `resolve` finds. A package resolvable but not declared is exactly the
+case that needs a sentence in the answer: *present transitively, not a declared dependency
+— add it before importing.* The information is already in hand; it is simply not consulted
+on this path. The existing version banner is the obvious place to put it.
