@@ -774,3 +774,73 @@ distinct from what `resolve` finds. A package resolvable but not declared is exa
 case that needs a sentence in the answer: *present transitively, not a declared dependency
 — add it before importing.* The information is already in hand; it is simply not consulted
 on this path. The existing version banner is the obvious place to put it.
+
+---
+
+# 5. Backticked filenames are installed from npm as if they were packages
+
+The docs cache after the three runs contains packages nobody asked for. Every one was
+indexed **during** these runs — the timestamps place them inside the TypeScript and
+Haskell runs:
+
+```
+07:55:39  npm  tsconfig.json  1.0.11
+08:01:44  npm  lib            5.1.0
+08:10:15  npm  name           0.0.2
+08:10:15  npm  port           0.8.1
+08:10:16  npm  config.json    0.0.4
+08:18:56  npm  config.ts      1.0.0
+08:29:48  npm  fetch          1.1.0
+08:47:44  npm  app.ts         0.1.0
+08:52:34  npm  app            0.1.0
+10:20:15  hackage  cabal      0.0.0.0
+```
+
+`config.ts`, `app.ts`, `tsconfig.json` and `config.json` are **files in the project**.
+`name`, `port`, `lib` and `fetch` are **field and identifier names from the spec**. Each one
+is also a real, unrelated package on the public registry, and each was downloaded and
+indexed as documentation.
+
+**The mechanism** is one regex in `src/task/enrichment.ts`:
+
+```ts
+const ENRICH_PKG_RE = /`((?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*)`/g
+```
+
+Anything in backticks matching a lowercase identifier — dots included — is a package name.
+Reproduced directly against a spec of the shape these runs produce:
+
+```
+extracted as npm package names:
+  config.ts, config.json, app.ts, tsconfig.json, name, port, fetch, lib
+```
+
+`ENRICH_DENYLIST` exists but holds shell commands — `bun`, `node`, `npm`, `git`, `ls`,
+`cat`, `grep`. Nothing filters filenames, and nothing filters ordinary English nouns.
+
+**Why it left no trace in either sink.** The enrichment path calls `docsRaw` directly from
+`task/external-context.ts`; `logDocsAnswer` is only called by the tool wrapper in
+`pi-worker-docs.ts`. So none of these ten appear in the answer log, and none appear in the
+trail. They are visible only in the cache's own `packages` table. Ten registry installs, no
+record anywhere a run's audit would look.
+
+**Three separate costs.**
+
+1. *Wasted work.* Ten network installs and ten indexing passes per run, for nothing.
+2. *Wrong content.* A real `config.ts@1.0.0` by an unrelated author is now indexed as this
+   project's `config.ts`. Anything that later retrieves under that name gets a stranger's
+   code as documentation.
+3. *An install surface driven by model output.* `npm install --ignore-scripts` blocks
+   lifecycle execution, which is the right mitigation and is already in place. What remains
+   is that the *choice of package to fetch* comes from a string the model wrote, and
+   filenames like `config.ts` and `app.ts` are highly predictable across projects. Names a
+   spec is likely to backtick are worth treating as untrusted input, not as registry
+   coordinates.
+
+**The fix is small.** A name containing a dot followed by a known source extension is a
+file, not a package. A name matching a path in the project tree is a file. Both checks are
+cheap and local, and either alone removes eight of the ten above. The remaining two —
+`name`, `port` — are bare English nouns, which argues for the inverse rule this codebase
+already uses elsewhere: enrich only names that appear in the project's **declared**
+dependencies, which `declaredDeps(cwd)` already provides. That single change fixes this
+defect and defect 4 together.
