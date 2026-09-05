@@ -998,3 +998,167 @@ be read as unmeasured, not as clean.
   Stripping English stopwords was tested and **refuted** — it moves the failure to
   a different wrong file rather than fixing it. This is what cost hs seven
   lookups.
+
+
+---
+
+---
+
+# Second re-run, 2026-09-06, on 0.40.3
+
+`live-docs-rerun2-2026-09-06/` holds the recorded answers, builds and audit.
+Container `mx5-n`, `@mjasnikovs/pi-task@0.40.3` **installed from npm and checked by
+grepping the dist for `acceptedEnd`, `chunkerFingerprint` and `retrievedText`** —
+the previous session hand-copied a build, so the version string alone proves
+nothing. Same model as the last run, Qwen3.8-27B on llama.cpp `b10734-d5d993a09`.
+
+The cache was **left in place**. That is the check: the chunker changed, so the
+freshness hash must re-index every package on first touch.
+
+| | ts (npm) | rs (cargo) | hs (hackage) |
+|---|---|---|---|
+| verdict | PASS | PASS | PASS |
+| abstained | 4/17, 24% (was 7%) | 4/10, 40% (was 20%) | 5/6, 83% (was 80%) |
+| build/test | green | green | green |
+| pins intact | 2/2 | 3/3 | 2/2 |
+| 0 invented symbols | 10/13 | 5/6 | 1/1 |
+
+## Defects 7 and 8 confirmed in a live run
+
+Every package re-indexed on first touch, to the byte the offline measurement
+predicted, and `serde` did it mid-run when a real lookup reached it:
+
+| | before | after |
+|---|---|---|
+| axum | 475 chunks, 27 dupes | 381, **0** |
+| serde_json | 339, 24 | 288, **0** |
+| serde | 448, 98 | 297, **0** |
+| zod, hono | unchanged | 0 dupes |
+
+`aeson` re-indexed and stayed at 1326/55 — its duplicates are the hackage surface
+extractor, already named as open, not the chunker.
+
+## The `tower` case is finally exercised
+
+Last run this fix went untested because nothing reached for `tower`. This run did,
+and the warning fired, ahead of the answer:
+
+```
+[DEPENDENCY] "tower" is present in this project but is not a declared dependency in
+Cargo.toml — it resolves only because something else pulled it in.
+```
+
+`tower` is in `Cargo.lock` and not in `Cargo.toml`. Correct.
+
+## Defect 10. The fidelity scorer failed the correct answer — FIXED
+
+`retrievedText` was populated on all 33 records, so the row printed a number for the
+first time. It printed **13/20**, and every one of the 17 flags was false.
+
+Sixteen were a symbol the child named **in order to deny it**. These runs ask about
+symbols that do not exist, so the best available answer is a refutation, and the
+scorer read each refutation as three fabrications:
+
+> The content contradicts several claimed signatures: `eitherDecode` is actually
+> `LBS.ByteString -> Either String a` (not `DecodeError`) ... neither
+> `eitherDecodeFile` nor a `prettyShow`/`DecodeError`/`failureMsg` type appears.
+
+scored `DecodeError eitherDecodeFile prettyShow failureMsg`. The seventeenth was
+`POST'`: `IDENTIFIER_RE` admits a trailing `'` so Haskell primes survive whole, and
+it swallowed the closing quote of `{ method: 'POST' }`.
+
+The fix skips a sentence that denies, and accepts a prime whose stem the corpus knows.
+
+**Excusing every symbol the QUESTION supplied was written first, measured, and
+rejected.** It clears all 17 — and it also clears `Use ``decodeFile`` to read a
+file`, because these questions name the fabrication. That answer is the entire
+defect, so a rule that hides it is worse than the noise it removes. Both rules are in
+`test/scripts/docs-live-audit.test.ts`; the guard test asserts a confirmed
+`decodeFile` still flags.
+
+After the fix, 16/20 clean and four flags left, all benign and all pre-existing:
+`false` from `{ success: false, error }`, `fields`/`are` and `assert` from prose
+inside a code span, and `adminEmail`, which the child derived correctly from
+`#[serde(rename_all = "camelCase")]` on `admin_email`.
+
+**Zero real fabrications in 20 scored answers.** That is the first time the number
+has meant anything.
+
+## Defect 11. An English question loses the declaration the bare symbol wins — OPEN
+
+`from_str` is the cargo ground-truth symbol, and both re-runs answered that its
+signature was not in the retrieved content. It is indexed. The declaration chunk is
+91 bytes, one line, in `src/de.rs`:
+
+```
+pub fn from_str<'a, T>(s: &'a str) -> Result<T> where T: de::Deserialize<'a>,;
+```
+
+Same corpus, same package, two queries:
+
+```
+rank of the declaration: NOT RETRIEVED of 6   <- "What is the exact signature of from_str? What error type does it return?"
+rank of the declaration: 1 of 17              <- "from_str"
+```
+
+The 1159-byte `from_slice` chunk from the same file ranks 3rd on the prose query,
+because its doc comments match `signature`, `error`, `type` and `return`. BM25 gives
+the English half of the question as much say as the symbol, and the English half
+matches the chunks that talk *about* the API rather than the one that *is* it.
+
+This is the same class as the open `Data.Aeson` note, but sharper and measurable, and
+it costs a ground-truth symbol on the ecosystem where the model has fallback
+knowledge to hide it. Stopword stripping is already refuted; weighting symbol-shaped
+tokens above English ones is untested. **Not fixed — measured only.**
+
+## Defect 12. A facade package indexes to nothing — OPEN
+
+hs abstained three times on `hspec`, every time with the same 1915 characters
+retrieved, because the entire `hspec` index is 14 chunks:
+
+```
+906  src/Test/Hspec.hs         module Test.Hspec ( Spec , SpecWith , Example , Arg ...
+ 90  src/Test/Hspec/Runner.hs  module Test.Hspec.Runner (module Test.Hspec.Core.Runner)
+```
+
+`it`, `describe` and `shouldBe` are in the corpus as bare names in an export list.
+Every signature is in `hspec-core`, a transitive dependency the indexer never opens.
+The tool returned everything it had and the child correctly abstained.
+
+Distinct from the open "key symbol absent from the corpus": here the symbol is
+present, with no signature attached. Facade packages are the norm on hackage.
+
+## Defect 13. No `.gitignore` in the seeded projects — OPEN, fixture
+
+`autoCommit` committed the build directories, because `docs-live-seed.ts` writes each
+manifest by hand and never writes a `.gitignore`. Tracked at HEAD mid-run: **1397**
+files under `node_modules/` in ts, `target/` in rs, 8 under `dist-newstyle/` in hs.
+
+Every build a child runs then dirties graded state. rs TASK_0003 spent a whole turn
+recovering — from its own transcript:
+
+> The verify was discarded by the git-state guard because my previous session (and
+> the verify child's own cargo build) mutated tracked target/ files ... The repo
+> unusually tracks target/ in git, so any build touched "graded state."
+
+Costs run time and pollutes the diff. Not a docs-tool defect.
+
+## The three checks that came back clean
+
+- **No filenames in the cache.** Fourteen packages indexed, every one real.
+  `tower` is there because a lookup legitimately asked about it.
+- **Pins.** 7/7 across three ecosystems, from three version sources.
+- **No stale majors.** Zero marker hits in any tree; all three build and test green.
+
+## What did NOT improve
+
+The chunker fix is proven in the index and **not** visible in the answers. serde_json
+lost 51 duplicate chunks and its `from_str` answer is the same non-answer as last run
+— the miss was never a duplicate crowding the budget, it was defect 11. Freeing slots
+does not help when the ranking never wanted the right chunk.
+
+`scotty` was indexed and never asked about, for the second run running. The hackage
+abstention rate is again a fact about the questions, not the tool: 3 of 6 hs lookups
+were `hspec` (defect 12) and 2 of the remaining 3 asked for `decodeFile`,
+`DecodeError` and `prettyShow`, none of which aeson 2 has. The one question that
+named a real symbol, `eitherDecode`, was answered.

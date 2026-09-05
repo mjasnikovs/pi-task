@@ -20,3 +20,36 @@ test('the retrieved chunks catch it', () => {
 test('a symbol the retrieved chunks DO carry stays clean', () => {
     expect(inventedSymbols('Use `decodeFileStrict` here.', RETRIEVED)).toEqual([])
 })
+
+// From the 2026-09-05 second re-run: 17 flags, and every one a false positive. These
+// runs ask about symbols that do not exist, so the child's best answer is the one that
+// names an invented symbol in order to deny it — and that scored as fabricating it.
+const REFUTING = {
+    answer:
+        'The content contradicts several claimed signatures: `eitherDecode` is '
+        + 'actually `LBS.ByteString -> Either String a` (not `DecodeError`). '
+        + 'Neither `eitherDecodeFile` nor a `prettyShow`/`failureMsg` type appears.',
+    // Verbatim from the run's own retrievedText.
+    retrieved:
+        '-- src/Data/Aeson.hs\n'
+        + 'eitherDecode :: (A.FromJSON a) => LBS.ByteString -> Either String a'
+}
+
+test('a symbol named in order to deny it was not invented', () => {
+    expect(inventedSymbols(REFUTING.answer, REFUTING.retrieved)).toEqual([])
+})
+
+// The reason the fix scopes to the denying sentence rather than excusing every symbol
+// the question supplied: these questions NAME the fabrication, so trusting the query
+// would clear the confirmation too, which is the whole defect.
+test('the same symbol CONFIRMED is still invented', () => {
+    expect(inventedSymbols('Use `decodeFile` to read a file.', REFUTING.retrieved)).toContain(
+        'decodeFile'
+    )
+})
+
+// `{ method: 'POST' }` inside a code span. The identifier pattern admits a trailing `'`
+// so Haskell primes survive whole, and here it swallowed the closing quote.
+test('a quote swallowed by the prime rule is not an invented symbol', () => {
+    expect(inventedSymbols("Pass `{ method: 'POST' }`.", 'method?: POST | GET')).toEqual([])
+})

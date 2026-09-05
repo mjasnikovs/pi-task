@@ -19,22 +19,41 @@ import {PROJECTS, TRUTH, STALE, type ProjectSpec} from './docs-live-truth.js'
 
 const IDENTIFIER_RE = /[A-Za-z_][A-Za-z0-9_']{2,}/g
 const CODE_SPAN_RE = /`([^`]+)`/g
+const SENTENCE_SPLIT_RE = /(?<=[.;])\s+/
+const DENIAL_RE = /\b(not|no|neither|nor|never|cannot|absent|missing|unconfirmed|contradicts)\b|n't/i
 
 /**
- * Identifiers the answer presents AS CODE that occur nowhere in what the tool
- * returned.
+ * Identifiers the answer ASSERTS as code that occur nowhere in what the tool
+ * retrieved.
  *
  * Only backticked spans count. Scanning the prose measures English instead —
  * "Use", "calling" and "which" are absent from every corpus and none of them is
  * a fabricated API. A hallucinated symbol is one written as code, which is the
  * only form a reader would copy.
+ *
+ * A denying sentence asserts nothing, so its symbols are skipped. These runs ask
+ * about symbols that do not exist, which makes "neither `eitherDecodeFile` nor a
+ * `prettyShow` type appears" the best answer available — and it scored as three
+ * fabrications. All 17 flags in the 2026-09-05 re-run were false, 16 of them this.
+ *
+ * Scoping to the sentence, rather than excusing every symbol the QUESTION supplied,
+ * is deliberate: these questions name the fabrication, so trusting the query would
+ * clear `Use ``decodeFile`` to read a file` as well, and that answer is the defect.
  */
 export function inventedSymbols(answer: string, corpus: string): string[] {
     const known = new Set(corpus.match(IDENTIFIER_RE) ?? [])
     const out = new Set<string>()
-    for (const span of answer.matchAll(CODE_SPAN_RE)) {
-        for (const token of span[1].match(IDENTIFIER_RE) ?? []) {
-            if (!known.has(token)) out.add(token)
+    for (const sentence of answer.split(SENTENCE_SPLIT_RE)) {
+        if (DENIAL_RE.test(sentence)) continue
+        for (const span of sentence.matchAll(CODE_SPAN_RE)) {
+            for (const token of span[1].match(IDENTIFIER_RE) ?? []) {
+                // IDENTIFIER_RE admits a trailing `'` so Haskell primes survive whole,
+                // and it swallows the closing quote of a string literal too: `'POST'`
+                // arrives as `POST'`. A prime over a stem the corpus knows is that.
+                if (known.has(token)) continue
+                if (token.endsWith("'") && known.has(token.slice(0, -1))) continue
+                out.add(token)
+            }
         }
     }
     return [...out]
