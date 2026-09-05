@@ -200,6 +200,10 @@ function auditProject(runRoot: string, spec: ProjectSpec, build: boolean): Proje
     for (const r of records) {
         const corpus = r.toolText ?? ''
         if (corpus.length === 0) continue
+        // An abstention makes no claim, so it can neither invent a symbol nor be
+        // scored for not inventing one. Counting it clean inflates the rate with
+        // answers that never risked anything.
+        if (r.unclear) continue
         rep.fidelity.of++
         const inv = inventedSymbols(r.answer, corpus)
         if (inv.length === 0) rep.fidelity.clean++
