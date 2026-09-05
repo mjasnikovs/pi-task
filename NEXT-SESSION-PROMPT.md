@@ -11,7 +11,8 @@ re-run and the three defects it found. Do not re-derive any of it.
 
 ## What changed since the last run
 
-Commit `b15fdf2` on `docs-live-test` — three defects found by the last live run, all
+Published as `@mjasnikovs/pi-task@0.40.3` (branch `docs-live-test`, commit `b15fdf2`,
+tag `v0.40.3`) — three defects found by the last live run, all
 fixed, `bun run test` green at 4303:
 
 - `splitAtMatches` cut at a match starting inside the previous one, tearing a declaration
@@ -25,26 +26,25 @@ fixed, `bun run test` green at 4303:
 sentence was true of the last session, and it stayed true because a fix verified on
 recorded data is not a fix verified in a run.
 
-## Rule: the version string is a LIE this time
-
-The last session copied `dist/` into the container by hand rather than publishing. The
-package still reports `0.40.2`, which is also the version the three defects were found in.
-Checking the version proves nothing. Check the markers:
+## Rule: the container must run the fixed build
 
 ```bash
 docker start mx5-n
+docker exec mx5-n bash -lc 'cd ~/.pi/agent/npm && npm i @mjasnikovs/pi-task@0.40.3 --no-audit --no-fund --loglevel=error
+  node -p "require(process.env.HOME+\"/.pi/agent/npm/node_modules/@mjasnikovs/pi-task/package.json\").version"'
+```
+
+The install is not optional even if the version already reads `0.40.3`: the last session
+copied `dist/` in by hand, so the tree on disk may be a build nobody can name. Confirm the
+three fixes are in what npm just put there:
+
+```bash
 docker exec mx5-n bash -lc 'D=$HOME/.pi/agent/npm/node_modules/@mjasnikovs/pi-task/dist/workers
   for m in acceptedEnd chunkerFingerprint retrievedText; do
     printf "%-20s %s\n" $m "$(grep -rl $m $D/ | head -1 || echo MISSING)"; done'
 ```
 
-Three hits, or rebuild and re-copy from the tree first:
-
-```bash
-cd /home/edgars/.pi/agent/extensions/pi-task && bun run build
-D=/home/agent/.pi/agent/npm/node_modules/@mjasnikovs/pi-task
-docker exec mx5-n bash -lc "rm -rf $D/dist" && docker cp dist mx5-n:$D/dist
-```
+Three hits, or stop.
 
 ## Do NOT move the cache aside
 
