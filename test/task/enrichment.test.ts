@@ -171,3 +171,50 @@ describe('extractEnrichTargets — services', () => {
         expect(out.services.map(s => s.name)).toEqual(['A', 'B', 'C'])
     })
 })
+
+describe('extractEnrichTargets — declared-dependency gate', () => {
+    // Live run 2026-09-05 installed and indexed ten packages nobody asked for:
+    // config.ts, app.ts, tsconfig.json, config.json, name, port, lib, fetch. Each
+    // is a real, unrelated package on the public registry. See DOC_REGRESSINONS.md
+    // section 5 for the cache timestamps that place them inside the runs.
+    const SPEC = [
+        'GOAL',
+        '  Build a config module in TypeScript.',
+        '',
+        'REQUIREMENTS',
+        '  - `config.ts` exports loadConfig() reading `config.json` from the project root',
+        '  - validate with `zod`: a string `name`, a `port` between 1 and 65535, an admin email',
+        '  - `app.ts` exports a `hono` app serving GET /config',
+        '  - the handler must not use global `fetch`',
+        '  - `tsconfig.json` sets `lib` to ES2022',
+        ''
+    ].join('\n')
+
+    const FILENAMES_AND_NOUNS = [
+        'config.ts',
+        'app.ts',
+        'tsconfig.json',
+        'config.json',
+        'name',
+        'port',
+        'lib',
+        'fetch'
+    ]
+
+    test('enriches only names the project actually declares', () => {
+        const out = extractEnrichTargets(SPEC, new Set(['zod', 'hono']))
+        expect(out.versionPackages).toEqual(['zod', 'hono'])
+        for (const bogus of FILENAMES_AND_NOUNS) {
+            expect(out.versionPackages).not.toContain(bogus)
+            expect(out.packages).not.toContain(bogus)
+        }
+    })
+
+    test('an empty declared set enriches nothing', () => {
+        expect(extractEnrichTargets(SPEC, new Set()).versionPackages).toEqual([])
+    })
+
+    test('no declared set is the unfiltered parse — an unreadable manifest is not "declares nothing"', () => {
+        expect(extractEnrichTargets(SPEC).versionPackages).toContain('config.ts')
+    })
+})

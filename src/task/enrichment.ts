@@ -6,6 +6,9 @@
  * denylisted shell names are dropped, a URL's trailing sentence punctuation is
  * stripped, docs targets stop at ENRICH_CAP while version targets continue to
  * ENRICH_VERSION_CAP, and the version list is a strict superset of the docs list.
+ *
+ * Package extraction is additionally gated on the caller's declared dependencies;
+ * see the `declared` parameter on {@link extractEnrichTargets}.
  */
 
 const ENRICH_PKG_RE = /`((?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*)`/g
@@ -75,7 +78,19 @@ function parseServices(text: string): Array<{name: string; query: string}> {
     return out
 }
 
-export function extractEnrichTargets(text: string): {
+export function extractEnrichTargets(
+    text: string,
+    /**
+     * The project's declared dependencies. A backticked name outside this set is
+     * not enriched: the model backticks filenames (`config.ts`, `tsconfig.json`)
+     * and field names (`name`, `port`) far more often than package names, and each
+     * of those is also a real, unrelated package on the public registry — so the
+     * permissive read fetched and indexed a stranger's code under the project's
+     * own filename. Omit when the manifest is unreadable, which is not the same
+     * fact as "declares nothing".
+     */
+    declared?: ReadonlySet<string>
+): {
     /** Packages that get a (heavy) docs fetch — capped at ENRICH_CAP. */
     packages: string[]
     /**
@@ -92,6 +107,7 @@ export function extractEnrichTargets(text: string): {
     for (const m of text.matchAll(ENRICH_PKG_RE)) {
         const t = m[1]
         if (ENRICH_DENYLIST.has(t) || seen.has(t)) continue
+        if (declared && !declared.has(t)) continue
         seen.add(t)
         pkgs.push(t)
         if (pkgs.length >= ENRICH_VERSION_CAP) break

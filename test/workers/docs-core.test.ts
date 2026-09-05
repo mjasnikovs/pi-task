@@ -205,8 +205,10 @@ describe('buildVersionBanner', () => {
 
     const NONE = makeProjectDir({dependencies: {other: '^1'}})
 
-    test('returns empty string when there was no auto-install', () => {
-        expect(buildVersionBanner(undefined, 'left-pad', '1.3.0', NONE)).toBe('')
+    test('no auto-install and a declared package says nothing', () => {
+        const dir = makeProjectDir({dependencies: {'left-pad': '^1'}})
+        expect(buildVersionBanner(undefined, 'left-pad', '1.3.0', dir)).toBe('')
+        fs.rmSync(dir, {recursive: true, force: true})
     })
 
     test('declared-range banner names the range + version, no verify warning', () => {
@@ -609,5 +611,88 @@ describe('docsFocused', () => {
             })
         ).rejects.toThrow()
         cache.close()
+    })
+})
+
+describe('buildVersionBanner — resolvable but not declared', () => {
+    // Live run 2026-09-05, the Rust HARD FAIL (DOC_REGRESSINONS.md section 4).
+    // `tower 0.5.3` is in Cargo.lock, pulled in transitively by axum, and absent
+    // from [dependencies]. The tool answered `tower::util::ServiceExt` in full
+    // confidence, the model wrote that import, and the crate did not compile:
+    //   error[E0433]: cannot find module or crate `tower` in this scope
+    // Measured on npm in the same container: 23 declared deps, 106 undeclared
+    // packages on disk, three of three answered with no warning.
+    function cargoProject(): string {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'docs-undeclared-'))
+        fs.writeFileSync(
+            path.join(dir, 'Cargo.toml'),
+            [
+                '[package]',
+                'name = "docs-live-rs"',
+                'version = "0.1.0"',
+                '',
+                '[dependencies]',
+                'axum = "0.8.9"',
+                'tokio = { version = "1.53.1", features = ["full"] }',
+                'serde_json = "1.0.151"',
+                'serde = { version = "1", features = ["derive"] }',
+                ''
+            ].join('\n'),
+            'utf8'
+        )
+        fs.writeFileSync(
+            path.join(dir, 'Cargo.lock'),
+            [
+                '[[package]]',
+                'name = "axum"',
+                'version = "0.8.9"',
+                '',
+                '[[package]]',
+                'name = "tower"',
+                'version = "0.5.3"',
+                ''
+            ].join('\n'),
+            'utf8'
+        )
+        return dir
+    }
+
+    test('cargo: a crate only in Cargo.lock is named as not declared', () => {
+        const dir = cargoProject()
+        const b = buildVersionBanner(undefined, 'tower', '0.5.3', dir, ECOSYSTEMS.cargo)
+        expect(b).toMatch(/not a declared dependency/i)
+        expect(b).toContain('tower')
+        expect(b).toContain('Cargo.toml')
+        fs.rmSync(dir, {recursive: true, force: true})
+    })
+
+    test('cargo: a declared crate gets no such warning', () => {
+        const dir = cargoProject()
+        const b = buildVersionBanner(undefined, 'axum', '0.8.9', dir, ECOSYSTEMS.cargo)
+        expect(b).not.toMatch(/not a declared dependency/i)
+        fs.rmSync(dir, {recursive: true, force: true})
+    })
+
+    test('npm: a transitive package on disk is named as not declared', () => {
+        const dir = makeProjectDir({dependencies: {debug: '^4.0.0'}})
+        const b = buildVersionBanner(undefined, 'ms', '2.1.0', dir)
+        expect(b).toMatch(/not a declared dependency/i)
+        expect(b).toContain('ms')
+        expect(b).toContain('package.json')
+        fs.rmSync(dir, {recursive: true, force: true})
+    })
+
+    test('npm: a declared package gets no such warning', () => {
+        const dir = makeProjectDir({dependencies: {debug: '^4.0.0'}})
+        expect(buildVersionBanner(undefined, 'debug', '4.1.13', dir)).not.toMatch(
+            /not a declared dependency/i
+        )
+        fs.rmSync(dir, {recursive: true, force: true})
+    })
+
+    test('no manifest at all says nothing — "cannot tell" is not "not declared"', () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'docs-nomanifest-'))
+        expect(buildVersionBanner(undefined, 'ms', '2.1.0', dir)).toBe('')
+        fs.rmSync(dir, {recursive: true, force: true})
     })
 })

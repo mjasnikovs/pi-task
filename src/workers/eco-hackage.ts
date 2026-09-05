@@ -543,3 +543,44 @@ export function hackageProjectName(cwd: string): string | null {
     const match = /^\s*name\s*:\s*(\S+)/m.exec(safeRead(path.join(cwd, cabal)) ?? '')
     return match ? match[1] : null
 }
+
+/**
+ * The package names the project's `.cabal` file declares in `build-depends`,
+ * across every stanza.
+ *
+ * NOT {@link resolvedVersions}: that reads the cabal install plan, which is the
+ * whole transitive closure, so it cannot say whether a module may be imported.
+ * Undefined when there is no readable `.cabal` file.
+ */
+export function manifestPackages(cwd: string): Set<string> | undefined {
+    let entries: string[]
+    try {
+        entries = fs.readdirSync(cwd)
+    } catch {
+        return undefined
+    }
+    const cabal = entries.find(e => e.endsWith('.cabal'))
+    if (!cabal) return undefined
+    const text = safeRead(path.join(cwd, cabal))
+    if (text === null) return undefined
+    const out = new Set<string>()
+    let inDepends = false
+    for (const raw of text.split('\n')) {
+        const line = raw.replace(/--.*$/, '')
+        const start = /^\s*build-depends\s*:(.*)$/i.exec(line)
+        const body = start ? start[1] : line
+        if (start) inDepends = true
+        else if (!inDepends) continue
+        // A continuation is indented; a new field at the stanza's own indent ends
+        // the list. Both `,`-leading and `,`-trailing layouts are in the wild.
+        else if (/^\s*[A-Za-z-]+\s*:/.test(line) || line.trim() === '') {
+            inDepends = false
+            continue
+        }
+        for (const part of body.split(',')) {
+            const name = /^\s*([A-Za-z0-9][A-Za-z0-9_-]*)/.exec(part)
+            if (name) out.add(name[1])
+        }
+    }
+    return out
+}

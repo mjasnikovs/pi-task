@@ -41,7 +41,9 @@ interface IngestResult {
  * question actually being asked: would re-reading produce the same chunks?
  *
  * The CHUNKER counts too, for the same reason: the rows are chunks, not surface,
- * so a fix to where a declaration is cut leaves stale rows behind on its own.
+ * so a fix to where a declaration is cut leaves stale rows behind on its own. So
+ * does WHICH FILES are read: dropping a package's duplicate `.d.cts` twins
+ * changes the rows without changing a byte on disk.
  *
  * It is not total. An extractor change that alters only files BELOW the entry
  * goes unnoticed; deleting the cache is still the escape hatch for that.
@@ -51,6 +53,16 @@ function computeContentHash(pkg: ResolvedPackage, profile: EcosystemProfile): st
     hash.update(Buffer.from(`${pkg.name}@${pkg.version}`, 'utf8'))
     hash.update(ZERO_SEP)
     hash.update(Buffer.from(`${profile.declSplitRe.source}\u0000${profile.commentPrefix}`, 'utf8'))
+    hash.update(ZERO_SEP)
+    // Source text, the same trick as `declSplitRe.source`: the fingerprint moves
+    // whenever the selection rule does, with nothing to remember to bump.
+    hash.update(
+        Buffer.from(
+            `${String(profile.isSurfaceFile)}\u0000${String(dropParallelDeclarations)}`
+                + `\u0000${String(dropDeadMajors)}`,
+            'utf8'
+        )
+    )
     hash.update(ZERO_SEP)
     if (pkg.entry && fs.existsSync(pkg.entry)) {
         try {
@@ -101,9 +113,59 @@ function walkSurface(root: string, profile: EcosystemProfile): string[] {
     return out.sort()
 }
 
+/**
+ * Drop a `.d.cts` / `.d.mts` that sits beside a `.d.ts` of the same name.
+ *
+ * Modern npm packages ship parallel declarations for ESM and CJS: the same API
+ * written twice. zod 4.5.4 indexed to 2565 chunks over 1215 distinct bodies,
+ * 1280 of them from `.d.cts`; hono, which ships none, had 704 distinct of 708.
+ * The cost is the eight-chunk retrieval budget — half of it can go to text the
+ * reader already has.
+ *
+ * The sibling test, not a blanket ban on the extensions: a package shipping only
+ * `.d.cts` still has to be readable, and all 123 of zod's had a `.d.ts` twin.
+ */
+function dropParallelDeclarations(files: string[]): string[] {
+    const esm = new Set(
+        files.filter(f => f.endsWith('.d.ts')).map(f => f.slice(0, -'.d.ts'.length))
+    )
+    return files.filter(f => {
+        const base = /\.d\.[cm]ts$/.exec(f) ? f.slice(0, -'.d.cts'.length) : null
+        return base === null || !esm.has(base)
+    })
+}
+
+/**
+ * Drop a top-level `vN/` directory holding a major the package is no longer on.
+ *
+ * zod@4.5.4 ships `v3/` for back-compat, and 414 of its 2565 chunks came from
+ * it. Nothing downstream can separate them: same identifiers, same package, same
+ * version banner, and the file path is not a ranking signal. An answer went out
+ * under `Per zod@4.5.4:` carrying v3's `email(message?): ZodString` — wrong
+ * parameter, wrong return, and silent about the `@deprecated` line sitting
+ * directly above the real declaration.
+ *
+ * Only a MISMATCHING major goes. `v4/` under 4.5.4 is the current API and is
+ * most of the package; a package whose only content lives under `v1/` keeps it.
+ */
+function dropDeadMajors(files: string[], root: string, version: string): string[] {
+    const major = /^(\d+)\./.exec(version)?.[1]
+    if (major === undefined) return files
+    const kept = files.filter(abs => {
+        const top = path.relative(root, abs).replace(/\\/g, '/').split('/')[0]
+        const dir = /^v(\d+)$/.exec(top)
+        return dir === null || dir[1] === major
+    })
+    // A package whose whole surface lives under a `vN/` that does not match its
+    // own version is not shipping a dead major — it is shipping its API there.
+    return kept.length > 0 ? kept : files
+}
+
 function collectFiles(pkg: ResolvedPackage, profile: EcosystemProfile): CollectedFiles {
+    const walked = walkSurface(pkg.root, profile)
+    const surface = dropDeadMajors(walked, pkg.root, pkg.version)
     return {
-        surface: walkSurface(pkg.root, profile),
+        surface: profile.id === 'npm' ? dropParallelDeclarations(surface) : surface,
         readme: pkg.readme
     }
 }

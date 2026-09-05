@@ -14,6 +14,13 @@ export interface RetrieveOptions {
     version: string
     query: string
     limit?: number
+    /**
+     * The keywords that introduce a named type, for the definition hop. Passed by
+     * the caller rather than read off `EcosystemProfile` here: docs-ecosystems
+     * imports docs-core, which imports this module, and reaching back for the
+     * profile closes that cycle at run time.
+     */
+    typeKeywords?: readonly string[]
     contentBudget?: number
 }
 
@@ -37,6 +44,21 @@ export const RETRIEVE_CONTENT_BUDGET = 24_000
 const DEFAULT_LIMIT = PROJECT_RETRIEVE_LIMIT
 const DEFAULT_BUDGET = RETRIEVE_CONTENT_BUDGET
 const MIN_TOKEN_LEN = 2
+/**
+ * How many alias definitions one retrieval will chase. Three covers the observed
+ * case — hono's `get`/`json` pair plus one — without letting a chunk full of
+ * aliased members spend the whole budget on hops.
+ */
+const MAX_ALIAS_HOPS = 3
+/** Backstop for a caller that names no ecosystem; every real one passes its own. */
+const DEFAULT_TYPE_KEYWORDS = ['interface', 'type', 'class', 'enum'] as const
+/** A member declared as a bare capitalised type: `get: HandlerInterface<…>`. */
+const MEMBER_TYPE_RE =
+    /^\s*(?:readonly\s+)?([A-Za-z_$][\w$]*)\??\s*:\s*([A-Z][A-Za-z0-9_]*)\s*[<;,)|&]/gm
+const TYPE_DECL_RE =
+    /\b(?:interface|type|class|data|newtype|struct|trait|enum)\s+([A-Z][A-Za-z0-9_]*)/g
+/** The `<E extends Env, BasePath extends string>` a declaration introduces itself. */
+const TYPE_PARAMS_RE = /<([^<>]*)>/g
 const FALLBACK_DTS_CHARS = 12_000
 const FALLBACK_README_CHARS = 4_000
 
@@ -126,6 +148,82 @@ function enforceBudget(chunks: RetrievedChunk[], budget: number): RetrievedChunk
     return out
 }
 
+/**
+ * The type names the retrieved text declares MEMBERS as, whose own definitions
+ * are not in hand and which the query itself names — by the member or by the
+ * type.
+ *
+ * This is the alias hop. A package that types its public surface through
+ * interface aliases puts every real signature one declaration away from the name
+ * a query matches: hono writes `get: HandlerInterface<…>` in hono-base.d.ts and
+ * keeps the call signatures in `HandlerInterface`, in types.d.ts. BM25 ranks
+ * chunks independently, so retrieval lands on the alias and the extraction child
+ * sees a name where a signature should be. Measured on hono 4.13.5: three real
+ * lookups, three abstentions, and the definition in one chunk of 708.
+ *
+ * Ranking hops by frequency does not work — `Response` and the English word
+ * `The` both outrank `HandlerInterface` in the same text. What the query names
+ * is the signal.
+ */
+function hopNames(text: string, tokens: string[]): string[] {
+    const declared = new Set([...text.matchAll(TYPE_DECL_RE)].map(m => m[1]))
+    const typeParams = new Set<string>()
+    for (const m of text.matchAll(TYPE_PARAMS_RE)) {
+        for (const part of m[1].split(',')) {
+            const name = /^\s*([A-Z][A-Za-z0-9_]*)\s*(?:extends|=|$)/.exec(part)
+            if (name) typeParams.add(name[1])
+        }
+    }
+    const asked = new Set(tokens.map(t => t.toLowerCase()))
+    const out: string[] = []
+    // A capitalised name the QUERY itself asks about. scotty's seven failures were
+    // all of this shape: `type ActionM = ActionT IO` sits in one chunk of 312
+    // while 67 chunks USE the name, and a chunk carrying BOTH query terms
+    // (`get :: RoutePattern -> ActionM () -> ScottyM ()`) outranks the definition
+    // every time. Reading the ranked output, all eight slots went to uses.
+    for (const t of tokens) {
+        if (!/^[A-Z][A-Za-z0-9_]{2,}$/.test(t) || declared.has(t) || out.includes(t)) continue
+        out.push(t)
+        if (out.length >= MAX_ALIAS_HOPS) return out
+    }
+    for (const m of text.matchAll(MEMBER_TYPE_RE)) {
+        const [, member, typeName] = m
+        if (declared.has(typeName) || typeParams.has(typeName)) continue
+        if (!asked.has(member.toLowerCase()) && !asked.has(typeName.toLowerCase())) continue
+        if (out.includes(typeName)) continue
+        out.push(typeName)
+        if (out.length >= MAX_ALIAS_HOPS) break
+    }
+    return out
+}
+
+/** The smallest chunk that DECLARES `name`, or null. */
+function definitionChunk(
+    cache: CacheHandle,
+    opts: RetrieveOptions,
+    name: string
+): RetrievedChunk | null {
+    const keywords = opts.typeKeywords ?? DEFAULT_TYPE_KEYWORDS
+    // Smallest first: the DEFINITION of a name is a short declaration, while the
+    // long chunks holding it are the ones that merely use it.
+    const where = keywords.map((_, i) => `content GLOB ?${i + 4}`).join(' OR ')
+    const row = cache.db
+        .prepare(
+            `SELECT file_path, kind, content, 0 AS rank FROM chunks
+             WHERE ecosystem = ?1 AND name = ?2 AND version = ?3
+               AND (${where})
+             ORDER BY length(content) LIMIT 1`
+        )
+        .get(
+            opts.ecosystem,
+            opts.name,
+            opts.version,
+            ...keywords.map(k => `*${k} ${name}[ <={(=]*`)
+        ) as ChunkRow | undefined
+    if (!row) return null
+    return {filePath: row.file_path, kind: row.kind, content: row.content, rank: row.rank}
+}
+
 export function retrieveChunks(cache: CacheHandle, opts: RetrieveOptions): RetrievedChunk[] {
     const limit = opts.limit ?? DEFAULT_LIMIT
     const budget = opts.contentBudget ?? DEFAULT_BUDGET
@@ -162,5 +260,18 @@ export function retrieveChunks(cache: CacheHandle, opts: RetrieveOptions): Retri
         content: r.content,
         rank: r.rank
     }))
-    return enforceBudget(mapped, budget)
+    const kept = enforceBudget(mapped, budget)
+    const key = (c: RetrievedChunk): string => `${c.filePath}\u0000${c.content.length}`
+    const have = new Set(kept.map(key))
+    const hops: RetrievedChunk[] = []
+    for (const name of hopNames(kept.map(c => c.content).join('\n'), tokens)) {
+        const def = definitionChunk(cache, opts, name)
+        if (!def || have.has(key(def))) continue
+        hops.push(def)
+    }
+    if (hops.length === 0) return kept
+    // Hops sit directly behind the top-ranked chunk, so re-budgeting drops the
+    // WEAKEST original rather than the definition that explains the strongest.
+    // The budget itself does not move.
+    return enforceBudget([kept[0], ...hops, ...kept.slice(1)], budget)
 }

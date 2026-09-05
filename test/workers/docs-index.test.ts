@@ -315,3 +315,84 @@ describe('one name, two registries', () => {
         }
     })
 })
+
+describe('parallel ESM/CJS declarations index once', () => {
+    // Live run 2026-09-05 (DOC_REGRESSINONS.md section 2). zod: 2565 chunks,
+    // 1215 distinct BODIES, 1280 of them from `.d.cts`. hono ships no `.d.cts`
+    // and has 704/708 distinct, which is what makes the cause unambiguous.
+    // The cost is the top-8 retrieval budget: a package indexed twice can spend
+    // two of its eight slots on the same text.
+    // Bodies, not rows — the chunker prepends a `// <path>` header, so counting
+    // distinct `content` finds no duplication at all.
+    function bodiesOf(cache: ReturnType<typeof openCache>, pkg: ResolvedPackage): string[] {
+        const rows = cache.db
+            .prepare('SELECT content FROM chunks WHERE ecosystem = ? AND name = ? AND version = ?')
+            .all('npm', pkg.name, pkg.version) as Array<{content: string}>
+        return rows.map(r => r.content.replace(/^\/\/ .*\n/, ''))
+    }
+
+    test('a package shipping index.d.ts AND index.d.cts writes each declaration once', () => {
+        const cache = openCache(':memory:')
+        try {
+            const pkg = resolvePackage('dual-decl-pkg', FIXTURES)
+            ensureIndexed(cache, pkg)
+            const bodies = bodiesOf(cache, pkg)
+            expect(bodies.length).toBe(new Set(bodies).size)
+            expect(bodies.join('\n')).toContain('parseUnique')
+        } finally {
+            cache.close()
+        }
+    })
+
+    test('a package shipping ONLY .d.cts still indexes', () => {
+        const cache = openCache(':memory:')
+        try {
+            const pkg = resolvePackage('cts-only-pkg', FIXTURES)
+            const result = ensureIndexed(cache, pkg)
+            expect(result.chunksWritten).toBeGreaterThan(0)
+            expect(bodiesOf(cache, pkg).join('\n')).toContain('onlyCommonJs')
+        } finally {
+            cache.close()
+        }
+    })
+})
+
+describe('a back-compat major directory is not indexed', () => {
+    // Live run 2026-09-05 (DOC_REGRESSINONS.md section 1). zod@4.5.4 ships a
+    // `v3/` directory for back-compat and 414 of its 2565 chunks came from it.
+    // BM25 cannot tell them apart — same identifiers, same package, and the path
+    // is not a ranking signal. An answer shipped v3's
+    // `email(message?): ZodString` under a `Per zod@4.5.4:` header, dropping the
+    // `@deprecated Use z.email() instead` line directly above the real one.
+    test('chunks come from the current major only', () => {
+        const cache = openCache(':memory:')
+        try {
+            const pkg = resolvePackage('oldmajor-pkg', FIXTURES)
+            ensureIndexed(cache, pkg)
+            const rows = cache.db
+                .prepare('SELECT file_path, content FROM chunks WHERE name = ?')
+                .all(pkg.name) as Array<{file_path: string; content: string}>
+            expect(rows.length).toBeGreaterThan(0)
+            expect(rows.filter(r => r.file_path.startsWith('v3/'))).toEqual([])
+            const joined = rows.map(r => r.content).join('\n')
+            expect(joined).toContain('CheckEmailParams')
+            expect(joined).not.toContain('ErrMessage')
+        } finally {
+            cache.close()
+        }
+    })
+
+    test('a package whose whole surface lives under vN keeps it', () => {
+        const cache = openCache(':memory:')
+        try {
+            const pkg = resolvePackage('vdir-only-pkg', FIXTURES)
+            ensureIndexed(cache, pkg)
+            const rows = cache.db
+                .prepare('SELECT content FROM chunks WHERE name = ?')
+                .all(pkg.name) as Array<{content: string}>
+            expect(rows.map(r => r.content).join('\n')).toContain('onlyUnderV1')
+        } finally {
+            cache.close()
+        }
+    })
+})

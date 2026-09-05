@@ -6,9 +6,9 @@
  * bodies and private items dropped. That is what `surface` below does, and it is
  * why this row needs code where the npm row needed none.
  *
- * Nothing here parses TOML. `Cargo.lock` is a generated file with a fixed
- * `[[package]]` shape, and a line reader over it costs one small function where
- * a TOML dependency would cost a dependency.
+ * No TOML parser. `Cargo.lock` is generated with a fixed `[[package]]` shape, and
+ * `Cargo.toml`'s dependency tables are read for their KEYS only, so a line reader
+ * covers both where a TOML dependency would cost a dependency.
  */
 
 import * as fs from 'node:fs'
@@ -843,4 +843,43 @@ export function cargoProjectName(cwd: string): string | null {
     const section = /\[package\]([\s\S]*?)(?:\n\[|$)/.exec(text)
     const match = /^\s*name\s*=\s*"([^"]+)"/m.exec(section?.[1] ?? '')
     return match ? match[1] : null
+}
+
+/**
+ * The crate names `Cargo.toml` itself declares, under both `-` and `_` spellings.
+ *
+ * NOT {@link lockedDeps}: a lock file is the whole transitive closure, so it
+ * answers "can this resolve" and not "may this crate `use` it". The live run of
+ * 2026-09-05 answered about `tower` — in the lock via axum, absent from
+ * `[dependencies]` — and the crate did not compile.
+ *
+ * Undefined when there is no readable manifest, which is not "declares nothing".
+ */
+export function manifestCrates(cwd: string): Set<string> | undefined {
+    const text = safeRead(path.join(cwd, 'Cargo.toml'))
+    if (text === null) return undefined
+    const out = new Set<string>()
+    const add = (name: string): void => {
+        for (const key of new Set([name, canonical(name)])) out.add(key)
+    }
+    let inDeps = false
+    for (const raw of text.split('\n')) {
+        const line = raw.trim()
+        const header = /^\[([^\]]+)\]$/.exec(line)
+        if (header) {
+            const section = header[1]
+            // `[dependencies.serde]` and `[target.'cfg(unix)'.dependencies]` both
+            // declare, and the first names its crate in the header itself.
+            const table = /^(?:target\.[^.]*\.)?(?:dev-|build-)?dependencies(?:\.(.+))?$/.exec(
+                section
+            )
+            inDeps = table !== null && table[1] === undefined
+            if (table?.[1]) add(table[1])
+            continue
+        }
+        if (!inDeps) continue
+        const key = /^([A-Za-z0-9_-]+)\s*=/.exec(line)
+        if (key) add(key[1])
+    }
+    return out
 }

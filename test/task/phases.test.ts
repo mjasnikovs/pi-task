@@ -1178,7 +1178,7 @@ describe('phaseResearch parallel workers (opt-in flag)', () => {
 })
 
 describe('phaseResearch enrichment DI', () => {
-    test('docsRaw is called for backtick-quoted packages in the refined text', async () => {
+    test('docsRaw is NOT called — the research path fetches no package docs', async () => {
         await withTmpTaskDir(async cwd => {
             await writeTaskFile(
                 cwd,
@@ -1224,15 +1224,16 @@ describe('phaseResearch enrichment DI', () => {
                             chunks: [{filePath: 'x', kind: 'dts', content: 'fake docs', rank: 0}],
                             hitCache: true
                         }
-                    }
+                    },
+                    npmVersionLookup: async () => null
                 },
                 'use `zod` for validation'
             )
-            expect(pkgsSeen).toContain('zod')
+            expect(pkgsSeen).toEqual([])
         })
     })
 
-    test('externalContext is prepended to all 4 research worker prompts', async () => {
+    test('the npm version block is prepended to all 4 research worker prompts', async () => {
         await withTmpTaskDir(async cwd => {
             await writeTaskFile(
                 cwd,
@@ -1282,16 +1283,19 @@ describe('phaseResearch enrichment DI', () => {
                         },
                         chunks: [{filePath: 'x', kind: 'dts', content: 'ZOD_DOCS_MARKER', rank: 0}],
                         hitCache: true
-                    })
+                    }),
+                    npmVersionLookup: async pkg => ({pkg, latest: '4.5.4', recent: ['4.5.4']})
                 },
                 'use `zod` for validation'
             )
-            const withMarker = promptsSeen.filter(p => p.includes('ZOD_DOCS_MARKER'))
-            expect(withMarker.length).toBe(4)
+            expect(promptsSeen.filter(p => p.includes('### npm: zod')).length).toBe(4)
+            // The docs body no longer travels with it — see the `packageDocs`
+            // policy in external-context.ts.
+            expect(promptsSeen.filter(p => p.includes('ZOD_DOCS_MARKER'))).toEqual([])
         })
     })
 
-    test('npm version info is injected ahead of docs in EXTERNAL CONTEXT', async () => {
+    test('npm version info is injected into EXTERNAL CONTEXT, without a docs body', async () => {
         await withTmpTaskDir(async cwd => {
             await writeTaskFile(
                 cwd,
@@ -1346,6 +1350,12 @@ describe('phaseResearch enrichment DI', () => {
                             recent: ['19.0.0', '18.3.1'],
                             publishedAt: '2026-04-10T00:00:00.000Z'
                         }
+                    }),
+                    npmVersionLookup: async pkg => ({
+                        pkg,
+                        latest: '19.0.0',
+                        recent: ['19.0.0', '18.3.1'],
+                        publishedAt: '2026-04-10T00:00:00.000Z'
                     })
                 },
                 'pin `react` to exact version'
@@ -1353,12 +1363,8 @@ describe('phaseResearch enrichment DI', () => {
             const reactPrompt = promptsSeen.find(p => p.includes('### npm: react'))
             expect(reactPrompt).toBeDefined()
             expect(reactPrompt).toContain('latest: 19.0.0 (published 2026-04-10)')
-            // npm block must appear before the docs block so the model anchors on
-            // version data before being distracted by API surface.
-            const npmIdx = reactPrompt!.indexOf('### npm: react')
-            const docsIdx = reactPrompt!.indexOf('### docs: react')
-            expect(npmIdx).toBeGreaterThanOrEqual(0)
-            expect(docsIdx).toBeGreaterThan(npmIdx)
+            expect(reactPrompt).not.toContain('### docs: react')
+            expect(reactPrompt).not.toContain('DOCS_BODY')
         })
     })
 
@@ -1414,14 +1420,13 @@ describe('phaseResearch enrichment DI', () => {
                         hitCache: true,
                         npmVersion: null
                     }),
-                    // A docs target with no version falls through to the standalone
-                    // lookup, so this has to be injected or the test goes live.
+                    // The named dep falls through to the standalone lookup, so this
+                    // has to be injected or the test goes live.
                     npmVersionLookup: async () => null
                 },
                 'pin `zod` to exact version'
             )
-            const withMarker = promptsSeen.filter(p => p.includes('DOCS_ONLY'))
-            expect(withMarker.length).toBe(4)
+            expect(promptsSeen.filter(p => p.includes('DOCS_ONLY'))).toEqual([])
             // Neither lookup produced a version, so no "### npm: zod" block and no
             // "latest: <ver>" line reaches any of the four worker prompts. (The
             // unrelated string "### npm: <pkg>" appears as a template instruction

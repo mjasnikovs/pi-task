@@ -3,9 +3,16 @@ import * as path from 'node:path'
 import {openCache} from '../../src/workers/docs-cache.js'
 import {ensureIndexed} from '../../src/workers/docs-index.js'
 import {resolvePackage} from '../../src/workers/docs-resolve.js'
-import {retrieveChunks} from '../../src/workers/docs-retrieve.js'
+import {resolveHackage} from '../../src/workers/eco-hackage.js'
+import {ECOSYSTEMS} from '../../src/workers/docs-ecosystems.js'
+import {
+    retrieveChunks,
+    PACKAGE_RETRIEVE_LIMIT,
+    RETRIEVE_CONTENT_BUDGET
+} from '../../src/workers/docs-retrieve.js'
 
 const FIXTURES = path.resolve(__dirname, '__fixtures__')
+const HS_MODULES = path.join(FIXTURES, 'hs-modules')
 
 function seed() {
     const cache = openCache(':memory:')
@@ -167,6 +174,72 @@ test('retrieveChunks returns empty when package not indexed at all', () => {
             query: 'anything'
         })
         expect(chunks).toEqual([])
+    } finally {
+        cache.close()
+    }
+})
+
+// Live run 2026-09-05 (DOC_REGRESSINONS.md section 3). Three hono lookups, three
+// abstentions. hono declares every verb as a property typed by an interface
+// alias — `get: HandlerInterface<E, 'get', S, BasePath, CurrentPath>` in
+// hono-base.d.ts — while the call signatures live in `HandlerInterface`, in one
+// chunk of 708, in types.d.ts. Retrieval landed on the alias every time, so the
+// extraction child saw a name where a signature should be and said so.
+// Reproduced offline against the real index before this fixture was written.
+function seedAlias() {
+    const cache = openCache(':memory:')
+    const pkg = resolvePackage('alias-pkg', FIXTURES)
+    ensureIndexed(cache, pkg)
+    return {cache, pkg}
+}
+
+test('retrieveChunks follows a member type alias to its definition', () => {
+    const {cache, pkg} = seedAlias()
+    try {
+        const chunks = retrieveChunks(cache, {
+            ecosystem: 'npm',
+            name: pkg.name,
+            version: pkg.version,
+            query: 'AppBase get(path, handler) signature',
+            limit: PACKAGE_RETRIEVE_LIMIT,
+            contentBudget: RETRIEVE_CONTENT_BUDGET
+        })
+        const joined = chunks.map(c => c.content).join('\n')
+        expect(joined).toContain('get: HandlerInterface')
+        expect(joined).toContain('interface HandlerInterface')
+        expect(joined).toContain('...rest')
+    } finally {
+        cache.close()
+    }
+})
+
+// Live run 2026-09-05 (DOC_REGRESSINONS.md section 6). The Haskell run asked
+// scotty for `json`'s type and the definitions of ScottyM / ActionM seven times.
+// Four outright non-answers, three partials, and the signature never appeared —
+// while `type ActionM = ActionT IO` sat in the index the whole time, in one chunk
+// of 312, with 67 chunks NAMING ActionM. Re-measured on the run's own cache
+// after the .d.cts and dead-major fixes: still 0 of 5. Those were npm-shaped and
+// could not reach hackage.
+//
+// The mechanism, read off the ranked output: a chunk that USES both names
+// (`get :: RoutePattern -> ActionM () -> ScottyM ()`) carries more query terms
+// than the chunk that DEFINES one, so all eight slots go to uses.
+test('retrieveChunks fetches the definition of a type the query names', () => {
+    const cache = openCache(':memory:')
+    try {
+        const pkg = resolveHackage('tiny-hs', HS_MODULES, {modulesDir: HS_MODULES})
+        ensureIndexed(cache, pkg, ECOSYSTEMS.hackage)
+        const chunks = retrieveChunks(cache, {
+            ecosystem: 'hackage',
+            name: pkg.name,
+            version: pkg.version,
+            query: 'definitions of ScottyM and ActionM',
+            limit: PACKAGE_RETRIEVE_LIMIT,
+            contentBudget: RETRIEVE_CONTENT_BUDGET
+        })
+        const joined = chunks.map(c => c.content).join('\n')
+        expect(joined).toContain('type ActionM = ActionT IO')
+        expect(joined).toContain('type ScottyM = ScottyT IO')
     } finally {
         cache.close()
     }

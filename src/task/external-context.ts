@@ -23,7 +23,7 @@
  * `### npm:` then `### docs:` then `### url:` then `### service:`.
  */
 
-import {chooseEcosystem, defaultEcosystemIo} from '../workers/docs-ecosystems.js'
+import {chooseEcosystem, declaredDepNames, defaultEcosystemIo} from '../workers/docs-ecosystems.js'
 import {docsRaw} from '../workers/docs-core.js'
 import {fetchRaw} from '../workers/fetch-core.js'
 import {
@@ -113,6 +113,18 @@ export interface ExternalContextPolicy {
     /** Max services fanned out. Omit for uncapped; the auto-answer path caps at 2. */
     serviceCap?: number
     /**
+     * Fan named packages out to a docs body. The RESEARCH path does not, and the
+     * auto-answer path does.
+     *
+     * Research retrieves against `refined.split('\n')[0]` — the literal word
+     * "GOAL" for every refined spec — so its bodies are whatever ranks against
+     * that, pasted raw. The live run of 2026-09-05 found no research output
+     * citing one, while the model's own docs tool answered 49 real questions
+     * across the same three runs. The auto-answer path asks a focused child an
+     * actual question, which is the shape that works.
+     */
+    packageDocs?: boolean
+    /**
      * A cheap live version lookup for every named dep that did NOT get a docs
      * target, so a version block exists for ALL of them. Omit to disable, as the
      * auto-answer path does. Without it, any dep past the docs cap carries no live
@@ -143,12 +155,13 @@ export async function buildExternalContext(
     policy: ExternalContextPolicy = {}
 ): Promise<string> {
     const searchFn = lookups.search ?? defaultSearch
-    const enrichTargets = extractEnrichTargets(source)
+    const enrichTargets = extractEnrichTargets(source, declaredDepNames(deps.cwd))
 
     // Packages lead urls, then the combined cap applies — so a capped run spends
     // its budget on named deps first. Uncapped, this is just "packages, then urls".
+    const docsPackages = policy.packageDocs === false ? [] : enrichTargets.packages
     const targets: ExternalTarget[] = [
-        ...enrichTargets.packages.map(name => ({kind: 'pkg' as const, name})),
+        ...docsPackages.map(name => ({kind: 'pkg' as const, name})),
         ...enrichTargets.urls.map(name => ({kind: 'url' as const, name}))
     ].slice(0, policy.targetCap ?? Number.POSITIVE_INFINITY)
     const services = enrichTargets.services.slice(0, policy.serviceCap ?? Number.POSITIVE_INFINITY)
@@ -158,7 +171,15 @@ export async function buildExternalContext(
     const extraVersionPkgs =
         versionLookup ? enrichTargets.versionPackages.filter(p => !docsTargets.has(p)) : []
 
-    if (policy.earlyReturnOnNoTargets && targets.length === 0 && services.length === 0) return ''
+    // Version packages count as work here: with `packageDocs: false` a named dep
+    // produces no target at all, and returning early would drop its version block.
+    if (
+        policy.earlyReturnOnNoTargets
+        && targets.length === 0
+        && services.length === 0
+        && extraVersionPkgs.length === 0
+    )
+        return ''
 
     const startedAt = Date.now()
     const [targetResults, serviceResults, extraVersionResults] = await Promise.all([
@@ -321,6 +342,7 @@ export async function gatherExternalContext(refined: string, deps: GatherDeps): 
         },
         {
             versionLookup,
+            packageDocs: false,
             subStepLabel: 'enrichment',
             earlyReturnOnNoTargets: true
         }

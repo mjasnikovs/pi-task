@@ -285,8 +285,41 @@ export function buildVersionBanner(
     cwd: string,
     profile: EcosystemProfile = ECOSYSTEMS.npm
 ): string {
-    if (!pin) return ''
-    const asked = pin.asked ?? resolved
+    const asked = pin?.asked ?? resolved
+    // Resolvable is not usable. A lock file, a cabal plan and `node_modules` are
+    // all the transitive CLOSURE, so the tool can answer in full confidence about
+    // a package the project may not import. That is what made the Rust run of
+    // 2026-09-05 a hard fail: a correct `tower::util::ServiceExt` answer, the
+    // import written, and E0433 "cannot find module or crate tower" from the compiler.
+    const undeclared = undeclaredNotice(asked, cwd, profile)
+    if (!pin) return undeclared
+    return undeclared + pinBanner(pin, asked, resolved, version, cwd, profile)
+}
+
+/**
+ * The one sentence a package present-but-not-declared needs, or `''` when it is
+ * declared or when no manifest could be read.
+ */
+function undeclaredNotice(asked: string, cwd: string, profile: EcosystemProfile): string {
+    const declared = profile.manifestDeps(cwd)
+    const root = profile.parentPackage(asked)
+    if (!declared || declared.has(root) || declared.has(asked)) return ''
+    return (
+        `[DEPENDENCY] "${root}" is present in this project but is not a declared `
+        + `dependency in ${profile.manifestLabel} — it resolves only because something `
+        + `else pulled it in. Add it to ${profile.manifestLabel} before importing it, or `
+        + `the build will not find it.\n\n`
+    )
+}
+
+function pinBanner(
+    pin: AutoInstallPin,
+    asked: string,
+    resolved: string,
+    version: string,
+    cwd: string,
+    profile: EcosystemProfile
+): string {
     const grounded = resolved !== asked ? ` The types this answer reads come from ${resolved}.` : ''
     const manifest = profile.manifestLabel
     const registry = profile.registryLabel
@@ -750,7 +783,8 @@ function docsRawCached(
             version: pkg.version,
             query,
             limit: DEFAULT_LIMIT,
-            contentBudget: DEFAULT_BUDGET
+            contentBudget: DEFAULT_BUDGET,
+            typeKeywords: profile.typeKeywords
         })
     } catch (err) {
         return {

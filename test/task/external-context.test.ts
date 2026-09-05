@@ -41,28 +41,27 @@ describe('gatherExternalContext', () => {
         expect(recorded).toBe(false)
     })
 
-    test('assembles npm version + docs blocks for a backtick package', async () => {
+    test('assembles an npm version block for a backtick package', async () => {
         const recorded: string[] = []
         const out = await gatherExternalContext('use `zod` for validation', {
             ...deps,
             recordSubStep: label => recorded.push(label),
-            docsRaw: docsOk('zod', 'zod docs body', '3.23.8')
+            docsRaw: docsOk('zod', 'zod docs body', '3.23.8'),
+            npmVersionLookup: async pkg => ({pkg, latest: '3.23.8', recent: ['3.23.8']})
         })
         expect(out.startsWith('EXTERNAL CONTEXT\n')).toBe(true)
         expect(out).toContain('### npm: zod')
         expect(out).toContain('latest: 3.23.8')
-        expect(out).toContain('### docs: zod')
-        expect(out).toContain('zod docs body')
+        expect(out).not.toContain('### docs: zod')
         expect(out.endsWith('\n\n')).toBe(true)
         expect(recorded).toContain('enrichment')
     })
 
-    test('gives EVERY named dep a live npm version block, not just the docs-capped 3', async () => {
-        // Six named runtime deps — more than the docs cap, which is the case that
-        // matters. The heavy docs fetch still stops at 3, but a version block must
-        // exist for ALL six: without one, a later "which version?" question about
-        // the sixth is answered from training data, which can only name a version
-        // that existed when the model was trained.
+    test('gives EVERY named dep a live npm version block', async () => {
+        // Six named runtime deps. A version block must exist for ALL six: without
+        // one, a later "which version?" question about the sixth is answered from
+        // training data, which can only name a version that existed when the model
+        // was trained. The research path fetches no docs body at all.
         const docsCalls: string[] = []
         const versionCalls: string[] = []
         const out = await gatherExternalContext(
@@ -92,9 +91,8 @@ describe('gatherExternalContext', () => {
                 }
             }
         )
-        // Heavy docs fetch only for the first 3; the rest get a cheap version lookup.
-        expect(docsCalls.length).toBe(3)
-        expect(versionCalls).toEqual(['react-dom', 'wouter', 'tailwindcss'])
+        expect(docsCalls).toEqual([])
+        expect(versionCalls).toEqual(['hono', 'zod', 'react', 'react-dom', 'wouter', 'tailwindcss'])
         // A live npm block exists for ALL six — including tailwindcss.
         for (const pkg of ['hono', 'zod', 'react', 'react-dom', 'wouter', 'tailwindcss']) {
             expect(out).toContain(`### npm: ${pkg}`)
@@ -433,5 +431,100 @@ describe('buildExternalContext policy', () => {
         )
         expect(out).not.toContain('### docs: zod')
         expect(out).toContain('### docs: hono')
+    })
+})
+
+describe('enrichment is gated on the project manifest', () => {
+    // The unit tests above all run in /tmp, which declares nothing and so cannot
+    // see this gate at all — that is how ten registry installs of `config.ts`,
+    // `app.ts` and `name` shipped. This one writes a real manifest.
+    test('a backticked filename in a real npm project is never fanned out', async () => {
+        const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'enrich-gate-'))
+        fs.writeFileSync(
+            path.join(cwd, 'package.json'),
+            JSON.stringify({name: 'p', dependencies: {zod: '^4.0.0'}})
+        )
+        const asked: string[] = []
+        const lookups: ExternalContextLookups = {
+            docs: async pkg => {
+                asked.push(pkg)
+                return {body: `${pkg} body`}
+            },
+            url: async () => null
+        }
+        const versionAsked: string[] = []
+        const versionLookup = async (pkg: string): Promise<VersionBlock | null> => {
+            versionAsked.push(pkg)
+            return null
+        }
+        await buildExternalContext(
+            'export `loadConfig` from `config.ts`, validate with `zod`, set `port` in `config.json`',
+            {...deps, cwd, recordSubStep: () => {}},
+            lookups,
+            {versionLookup}
+        )
+        expect(asked).toEqual(['zod'])
+        // zod is asked for a version because the docs stub returns none; the
+        // point is that no filename ever reaches either registry call.
+        expect(versionAsked).toEqual(['zod'])
+        fs.rmSync(cwd, {recursive: true, force: true})
+    })
+})
+
+describe('the research binding fetches no package docs', () => {
+    // Evidence, live run 2026-09-05 (DOC_REGRESSINONS.md sections 5 and below):
+    //  - the docs query was `refined.split('\n')[0]`, which is the literal word
+    //    "GOAL" for every refined spec these runs produce;
+    //  - hs TASK_0002 spent all three ENRICH_CAP slots on `config.json`, `name`
+    //    and `port`, fetching no library at all;
+    //  - no research output cites an enrichment docs body, while the model's own
+    //    docs tool was called 49 times across the three runs with no bad name.
+    // The version lookup is the half that earns its keep and stays.
+    function projectWithZod(): string {
+        const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'research-nodocs-'))
+        fs.writeFileSync(
+            path.join(cwd, 'package.json'),
+            JSON.stringify({name: 'p', dependencies: {zod: '4.5.4'}})
+        )
+        return cwd
+    }
+
+    test('a declared package gets its version block and no docs body', async () => {
+        const cwd = projectWithZod()
+        let docsCalls = 0
+        const out = await gatherExternalContext('GOAL\n  validate with `zod`\n', {
+            ...deps,
+            cwd,
+            recordSubStep: () => {},
+            docsRaw: async input => {
+                docsCalls += 1
+                return docsOk('zod', 'raw d.ts chunks', '4.5.4')!(input)
+            },
+            npmVersionLookup: async () => ({pkg: 'zod', latest: '4.5.4', recent: ['4.5.4']})
+        })
+        expect(docsCalls).toBe(0)
+        expect(out).not.toContain('### docs:')
+        expect(out).not.toContain('raw d.ts chunks')
+        expect(out).toContain('### npm: zod')
+        expect(out).toContain('latest: 4.5.4')
+        fs.rmSync(cwd, {recursive: true, force: true})
+    })
+
+    test('URLs are still fetched — only the package fan-out goes', async () => {
+        const cwd = projectWithZod()
+        const out = await gatherExternalContext('GOAL\n  see https://example.com/x\n', {
+            ...deps,
+            cwd,
+            recordSubStep: () => {},
+            fetchRaw: async () => ({
+                markdown: 'page body',
+                url: 'https://example.com/x',
+                finalUrl: 'https://example.com/x',
+                title: 'x'
+            })
+        })
+        expect(out).toContain('### url: https://example.com/x')
+        expect(out).toContain('page body')
+        fs.rmSync(cwd, {recursive: true, force: true})
     })
 })

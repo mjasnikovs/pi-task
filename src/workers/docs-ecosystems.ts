@@ -41,6 +41,7 @@ import {
     cargoProjectName,
     childDirs,
     lockedDeps,
+    manifestCrates,
     CARGO_DECL_SPLIT_RE
 } from './eco-cargo.js'
 import {
@@ -53,6 +54,7 @@ import {
     findCabalTarball,
     cachedVersions,
     resolvedVersions,
+    manifestPackages,
     isValidHackageName,
     isHaskellFile,
     haskellSurface,
@@ -199,6 +201,11 @@ export interface EcosystemProfile {
     surface: (content: string) => string
     /** Where a declaration begins, so a chunk never splits a signature. */
     declSplitRe: RegExp
+    /**
+     * The keywords that INTRODUCE a named type in this language, for finding the
+     * chunk that defines a name rather than the many that use it.
+     */
+    typeKeywords: readonly string[]
     /** Line-comment marker, used to label a chunk with the file it came from. */
     commentPrefix: string
 
@@ -221,6 +228,15 @@ export interface EcosystemProfile {
      * package's version, which is a different fact from "declares nothing".
      */
     declaredDeps: (cwd: string) => Record<string, string> | undefined
+    /**
+     * The names the MANIFEST itself declares — what the project may import.
+     *
+     * Distinct from {@link declaredDeps}, which for cargo and hackage reads a
+     * lock or plan file: that is the whole transitive closure, so it answers
+     * "does this resolve" and not "may this be used". Undefined when there is no
+     * readable manifest, which is not the same fact as "declares nothing".
+     */
+    manifestDeps: (cwd: string) => Set<string> | undefined
 }
 
 /** Overrides a caller has already been given its own copies of. */
@@ -270,6 +286,7 @@ export function npmProfile(hooks: NpmProfileHooks = {}): EcosystemProfile {
         isSurfaceFile: isDtsFile,
         surface: content => content,
         declSplitRe: DECL_SPLIT_RE,
+        typeKeywords: ['interface', 'type', 'class', 'enum'],
         commentPrefix: '//',
         // A nested node_modules is another package's surface, never this one's.
         skipDirs: ['node_modules'],
@@ -277,7 +294,11 @@ export function npmProfile(hooks: NpmProfileHooks = {}): EcosystemProfile {
         packageSubject: 'an npm package',
         projectGlobs: ['*.ts', '*.tsx'],
         projectName: npmProjectName,
-        declaredDeps: npmDeclaredDeps
+        declaredDeps: npmDeclaredDeps,
+        manifestDeps: cwd => {
+            const deps = npmDeclaredDeps(cwd)
+            return deps && new Set(Object.keys(deps))
+        }
     }
 }
 
@@ -432,13 +453,15 @@ const cargoProfile: EcosystemProfile = {
     isSurfaceFile: isRustFile,
     surface: content => rustSurface(content),
     declSplitRe: CARGO_DECL_SPLIT_RE,
+    typeKeywords: ['struct', 'trait', 'enum', 'type', 'union'],
     commentPrefix: '//',
     skipDirs: ['tests', 'benches', 'examples', 'target'],
     surfaceLabel: '.rs source or README',
     packageSubject: 'a Rust crate from crates.io',
     projectGlobs: ['*.rs'],
     projectName: cargoProjectName,
-    declaredDeps: lockedDeps
+    declaredDeps: lockedDeps,
+    manifestDeps: manifestCrates
 }
 
 /**
@@ -536,13 +559,15 @@ const hackageProfile: EcosystemProfile = {
     isSurfaceFile: isHaskellFile,
     surface: haskellSurface,
     declSplitRe: HACKAGE_DECL_SPLIT_RE,
+    typeKeywords: ['type', 'data', 'newtype', 'class'],
     commentPrefix: '--',
     skipDirs: HACKAGE_SKIP_DIRS,
     surfaceLabel: '.hs source or README',
     packageSubject: 'a Haskell package from Hackage',
     projectGlobs: ['*.hs'],
     projectName: hackageProjectName,
-    declaredDeps: resolvedVersions
+    declaredDeps: resolvedVersions,
+    manifestDeps: manifestPackages
 }
 
 /** A cabal, stack or hpack project declares itself with one of these. */
@@ -576,6 +601,27 @@ export function detectEcosystems(
     roster: readonly EcosystemProfile[] = Object.values(ECOSYSTEMS)
 ): EcosystemId[] {
     return roster.filter(p => p.detect(cwd)).map(p => p.id)
+}
+
+/**
+ * Every dependency `cwd`'s manifests declare, across the ecosystems it is a
+ * project of. Undefined when no detected ecosystem could read its manifest —
+ * "we cannot tell", which callers must not read as "declares nothing".
+ */
+export function declaredDepNames(
+    cwd: string,
+    roster: readonly EcosystemProfile[] = Object.values(ECOSYSTEMS)
+): Set<string> | undefined {
+    let any = false
+    const names = new Set<string>()
+    for (const p of roster) {
+        if (!p.detect(cwd)) continue
+        const deps = p.manifestDeps(cwd)
+        if (!deps) continue
+        any = true
+        for (const name of deps) names.add(name)
+    }
+    return any ? names : undefined
 }
 
 export type EcosystemChoice =

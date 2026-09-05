@@ -313,7 +313,11 @@ export function projectDocsRaw(
             version,
             query,
             limit: DEFAULT_LIMIT,
-            contentBudget: DEFAULT_BUDGET
+            contentBudget: DEFAULT_BUDGET,
+            // Every detected ecosystem's keywords: a polyglot project's own
+            // source has no single language, and the extra keywords only widen
+            // which definition the hop can find.
+            typeKeywords: [...new Set(projectProfiles(cwd).flatMap(p => p.typeKeywords))]
         })
     } catch (err) {
         return {
