@@ -1,9 +1,10 @@
 import {test, expect, describe} from 'bun:test'
+import {splitAtMatches, chunkDeclarations} from '../../src/workers/docs-chunk.js'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import {openCache} from '../../src/workers/docs-cache.js'
-import {ensureIndexed} from '../../src/workers/docs-index.js'
+import {ensureIndexed, chunkerFingerprint} from '../../src/workers/docs-index.js'
 import {ECOSYSTEMS} from '../../src/workers/docs-ecosystems.js'
 import {retrieveChunks} from '../../src/workers/docs-retrieve.js'
 import {resolvePackage, type ResolvedPackage} from '../../src/workers/docs-resolve.js'
@@ -395,4 +396,14 @@ describe('a back-compat major directory is not indexed', () => {
             cache.close()
         }
     })
+})
+
+test('the content hash covers the CHUNKER, not just the split regex', () => {
+    // The attribute-orphaning bug lived in splitAtMatches. Fixing it changed
+    // every cargo package's rows and moved no profile regex, so the fingerprint
+    // would have said "unchanged" and every cached package would have kept its
+    // dangling `#[cfg(...)]` chunks.
+    const fp = chunkerFingerprint()
+    expect(fp).toContain(String(splitAtMatches))
+    expect(fp).toContain(String(chunkDeclarations))
 })

@@ -7,6 +7,7 @@ import {
     DECL_SPLIT_RE,
     MAX_CHUNK_BYTES
 } from '../../src/workers/docs-chunk.js'
+import {CARGO_DECL_SPLIT_RE} from '../../src/workers/eco-cargo.js'
 
 describe('splitAtMatches', () => {
     const decl = (): RegExp => new RegExp(DECL_SPLIT_RE.source, 'gm')
@@ -29,6 +30,14 @@ describe('splitAtMatches', () => {
 
     test('empty input still yields one part', () => {
         expect(splitAtMatches('', decl())).toEqual([''])
+    })
+
+    test('a match is never cut in half by a later match INSIDE it', () => {
+        // `export\nfunction a` is one declaration whose match spans the newline.
+        // Advancing by one re-finds `function` at the next line start; cutting
+        // there splits the modifier off the thing it modifies.
+        const parts = splitAtMatches('export\nfunction a() {}\n', decl())
+        expect(parts.length).toBe(1)
     })
 
     test('a keyword nested in a longer prefix does not lose the outer declaration', () => {
@@ -117,5 +126,33 @@ describe('chunkReadme', () => {
     test('an empty README produces nothing', () => {
         expect(chunkReadme('')).toEqual([])
         expect(chunkReadme('   \n\n')).toEqual([])
+    })
+})
+
+describe('an attribute stays with the declaration it decorates', () => {
+    // serde 1.0.229 indexed to 448 chunks over 350 distinct bodies. The worst
+    // offender was `// src/core/de/value.rs\n#[cfg(any(feature = "std", feature =
+    // "alloc"))]` — a file header and a dangling attribute, no declaration, 19
+    // byte-identical copies, each one a candidate for the eight-chunk retrieval
+    // budget. CARGO_DECL_SPLIT_RE absorbs leading attributes precisely so this
+    // cannot happen; splitAtMatches then re-matched the bare `impl` line inside
+    // that match and cut between them.
+    test('a repeated cargo attribute does not become its own chunk', () => {
+        const src = [
+            '#[cfg(any(feature = "std", feature = "alloc"))]',
+            'impl<E> Foo for Bar<E> {',
+            '    fn one(&self) {}',
+            '}',
+            '#[cfg(any(feature = "std", feature = "alloc"))]',
+            'impl<E> Foo for Baz<E> {',
+            '    fn two(&self) {}',
+            '}'
+        ].join('\n')
+        const chunks = chunkDeclarations(src, 'src/x.rs', CARGO_DECL_SPLIT_RE, '//')
+        expect(chunks.length).toBe(2)
+        expect(new Set(chunks).size).toBe(2)
+        expect(chunks[0]).toContain('#[cfg(any(feature = "std", feature = "alloc"))]')
+        expect(chunks[0]).toContain('impl<E> Foo for Bar<E>')
+        expect(chunks[1]).toContain('impl<E> Foo for Baz<E>')
     })
 })

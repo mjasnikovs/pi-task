@@ -1,0 +1,1 @@
+{"name":"pi-worker-docs-modules","private":true,"dependencies":{"@types/bun":"^1.4.1","@types/node":"^26.4.1","bun":"^1.4.2","bun-types":"^1.4.2","node":"^26.8.1"}}

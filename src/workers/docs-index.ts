@@ -3,7 +3,7 @@ import * as fs from 'node:fs'
 import * as path from 'node:path'
 import type {CacheHandle} from './docs-cache.js'
 import {type ResolvedPackage} from './docs-resolve.js'
-import {chunkDeclarations, chunkReadme} from './docs-chunk.js'
+import {chunkDeclarations, chunkReadme, splitAtMatches} from './docs-chunk.js'
 import {ECOSYSTEMS, type EcosystemProfile} from './docs-ecosystems.js'
 
 const ZERO_SEP = Buffer.from([0])
@@ -48,11 +48,26 @@ interface IngestResult {
  * It is not total. An extractor change that alters only files BELOW the entry
  * goes unnoticed; deleting the cache is still the escape hatch for that.
  */
+/**
+ * The chunker's own source, so a cut-point fix invalidates every cached package.
+ *
+ * `declSplitRe.source` alone does not do it: the attribute-orphaning bug was in
+ * `splitAtMatches`, not in any profile's regex, so the fingerprint sat still while
+ * the rows it describes changed. A package indexed before that fix keeps its
+ * dangling `#[cfg(...)]` chunks forever, and the hash is the only thing that would
+ * have said so.
+ */
+export function chunkerFingerprint(): string {
+    return `${String(splitAtMatches)}\u0000${String(chunkDeclarations)}\u0000${String(chunkReadme)}`
+}
+
 function computeContentHash(pkg: ResolvedPackage, profile: EcosystemProfile): string {
     const hash = createHash('sha256')
     hash.update(Buffer.from(`${pkg.name}@${pkg.version}`, 'utf8'))
     hash.update(ZERO_SEP)
     hash.update(Buffer.from(`${profile.declSplitRe.source}\u0000${profile.commentPrefix}`, 'utf8'))
+    hash.update(ZERO_SEP)
+    hash.update(Buffer.from(chunkerFingerprint(), 'utf8'))
     hash.update(ZERO_SEP)
     // Source text, the same trick as `declSplitRe.source`: the fingerprint moves
     // whenever the selection rule does, with nothing to remember to bump.

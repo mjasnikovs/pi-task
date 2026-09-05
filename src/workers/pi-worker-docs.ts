@@ -295,7 +295,7 @@ export function registerPiWorkerDocs(
                 const r = await lookup(projectCorpus(projectName), chunks)
                 if (r.kind === 'failed') return docsFailureResult(r.extraction, baseDetails, '')
 
-                const {extraction, excerptVerified: verified, body: text} = r
+                const {extraction, excerptVerified: verified, body: text, content: retrieved} = r
                 // SAME instrumentation channel as the package path below. Both branches
                 // record, or "the last docs answer before the worker stopped" is
                 // unanswerable whenever the last answer came from the branch that does
@@ -314,7 +314,8 @@ export function registerPiWorkerDocs(
                     reason: 'project-source lookup — the type-only detector is not applied here',
                     excerptVerified: verified,
                     excerptCheck: extraction.excerptCheck,
-                    toolText: text
+                    toolText: text,
+                    retrievedText: retrieved
                 })
                 return workerAnswer(text, {
                     ...baseDetails,
@@ -473,7 +474,8 @@ export function registerPiWorkerDocs(
                 reason: typeOnly.reason,
                 excerptVerified: verified,
                 excerptCheck: extraction.excerptCheck,
-                toolText: text
+                toolText: text,
+                retrievedText: concatenated
             })
 
             return workerAnswer(text, {

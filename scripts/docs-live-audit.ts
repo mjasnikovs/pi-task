@@ -29,7 +29,7 @@ const CODE_SPAN_RE = /`([^`]+)`/g
  * a fabricated API. A hallucinated symbol is one written as code, which is the
  * only form a reader would copy.
  */
-function inventedSymbols(answer: string, corpus: string): string[] {
+export function inventedSymbols(answer: string, corpus: string): string[] {
     const known = new Set(corpus.match(IDENTIFIER_RE) ?? [])
     const out = new Set<string>()
     for (const span of answer.matchAll(CODE_SPAN_RE)) {
@@ -97,10 +97,10 @@ function resolvedPins(root: string, spec: ProjectSpec): Record<string, string | 
     if (spec.ecosystem === 'npm') {
         const pj = path.join(root, 'package.json')
         if (fs.existsSync(pj)) {
-            const deps = (JSON.parse(fs.readFileSync(pj, 'utf8')).dependencies ?? {}) as Record<
-                string,
-                string
-            >
+            const parsed = JSON.parse(fs.readFileSync(pj, 'utf8')) as {
+                dependencies?: Record<string, string>
+            }
+            const deps = parsed.dependencies ?? {}
             for (const pkg of Object.keys(out)) out[pkg] = deps[pkg] ?? null
         }
     } else if (spec.ecosystem === 'cargo') {
@@ -204,7 +204,14 @@ function auditProject(runRoot: string, spec: ProjectSpec, build: boolean): Proje
         else rep.recall.missed.push(`${t.pkg}:${t.symbol}`)
     }
     for (const r of records) {
-        const corpus = r.toolText ?? ''
+        // The RETRIEVED chunks, never `toolText`. The tool return embeds the child's
+        // own prose, so scoring the answer against it asks whether the answer contains
+        // itself — and it always does: 13/13, 12/12, 10/10 across the pre-fix run and
+        // 13/13, 4/4, 2/2 across the re-run, 54 answers with not one miss, while one of
+        // them shipped `decodeFile`, which aeson 2 does not have. A record written
+        // before `retrievedText` existed cannot be scored for this at all, and saying so
+        // is the only honest thing to print.
+        const corpus = r.retrievedText ?? ''
         if (corpus.length === 0) continue
         // An abstention makes no claim, so it can neither invent a symbol nor be
         // scored for not inventing one. Counting it clean inflates the rate with
@@ -285,7 +292,13 @@ function render(reps: ProjectReport[]): string {
         L.push(`| refusals, research phases | ${r.refusalsInResearch} |`)
         L.push(`| abstentions ("unclear") | ${r.abstentions} |`)
         L.push(`| retrieval recall | ${r.recall.hit}/${r.recall.of} |`)
-        L.push(`| answers with 0 invented symbols | ${r.fidelity.clean}/${r.fidelity.of} |`)
+        L.push(
+            `| answers with 0 invented symbols | ${
+                r.fidelity.of === 0 ?
+                    'not scoreable — log has no `retrievedText`'
+                :   `${r.fidelity.clean}/${r.fidelity.of}`
+            } |`
+        )
         L.push(`| web lookup after a docs call | ${r.webAfterDocs.length} |`)
         L.push(
             `| pins intact | ${Object.values(r.pins).filter(p => p.ok).length}/${Object.keys(r.pins).length} |`
@@ -317,7 +330,7 @@ function checkTruth(runRoot: string): void {
         for (const t of TRUTH) {
             if (!(t.pkg in spec.pins)) continue
             const root = path.join(runRoot, spec.id)
-            let found = false
+            let found: boolean
             try {
                 execFileSync(
                     'grep',

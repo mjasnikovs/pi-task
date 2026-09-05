@@ -1,104 +1,120 @@
-Fix the six docs-tool defects found by the live run on branch `docs-live-test`.
+Re-run the live docs test across TypeScript, Rust and Haskell, and score it against the
+pre-fix baseline.
 
-Read `DOC_REGRESSINONS.md` first — it has the evidence for every claim below. The runs'
-recorded answers are in `live-docs-run-2026-09-05/`; use them, do not re-run a lookup.
+Run it end to end without stopping to ask. It is 3-4 hours of container time; launch it,
+watch it, and report at the end. I am around the whole time — ask if something is genuinely
+ambiguous or if a preflight check fails, but do not pause for permission on the steps below.
 
-## Rule: regression test first, and it must fail
+Read `DOC_REGRESSINONS.md` first. It has the whole loop — how to run it, the traps, the
+instrumentation, and every defect's evidence. Do not re-derive any of it.
 
-For each defect, write the test BEFORE the fix and prove it fails on the current tree.
-Show me the failing output. A test that passes before the fix is testing nothing — three
-of twelve mx5 tasks once scored PASS before the model wrote anything, and in this very
-run `cabal test` was green while `cabal build all` failed with four errors.
+## What changed since the baseline
 
-Unit tests fake every spawn and registry, which is what makes them safe on Windows and
-offline — and also what let all six of these ship. So each test must pin the SPECIFIC
-observation from the report, not the general shape.
+All six defects are fixed and published as `@mjasnikovs/pi-task@0.40.2` (branch
+`docs-live-test`, commit `5109222`, tag `v0.40.2`). The fixes were verified by replaying
+recorded data and the runs' own caches. **They have never been through a live run.** That
+is what this session is for.
 
-Work through them in this order. Stop after each and tell me the before/after.
+## Rule: the container must run the fixed build
 
-## 1. Backticked filenames are installed from npm as packages
+The single most expensive mistake available here is measuring the wrong tree. Check it
+first, before anything else:
 
-`src/task/enrichment.ts` — `ENRICH_PKG_RE` treats any backticked lowercase identifier as
-a package name; `ENRICH_DENYLIST` holds only shell commands. Ten real installs happened:
-`config.ts`, `app.ts`, `tsconfig.json`, `config.json`, `name`, `port`, `lib`, `fetch`.
-
-Test: `extractEnrichTargets` over a spec of the shape these runs produce must return none
-of those eight. Reproduce the exact string from the report.
-
-Fix direction: enrich only names present in `declaredDeps(cwd)` (already on
-`EcosystemProfile`). That is a behaviour change — a package legitimately named in prose
-but not yet installed stops being enriched. Say so plainly and let me weigh it.
-
-## 2. Answers about undeclared transitive dependencies
-
-Caused the Rust HARD FAIL: the tool answered correctly about `tower::util::ServiceExt`,
-the model imported it, and the crate does not compile because `tower` is in `Cargo.lock`
-but not `[dependencies]`. Same hazard on npm — `resolvePackage` walks `node_modules`,
-which is the full transitive closure. Measured: 23 declared deps, 106 answerable packages.
-
-Test: both ecosystems. A package resolvable but not declared must be marked in the result.
-
-Fix direction: not a refusal — the answer is often still useful. Carry the fact into the
-version banner (`buildVersionBanner`, `src/workers/docs-core.ts`): present transitively,
-not a declared dependency, add it before importing. Same `declaredDeps` source as #1.
-
-## 3. Retrieval cannot follow a type alias
-
-hono declares every HTTP verb as a property typed by an interface alias; the call
-signatures live in `HandlerInterface`, in one chunk of 708, in a different file. Three of
-six hono lookups abstained — correctly, given what they were handed.
-
-Test: retrieve for a hono-shaped query and assert both the alias chunk and its definition
-come back.
-
-This is the hardest of the six and may not be worth its cost. Investigate first and tell
-me what a fix would take before writing one — one alias hop on the top-ranked chunks, or a
-wider budget, or neither.
-
-## 4. Ranking misses content that is indexed
-
-Seven scotty attempts never produced `json`'s signature while `ActionM` sat in 67 of 312
-indexed chunks. Reproduced offline: `the handler monad` and `handler type for a route`
-miss; longer queries hit.
-
-Test: the short-query cases from the report must retrieve the declaration.
-
-Related to #6 — fix that first and re-measure this before changing any ranking.
-
-## 5. A dead major is indexed as current
-
-414 of zod's 2565 chunks are `v3/`. An answer reproduced zod 3's
-`email(message?): ZodString` under a `Per zod@4.5.4:` header, omitting the
-`@deprecated Use z.email() instead` line directly above the real declaration.
-
-Test: index a package with a back-compat major directory; assert no chunk comes from it.
-
-## 6. Every `.d.cts` is a second copy of its `.d.ts`
-
-zod: 2565 chunks, 1215 distinct bodies. `isDtsFile` accepts `.d.ts|.d.mts|.d.cts`. hono
-ships no `.d.cts` and has 704/708 distinct, which is what makes the cause unambiguous.
-
-Test: a fixture shipping both must index each declaration once.
-
-Careful: a package that ships ONLY `.d.cts` must still work. Compare chunk BODIES, not
-rows — the chunker prepends a path-comment line, so `select distinct content` reports zero
-duplication.
-
-## When the fixes are in
-
-Re-run the live check end to end and compare against `live-docs-run-2026-09-05/AUDIT.md`:
-
-```
-bun scripts/docs-live-seed.ts  <root>
-bun scripts/docs-live-run.ts   <root>/hs <root>/hs/FEATURE.txt   # in the container
-bun scripts/docs-live-build.ts <root>
-bun scripts/docs-live-audit.ts <root> --build
+```bash
+docker start mx5-n
+docker exec mx5-n bash -lc 'node -p "require(process.env.HOME+\"/.pi/agent/npm/node_modules/@mjasnikovs/pi-task/package.json\").version"'
 ```
 
-Haskell is the one that matters — it failed hardest and had no model knowledge to fall
-back on. `bun run test` must stay green (4280 pass); `bun test` alone fails 345, the
-`--isolate` in `bun run test` is load-bearing.
+It must print `0.40.2` or later. **As of writing it prints `0.40.1`, which is the tree the
+defects were found in** — so upgrade it first and check again:
 
-Harness facts you will need: `/task-auto` can only be driven by tmux `send-keys` — `pi -p`
-dispatches no commands, and the remote bridge dies on `newSession` after planning. pi needs
-about 25 seconds to boot before the prompt accepts a line.
+```bash
+docker exec mx5-n bash -lc 'cd ~/.pi/agent/npm && npm i @mjasnikovs/pi-task@0.40.2 --no-audit --no-fund --loglevel=error'
+```
+
+Then confirm the fixes are actually in that build, not just the version string:
+
+```bash
+docker exec mx5-n bash -lc 'D=$HOME/.pi/agent/npm/node_modules/@mjasnikovs/pi-task/dist/workers
+  grep -l dropDeadMajors $D/docs-index.js
+  grep -l dropParallelDeclarations $D/docs-index.js
+  grep -l hopNames $D/docs-retrieve.js
+  grep -l manifestDeps $D/docs-ecosystems.js'
+```
+
+Four paths, or stop.
+
+## Start cold
+
+The container's `~/.cache/pi-worker/docs.sqlite` still holds the baseline run's index —
+including zod at 2565 chunks, scotty at 312, and the ten packages that should never have
+been installed. Reusing it would hide defects 1, 5 and 6 entirely, because the freshness
+hash decides per package and the new file-selection rule is what forces a rebuild.
+
+Move it aside rather than deleting it; it is evidence:
+
+```bash
+docker exec mx5-n bash -lc 'mv ~/.cache/pi-worker/docs.sqlite ~/docs.sqlite.prefix-baseline'
+```
+
+## Run it
+
+Follow `DOC_REGRESSINONS.md` sections 1 through 4 exactly. One run at a time — a single
+local model serves every child, so parallel runs contend and neither duration means
+anything. Budget 3-4 hours.
+
+Haskell is the run that matters. It failed hardest and the model had no knowledge to fall
+back on.
+
+## What to check when it is done
+
+Compare against `live-docs-run-2026-09-05/AUDIT.md`. The pre-fix baseline is:
+
+| | TypeScript | Rust | Haskell |
+|---|---|---|---|
+| verdict | PASS | HARD FAIL | HARD FAIL |
+| abstained | 4 (24%) | 5 (29%) | 12 (55%) |
+| build/test | green | RED | RED |
+
+Five specific things, each tied to a defect. None of these is a prediction — they are what
+to look at:
+
+1. **The cache `packages` table must hold no filenames.** Ten appeared last time —
+   `config.ts`, `app.ts`, `tsconfig.json`, `config.json`, `name`, `port`, `lib`, `fetch`.
+   The query is in `DOC_REGRESSINONS.md` section 4. Anything there that is not a real
+   dependency is a finding.
+2. **`rs` build.** The baseline failed on `use tower::util::ServiceExt` where `tower` is
+   a lock entry, not a declared dependency. The answer should now carry a `[DEPENDENCY]`
+   warning. Check whether the model heeded it — the warning existing and the model
+   ignoring it are two different results, and only the trail can tell them apart.
+3. **hackage abstention, was 55%.** The largest number in the report. Read the scotty
+   answers themselves, not the rate: did any lookup deliver
+   `json :: ToJSON a => a -> ActionM ()`? Seven consecutive attempts missed it last time.
+4. **hono abstention, was 3 of 6.** Did a lookup return `HandlerInterface`'s call
+   signatures alongside the `get:` alias?
+5. **zod's chunk count.** Measured at 1078 offline, from 2565. If the container reports
+   2565 the cache was not rebuilt and points 1-4 mean nothing.
+
+## Read the answers, not the table
+
+Every finding in the baseline report came from reading the `toolText` of individual
+records, not from the summary. Do the same. A green run does not mean the docs tool worked
+— it means its failures were survivable that time.
+
+## Two known-open cases
+
+Do not report these as new:
+
+- A query naming no proper noun (`the handler monad`, `handler type for a route`) still
+  misses. The definition hop is name-directed and has nothing to chase.
+- The 8-minute settle rule can cut the final gate. Tasks and tree are still scoreable.
+
+## If you find something
+
+Regression test first, and prove it fails on the current tree before writing the fix. Show
+the failing output. Unit tests fake every spawn and registry, which is what makes them safe
+offline and also what let all six original defects ship — so pin the specific observation,
+not the general shape.
+
+`bun run test` must stay green (4297 pass). `bun test` alone fails 345; the `--isolate` in
+`bun run test` is load-bearing.

@@ -42,15 +42,23 @@ export const README_SPLIT_RE = /^#{1,2} /m
 export function splitAtMatches(text: string, re: RegExp): string[] {
     const parts: string[] = []
     let lastIndex = 0
+    let acceptedEnd = 0
     let m: RegExpExecArray | null
     while ((m = re.exec(text))) {
+        // Scan resumes ONE character in, not past the match: the regex's trailing
+        // `\s+` can span a newline, so a genuinely separate line-anchored
+        // declaration may start inside what this match consumed.
+        re.lastIndex = m.index + 1
+        // But a match that starts inside the last ACCEPTED one is that match's own
+        // tail, not a new declaration, and cutting there severs a declaration from
+        // the modifiers and attributes that open it. `export\nfunction a(){}` is
+        // one declaration; so is a cargo `#[cfg(…)]` above its `impl`, which
+        // CARGO_DECL_SPLIT_RE absorbs on purpose and this used to hand back as a
+        // chunk holding nothing but the attribute.
+        if (m.index < acceptedEnd) continue
         if (m.index > lastIndex) parts.push(text.slice(lastIndex, m.index))
         lastIndex = m.index
-        // Advance by ONE, not by the match length. The regex's trailing `\s+` can
-        // span a newline, so the next line-anchored declaration may start INSIDE
-        // what this match consumed: `export\nfunction a(){}` is two chunks here
-        // and one if the scan resumes past the match.
-        re.lastIndex = m.index + 1
+        acceptedEnd = m.index + m[0].length
     }
     if (lastIndex < text.length) parts.push(text.slice(lastIndex))
     return parts.length ? parts : [text]

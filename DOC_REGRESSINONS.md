@@ -867,3 +867,134 @@ The table above is the pre-fix baseline. Nothing here is a prediction — it is 
 - **zod's index, 2565 chunks.** Measured at 1078 on the fixed tree, so every zod lookup
   ranks against current, deduplicated content for the first time.
 - **The cache `packages` table.** It must hold no filenames. Ten appeared last time.
+
+---
+
+---
+
+# Re-run, 2026-09-05, on the fixed build
+
+`live-docs-rerun-2026-09-05/` holds the recorded answers, builds and audit.
+Container `mx5-n`, `@mjasnikovs/pi-task@0.40.2`, model Qwen3.8-27B on llama.cpp
+`b10734-d5d993a09`. Both caches — `docs.sqlite` and the `docs-modules/` scratch
+install — were moved aside first, so nothing was served from a cache the defects
+built.
+
+| | ts (npm) | rs (cargo) | hs (hackage) |
+|---|---|---|---|
+| verdict | PASS (was PASS) | PASS (was HARD FAIL) | PASS (was HARD FAIL) |
+| abstained | 1/14, 7% (was 24%) | 1/5, 20% (was 29%) | 8/10, 80% (was 55%) |
+| build/test | green | green (was RED) | green (was RED) |
+| pins intact | 2/2 | 3/3 | 2/2 |
+
+## The five checks
+
+1. **No filenames in the cache.** Five packages indexed, every one a real
+   dependency. The pre-fix scratch manifest, recovered before it was archived,
+   held **45** — not the ten the report recorded. `config.ts`, `tsconfig.json`,
+   `package.json`, `name`, `port`, `lib`, `fetch`, `sql`, `photo`, `phone` and the
+   rest are in `live-docs-rerun-2026-09-05/prefix-enrich-manifest.json`.
+2. **`rs` undeclared deps — NOT EXERCISED.** The run never reached for `tower`
+   this time; it declared `serde` before importing it and built green. The
+   `[DEPENDENCY]` warning therefore had nothing to fire on. The failure did not
+   recur, and the fix was not tested. Those are different results.
+3. **hackage abstention rose, 55% → 80%, and the cause is not the docs tool.** The
+   run never asked about scotty at all. Seven of ten lookups chased `decodeFile`,
+   which aeson 2 does not export — the model invented the name and re-asked it six
+   times. Abstaining is the correct answer to a question about a symbol that does
+   not exist. The rate is worse and the tool is not why.
+4. **hono — MET.** `HandlerInterface`'s call signature came back alongside the
+   `get:` alias, in one lookup: `(path: P, handler: H<E2, MergedPath, I, R>) =>
+   HonoBase<E, …>`. That is the exact miss that cost three abstentions pre-fix.
+   All three hono lookups answered.
+5. **zod at 1078 chunks**, from 2565. The rebuild happened.
+
+## What the re-run found — three new defects
+
+### 7. A chunk was cut in half by a match INSIDE a match — FIXED
+
+`splitAtMatches` advances the scan by one character so a line-anchored declaration
+inside a consumed match is not skipped. It then also **cut** at those inner
+matches, severing a declaration from the modifiers that open it.
+
+`CARGO_DECL_SPLIT_RE` absorbs leading `#[…]` attributes precisely so an attribute
+stays with its item. The inner re-match at the bare `impl` line undid it, and the
+attribute was emitted as a chunk of its own — a file header and a dangling
+attribute, no declaration:
+
+```
+// src/core/de/value.rs
+#[cfg(any(feature = "std", feature = "alloc"))]
+```
+
+serde 1.0.229 held **19 byte-identical copies** of that one, and 98 duplicate
+bodies over 448 chunks. Each is a candidate for the eight-chunk retrieval budget.
+Two identical `KeyMap` chunks took two of the eight slots on a real aeson lookup
+in this run.
+
+Measured on the fixed build, same packages, fresh cache:
+
+| | chunks | duplicate bodies |
+|---|---|---|
+| serde | 448 → **297** | 98 → **0** |
+| axum | 475 → **381** | 27 → **0** |
+| serde_json | 339 → **288** | 24 → **0** |
+| zod, hono | unchanged | 0 → 0 |
+
+Byte totals hold (serde 214,508 → 211,018): what went was 151 duplicated `//
+path` headers, not content. `export\nfunction a(){}` is now one chunk too, which
+is what it always was.
+
+The fix refuses to cut at a match that begins inside the last accepted one.
+
+### 8. The index hash did not cover the chunker — FIXED
+
+`computeContentHash`'s own docstring says "The CHUNKER counts too". It did not.
+The hash carried `profile.declSplitRe.source`, and defect 7 lived in
+`splitAtMatches`, so the fingerprint would not have moved for the fix above and
+every already-indexed package would have kept its dangling attribute chunks
+forever. The chunker's source is now in the hash.
+
+This is the same class as the earlier "index hash missed the chunker", recurring
+one level down: a docstring asserting a property the code does not have.
+
+### 9. `answers with 0 invented symbols` is a verify that cannot fail — INSTRUMENTED
+
+The audit scored each answer's backticked symbols against `toolText`. `toolText`
+is the **entire** tool return, and the answer prose is part of it — so the check
+asked whether each answer contained itself. It always did:
+
+| | ts | rs | hs |
+|---|---|---|---|
+| pre-fix run | 13/13 | 12/12 | 10/10 |
+| this run | 13/13 | 4/4 | 2/2 |
+
+54 answers across two independent runs, not one miss, while one of them shipped
+```` `decodeFile` ```` — a function aeson 2 does not have — in backticks, and said
+in the same breath that it "lives in `Data.Aeson` in reality".
+
+Removing the answer from the corpus is **not** the fix, and this was measured
+before it was written: what remains is the child's own *cited* excerpt, a line or
+two, and it flags `from_str`, `Context` and `safeParse` as invented. Both corpora
+are wrong. The one the question needs is the retrieved chunk text handed to the
+extraction child, which no log written before this session recorded.
+
+`retrievedText` is now on the log record and written at both call sites. Until a
+run is recorded with it the audit prints `not scoreable`, which is the only
+honest thing it can print. The row in `live-docs-run-2026-09-05/AUDIT.md` should
+be read as unmeasured, not as clean.
+
+## Still open
+
+- **aeson keeps 55 duplicate bodies** after defect 7. Different component: the
+  hackage surface extractor truncates a multi-line instance head to its first
+  line, so `instance {-# OVERLAPPING #-}` — whose type sits on the indented
+  continuation at `FromJSON.hs:1337` — becomes a content-free chunk. 4% of the
+  package, all internal generic machinery, no public API lost. Not fixed.
+- **A query whose key symbol does not exist in the corpus cannot be answered.**
+  FTS matches whole tokens, so `decodeFile` matches nothing when only
+  `decodeFileStrict` is indexed, and `Data.Aeson` tokenises to `Data` + `Aeson`,
+  which every chunk in the package carries. Nothing in such a query discriminates.
+  Stripping English stopwords was tested and **refuted** — it moves the failure to
+  a different wrong file rather than fixing it. This is what cost hs seven
+  lookups.

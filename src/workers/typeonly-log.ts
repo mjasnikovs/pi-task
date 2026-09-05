@@ -67,6 +67,19 @@ export interface TypeOnlyLogRecord {
      */
     excerptCheck?: ExcerptVerification
     /**
+     * The retrieved chunk text handed to the extraction child, before it wrote a word.
+     *
+     * `toolText` cannot stand in for it. The tool return embeds the child's own prose,
+     * so scoring that prose against it asks whether the answer contains itself — two
+     * full runs read 13/13, 12/12, 10/10, 13/13, 4/4 and 2/2 clean, 54 answers and not
+     * one miss, while one of them shipped `decodeFile`, which aeson 2 does not have.
+     * Removing the prose leaves only the child's own CITED excerpt, a line or two, and
+     * flags `from_str` and `Context` as invented. Neither corpus is the one the question
+     * needs; this is. Optional — records written before it still parse, and a scorer
+     * must say "not computable" rather than guess when it is absent.
+     */
+    retrievedText?: string
+    /**
      * The tool's ENTIRE return text — version banner, npm header, the answer prose, the cited
      * excerpt, and (when it fires) the type-only banner. Optional so logs written before this
      * field existed still parse.

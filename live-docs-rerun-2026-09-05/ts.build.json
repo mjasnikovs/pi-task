@@ -1,0 +1,5 @@
+{
+  "ok": true,
+  "cmd": "bun test",
+  "output": "bun test v1.4.2 (744846f84)\n"
+}

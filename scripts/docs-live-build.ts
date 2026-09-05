@@ -21,7 +21,7 @@ function record(runRoot: string): void {
         const dir = path.join(runRoot, spec.id)
         if (!fs.existsSync(dir)) continue
         let ok = true
-        let output = ''
+        let output: string
         try {
             // execSync, not execFileSync: the Haskell command is a `&&` chain,
             // because compiling the source and running the tests are two steps

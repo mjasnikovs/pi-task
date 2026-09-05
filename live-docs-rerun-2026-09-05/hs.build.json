@@ -1,0 +1,5 @@
+{
+  "ok": true,
+  "cmd": "cabal build all && cabal test",
+  "output": "Build profile: -w ghc-9.10.3 -O1\nIn order, the following will be built (use -v for more details):\n - docs-live-hs-0.1.0.0 (lib) (configuration changed)\nConfiguring library for docs-live-hs-0.1.0.0...\nPreprocessing library for docs-live-hs-0.1.0.0...\nBuilding library for docs-live-hs-0.1.0.0...\nBuild profile: -w ghc-9.10.3 -O1\nIn order, the following will be built (use -v for more details):\n - docs-live-hs-0.1.0.0 (test:spec) (configuration changed)\nConfiguring test suite 'spec' for docs-live-hs-0.1.0.0...\nPreprocessing test suite 'spec' for docs-live-hs-0.1.0.0...\nBuilding test suite 'spec' for docs-live-hs-0.1.0.0...\nRunning 1 test suites...\nTest suite spec: RUNNING...\nTest suite spec: PASS\nTest suite logged to:\n/home/agent/docs-live/run/hs/./dist-newstyle/build/x86_64-linux/ghc-9.10.3/docs-live-hs-0.1.0.0/t/spec/test/docs-live-hs-0.1.0.0-spec.log\n1 of 1 test suites (1 of 1 test cases) passed.\n"
+}
