@@ -153,6 +153,25 @@ const SEEDERS: Record<ProjectSpec['id'], (root: string, pins: Record<string, str
 }
 
 /**
+ * The build directory each ecosystem writes into.
+ *
+ * autoCommit is on in the runner, so anything untracked at seed time is committed by
+ * the first task. Without this the 2026-09-06 re-run tracked 1397 files under
+ * `node_modules/`, and from then on every build a child ran dirtied graded state and
+ * the git-state guard discarded its verify.
+ */
+const BUILD_DIR: Record<string, string> = {
+    npm: 'node_modules/',
+    cargo: 'target/',
+    hackage: 'dist-newstyle/'
+}
+
+export function writeGitignore(root: string, ecosystem: string): void {
+    const dir = BUILD_DIR[ecosystem]
+    if (dir) write(root, '.gitignore', dir)
+}
+
+/**
  * A git repo per fixture, because autoCommit is on in the runner and a task-auto
  * run with no repo behaves differently from every real one.
  */
@@ -173,6 +192,7 @@ function seed(runRoot: string, only: ReadonlySet<string>): void {
         console.log(`\n=== ${spec.id} (${spec.ecosystem}) → ${root}`)
         SEEDERS[spec.id](root, spec.pins)
         write(root, 'FEATURE.txt', FEATURES[spec.id])
+        writeGitignore(root, spec.ecosystem)
         initGit(root)
         const pins = Object.entries(spec.pins)
             .map(([k, v]) => `${k}@${v}`)
