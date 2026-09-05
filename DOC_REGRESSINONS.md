@@ -754,10 +754,20 @@ The compiler's own diagnostic is the tell: it knows the trait *is implemented* f
 and suggests the exact import the model already wrote. The code is right about the API and
 wrong about the manifest, and the docs answer is what made that combination look safe.
 
-**This is not cargo-specific.** `resolvePackage` walks `node_modules`, which likewise holds
-the entire transitive closure. An npm project can ask about — and get a confident answer
-about — a package that is present on disk only because something else depends on it, and
-that it must not import.
+**This is not cargo-specific — measured, not inferred.** `resolvePackage` walks
+`node_modules`, which likewise holds the entire transitive closure. On a real project in
+the same container (23 declared dependencies, 141 packages on disk):
+
+```
+plain undeclared packages on disk: 106
+  ANSWERED about undeclared ms@2.1.0          (chunks=4)
+  ANSWERED about undeclared debug@4.1.13      (chunks=1)
+  ANSWERED about undeclared picocolors@1.1.1  (chunks=2)
+```
+
+Three for three, full answers, no warning. A project with 23 declared dependencies exposes
+**106** packages the docs tool will confidently describe and that the project must not
+import.
 
 **The fix has a natural shape.** Each ecosystem profile already has `declaredDeps(cwd)`,
 distinct from what `resolve` finds. A package resolvable but not declared is exactly the
