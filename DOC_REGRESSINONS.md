@@ -585,3 +585,80 @@ returning nothing usable, repeatedly, for a mainstream library.
 It also generalises past hono. Any package that types its public surface through interface
 aliases or generic indirection — which is most modern TypeScript — puts its real
 signatures one hop away from the name a query matches.
+
+## Harness limitation: the settle rule cuts the final gate
+
+The driver calls a run settled after 8 minutes of no trail growth. The TypeScript run hit
+that while the final gate was still on screen:
+
+```
+settled (quiet 8m) tasks=6 done=6
+TASK_AUTO_0001  state: in_progress
+no final-gate-debug.log
+```
+
+All six tasks completed and committed, so every docs call the run would ever make had
+already happened — those all occur in per-task research. What is missing is the final gate's
+own verdict, which is pipeline quality, not docs sufficiency.
+
+Left at 8 minutes for all three runs rather than raised mid-sequence, because a bound that
+differs between them would make the three incomparable for the sake of a number the audit
+does not read. The limitation is stated instead of papered over: **these runs are scored on
+their tasks and their tree, not on a final-gate verdict.**
+
+The underlying cause is known — the gate can sit for minutes without writing the trail. A
+progress signal, not a clock, is what this needs; the clock is the expedient here and is
+recorded as such.
+
+---
+
+# Result: TypeScript — PASS
+
+```
+docs calls (trail)                 16
+docs answers (jsonl)               17
+refusals, research phases           0
+abstentions ("unclear")             4
+retrieval recall                  4/4
+answers with 0 invented symbols  13/13
+web lookup after a docs call        0
+pins intact                       2/2
+stale-major API                  none
+bun test              2 pass, 0 fail
+```
+
+Six tasks, 86 minutes, all committed. The delivered code is correct:
+
+```ts
+// config.ts
+adminEmail: z.email(),                       // zod 4 form, not z.string().email()
+
+// app.ts
+export const app = new Hono();
+app.get("/config", async (c) => {
+  const result = await loadConfig();
+  if (result.ok) return c.json(result.config);
+  return c.json(result.issues, 400);         // .issues, not .errors
+});
+```
+
+Both stale-major traps avoided. `z.email()` where the docs answer confirmed the deprecated
+`z.string().email()`, and `.issues` where zod 3 would have said `.errors`.
+
+**And that is the finding, stated the way it actually happened.** Three of seventeen docs
+calls returned nothing usable, and one returned a wrong signature for a deprecated API
+presented as confirmed — yet the model wrote correct, idiomatic hono and zod 4 without
+them. It never fell back to a web search either.
+
+So the answer to "were the docs answers sufficient" is split, and both halves matter:
+
+- **As an instrument, the docs tool underperformed.** Three hard non-answers on hono, one
+  wrong answer on zod, on a task that is about as mainstream as TypeScript gets.
+- **As a pipeline, pi-task was not blocked by it.** The model had enough from elsewhere —
+  its own knowledge of hono 4, and the deprecation *convention* it did see — to produce a
+  passing artifact.
+
+The second half is not a defence of the first. A tool that can be ignored without
+consequence on an easy task is a tool whose failures will surface on a hard one, where the
+model has nothing to fall back on. The Rust and Haskell runs are exactly that harder case:
+axum 0.8 and scotty 0.30 are far outside a 27B local model's confident knowledge.
