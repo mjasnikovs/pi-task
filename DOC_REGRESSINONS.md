@@ -3,6 +3,240 @@
 Working notes for the live docs test across TypeScript, Rust and Haskell.
 Everything below was checked on this machine, not assumed.
 
+---
+
+# How to run this loop again
+
+The whole point of this exercise is that it is repeatable. Run it after any docs-tool
+change and diff the numbers against `live-docs-run-2026-09-05/AUDIT.md`.
+
+Five scripts. They live in `scripts/` and nothing in them runs on import, so
+`bun run test` globbing `scripts/` stays green.
+
+```
+docs-live-truth.ts   the pins, the ground-truth symbols, the stale-major markers (data only)
+docs-live-seed.ts    creates the three greenfield projects with deps installed
+docs-live-run.ts     drives one project through a real /task-auto in tmux
+docs-live-build.ts   records each project's build verdict where the toolchains are
+docs-live-audit.ts   scores the recorded answers and writes AUDIT.md
+```
+
+## 0. The runner
+
+Use the `mx5-n` container. It is already `yoloMode: true`, `debugLogs: "full"`,
+`autoCommit: true`, on the host network, and can reach the local model. Do not run this on
+the host: the runs write to `~/.cache/pi-worker/docs.sqlite`, and inside the container that
+is isolated from your real 300 MB cache for free.
+
+```bash
+docker start mx5-n
+```
+
+Check it has what it needs — the first time, it had none of this:
+
+```bash
+docker exec mx5-n bash -lc 'for c in pi bun node cargo ghc cabal tmux; do
+  printf "%-6s %s\n" "$c" "$(command -v $c || echo MISSING)"; done'
+```
+
+Provision anything missing. `sudo` and the network both work inside:
+
+```bash
+# pi-task — MUST match the tree you are testing, or you measure the wrong build
+docker exec mx5-n bash -lc 'cd ~/.pi/agent/npm && npm install @mjasnikovs/pi-task@<version>'
+
+# bun, rust
+docker exec mx5-n bash -lc 'curl -fsSL https://bun.sh/install | bash'
+docker exec mx5-n bash -lc 'curl --proto "=https" -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --no-modify-path'
+
+# ghc — three steps, and NOT from get-haskell.ghcup.haskell.org (does not resolve here)
+docker exec mx5-n bash -lc 'sudo apt-get install -y build-essential libffi-dev libgmp-dev libncurses-dev pkg-config'
+docker exec mx5-n bash -lc 'curl -sSf https://raw.githubusercontent.com/haskell/ghcup-hs/master/scripts/bootstrap/bootstrap-haskell -o /tmp/bh.sh && BOOTSTRAP_HASKELL_NONINTERACTIVE=1 sh /tmp/bh.sh'
+docker exec mx5-n bash -lc '~/.ghcup/bin/ghcup install ghc --set recommended && ~/.ghcup/bin/ghcup install cabal --set recommended && . ~/.ghcup/env && cabal update'
+```
+
+GHC takes 15-25 minutes and downloads about 3 GB. Start it in the background and build the
+scripts while it runs.
+
+## 1. Refresh the pins, then seed
+
+Open `scripts/docs-live-truth.ts` and check the pinned versions are still the current
+majors. The point of a pin is that the model predates it; a stale pin measures nothing.
+Check the registries directly rather than trusting the table:
+
+```bash
+curl -s https://registry.npmjs.org/zod | jq -r .\"dist-tags\".latest
+curl -s -H 'User-Agent: pi-task-live' https://crates.io/api/v1/crates/axum | jq -r .crate.max_stable_version
+curl -s -H 'Accept: application/json' https://hackage.haskell.org/package/scotty/preferred | jq -r '."normal-version"[0]'
+```
+
+Watch for solver conflicts when you bump. `scotty 0.30` caps `aeson < 2.3`, so the aeson
+pin is the newest scotty allows, not the newest that exists — the report says so where it
+matters and a run must not silently claim otherwise.
+
+```bash
+docker exec mx5-n bash -lc 'mkdir -p /home/agent/docs-live/scripts'
+for f in truth seed run build audit; do
+  docker cp scripts/docs-live-$f.ts mx5-n:/home/agent/docs-live/scripts/
+done
+
+docker exec mx5-n bash -lc 'export PATH="$HOME/.bun/bin:$HOME/.cargo/bin:$PATH"; . ~/.ghcup/env
+  cd /home/agent/docs-live && bun scripts/docs-live-seed.ts /home/agent/docs-live/run'
+```
+
+Seeding installs each project's dependencies, so the runs measure docs and code rather
+than package-manager latency. The Haskell one compiles a real dependency tree and takes
+10-20 minutes on a cold cabal store.
+
+## 2. Pre-flight: prove the tool resolves before spending three hours
+
+```bash
+docker exec mx5-n bash -lc 'cat > /tmp/probe.mjs <<"EOF"
+const base = "/home/agent/.pi/agent/npm/node_modules/@mjasnikovs/pi-task/dist/workers"
+const {docsRaw} = await import(base + "/docs-core.js")
+for (const [cwd, pkg] of [
+  ["/home/agent/docs-live/run/ts", "zod"], ["/home/agent/docs-live/run/ts", "hono"],
+  ["/home/agent/docs-live/run/rs", "axum"], ["/home/agent/docs-live/run/rs", "serde_json"],
+  ["/home/agent/docs-live/run/hs", "aeson"], ["/home/agent/docs-live/run/hs", "scotty"]]) {
+  const r = await docsRaw({pkg, query: "core API", cwd, npmVersionLookup: () => Promise.resolve(null)})
+  console.log(r.kind === "ok"
+    ? `ok    ${pkg} ${r.pkg.ecosystem} ${r.pkg.name}@${r.pkg.version} chunks=${r.chunks.length}`
+    : `FAIL  ${pkg} ${r.kind} ${r.resolveError ?? ""}`)
+}
+EOF
+XDG_CACHE_HOME=/home/agent/docs-live/cache node /tmp/probe.mjs'
+```
+
+Every line must be `ok` and every version must equal its pin. A `FAIL` here is a fixture
+problem, not a finding — fix it before running.
+
+Also verify the scorer, in both directions, before you trust a single number it prints.
+Hand-write one tree using each stale marker and confirm HARD FAIL, then a correct tree and
+confirm PASS. A verify that cannot fail is not a verify; a scorer that fails correct code
+is just as useless.
+
+## 3. Run
+
+`/task-auto` can only be driven through a real terminal. `pi -p` dispatches no commands at
+all, and the remote bridge reaches the handler but dies on `newSession` *after* planning —
+both cost a full run to discover. `docs-live-run.ts` uses tmux `send-keys`, which is the
+path a user actually takes.
+
+```bash
+cat > /tmp/run.sh <<'SH'
+#!/bin/bash
+id="$1"; tmo="$2"
+export PATH="$HOME/.bun/bin:$PATH"
+export PI_TASK_TYPEONLY_LOG=/home/agent/docs-live/$id.jsonl
+export PI_TASK_DEBUG_LOG=full
+cd /home/agent/docs-live
+exec bun scripts/docs-live-run.ts /home/agent/docs-live/run/$id \
+     /home/agent/docs-live/run/$id/FEATURE.txt --timeout-min "$tmo" --quiet-min 8
+SH
+docker cp /tmp/run.sh mx5-n:/home/agent/docs-live/run.sh
+docker exec mx5-n bash -lc 'chmod +x /home/agent/docs-live/run.sh'
+
+# one at a time — one local model serves every child, so parallel runs contend
+# and neither duration means anything
+docker exec -d mx5-n bash -lc 'setsid bash -c "
+  for id in ts rs hs; do
+    /home/agent/docs-live/run.sh \$id 180 > /tmp/run-\$id.log 2>&1
+  done; echo SEQUENCE COMPLETE" > /tmp/chain.log 2>&1 < /dev/null'
+```
+
+Budget about 3-4 hours for all three. Watch it without polling:
+
+```bash
+docker exec mx5-n bash -lc 'for id in ts rs hs; do R=/home/agent/docs-live/run/$id
+  echo "$id tasks=$(ls $R/.pi-tasks/TASK_0*.md 2>/dev/null|wc -l) \
+done=$(grep -l "^state: completed" $R/.pi-tasks/TASK_0*.md 2>/dev/null|wc -l) \
+docs=$(wc -l < /home/agent/docs-live/$id.jsonl 2>/dev/null||echo 0)"; done'
+```
+
+**Verify the environment actually reached pi.** `tmux new-session` inherits the tmux
+*server's* environment, not the client's, so a server left running from an earlier shell
+silently drops your variables and the answer log stays empty:
+
+```bash
+docker exec mx5-n bash -lc 'for p in $(pgrep -x pi); do
+  cat /proc/$p/environ 2>/dev/null | tr "\0" "\n" | grep PI_TASK && break; done'
+```
+
+Two details, both learned the hard way. Loop over every `pi` pid rather than taking the
+first: killed runs leave defunct `pi` processes behind, and `pgrep -x pi | head -1` picks
+one of those. And read the file with `cat`, not a redirect — `< /proc/$p/environ` fails in
+*bash*, before `2>/dev/null` on the command can suppress anything, so the screen fills with
+`Permission denied` that reads exactly like the variables being missing.
+
+## 4. Score
+
+The build runs where the toolchains are; the audit runs here. It reads what the run
+recorded and never re-runs a lookup — the same question has already returned different
+chunks on two machines, and a rescore that re-retrieves is a second measurement wearing
+the first one's name.
+
+```bash
+docker exec mx5-n bash -lc 'export PATH="$HOME/.bun/bin:$HOME/.cargo/bin:$PATH"; . ~/.ghcup/env
+  cd /home/agent/docs-live && bun scripts/docs-live-build.ts /home/agent/docs-live/run'
+
+RR=/tmp/liverun && mkdir -p $RR
+for id in ts rs hs; do
+  docker cp mx5-n:/home/agent/docs-live/run/$id $RR/$id
+  docker cp mx5-n:/home/agent/docs-live/$id.jsonl $RR/$id.jsonl
+  docker cp mx5-n:/home/agent/docs-live/run/$id.build.json $RR/$id.build.json
+done
+
+bun scripts/docs-live-audit.ts $RR --build
+```
+
+Then read the answers themselves. Every finding in this document came from reading the
+`toolText` of individual records, not from the summary table:
+
+```bash
+bun -e 'const fs=require("fs")
+for (const r of fs.readFileSync("/tmp/liverun/hs.jsonl","utf8").trim().split("\n").map(JSON.parse))
+  console.log(r.module, "|", r.unclear ? "ABSTAINED" : "answered", "|", r.query.slice(0,90))'
+```
+
+And read the cache's own `packages` table — defect 5 is visible *only* there, because the
+enrichment path calls `docsRaw` directly and only the tool wrapper writes the answer log:
+
+```bash
+docker exec mx5-n bash -lc 'node -e "
+const {DatabaseSync} = require(\"node:sqlite\")
+const db = new DatabaseSync(process.env.HOME + \"/.cache/pi-worker/docs.sqlite\")
+for (const r of db.prepare(\"select ecosystem,name,version,indexed_at from packages order by indexed_at\").all())
+  console.log(new Date(Number(r.indexed_at)).toISOString().slice(11,19), r.ecosystem, r.name, r.version)"'
+```
+
+Anything in that list that is not a real dependency is a finding.
+
+## Traps, all of which cost a run the first time
+
+| | |
+|---|---|
+| `pi -p "/task-auto …"` | dispatches nothing; the text goes to the model as a message |
+| the remote bridge | reaches the handler, then throws on `newSession` — *after* planning |
+| tmux `send-keys` | needs `-l`, Enter as a separate call, and ~25 s for pi to boot first |
+| tmux env | inherited from the *server*, not the client |
+| a file left in the tree | `worker:files` reads it as project source — keep captures outside |
+| `cabal test` | can be green while `cabal build all` fails; compile before you test |
+| the 8-minute settle | can cut the final gate; tasks and tree are still fully scoreable |
+| task count | has no cap. `granularityFloor` only pushes up, and renumbering a spec does not shrink it — ask for fewer deliverables |
+
+## What a result means
+
+Compare against `live-docs-run-2026-09-05/AUDIT.md`. The number that carries the signal is
+the **abstention rate per package**, not the pass/fail: npm 24%, cargo 29%, hackage 55%
+was the baseline, with aeson at 8 of 11.
+
+And read the verdict the right way round. TypeScript passed *with* three hono non-answers,
+because the model knew hono already. A green run does not mean the docs tool worked — it
+means the tool's failures were survivable that time. Haskell is the honest test, because
+there the model had nothing to fall back on.
+
+---
+
 ## Blockers found in the `mx5-n` container
 
 The container is the right runner — `yoloMode: true`, `debugLogs: "full"`,
