@@ -526,3 +526,62 @@ wrong and the legacy form where the docs were right.
 tree, and on this evidence it will pass. The defect is real, measured, and reproducible —
 and it did not, this time, reach the artifact. Both facts belong in the report. A finding
 that has to be inflated to matter is not worth having.
+
+## 3. Retrieval cannot follow a type alias — and hono aliases everything
+
+Three hono lookups in TASK_0004. **All three abstained.**
+
+```
+[7] hono  unclear=true   "Hono constructor, .get(path, handler), Context c.json(data, status?)"
+[8] hono  unclear=true   "JSONRespond definition — parameters and return type; HonoBase.get() signature"
+[9] hono  unclear=true   "hono-base.d.ts: the get() overload showing path and ...handlers"
+```
+
+Every one came back `unclear from this package`. And every one cited an excerpt that is
+the thing being asked about:
+
+```
+[7]  json: JSONRespond;
+[9]  get: HandlerInterface<E, 'get', S, BasePath, CurrentPath>;
+```
+
+That contradiction is not the bug — it is rule 4 of the extraction prompt working as
+written: *"write exactly `unclear from this package` and put the closest related text in
+`<excerpt>`."* Two of the three excerpts verified as genuine package content.
+
+**The child was right.** Neither excerpt contains a signature. hono declares every HTTP
+verb as a property whose type is an interface alias, and the call signatures live in the
+interface — a different declaration, in a different file:
+
+```
+dist/types/hono-base.d.ts   get: HandlerInterface<E, 'get', S, BasePath, CurrentPath>;
+dist/types/types.d.ts       export interface HandlerInterface<…> { <P extends string …>(…) }
+```
+
+`HandlerInterface`'s definition is in **exactly one chunk** of 708. Answering "what are the
+parameters of `app.get()`" needs that chunk *and* the `hono-base.d.ts` chunk. BM25 ranks
+the eight chunks independently; there is no step that says "this chunk names a type, fetch
+its definition too". So the lookup lands on the alias, the child sees a name where a
+signature should be, and abstains — correctly, given what it was handed.
+
+Retrieval was never the problem here, which is worth being precise about. Re-running the
+same queries directly returns the right files every time:
+
+```
+HIT  "JSONRespond"                                   -> context.d.ts ×3
+HIT  "Hono class constructor and get route"          -> index.d.ts, hono-base.d.ts, hono.d.ts …
+HIT  "HonoBase get method overload signature"        -> types.d.ts, router.d.ts, request.d.ts …
+HIT  "hono-base.d.ts get() declaration on HonoBase"  -> hono.d.ts, hono-base.d.ts ×2, types.d.ts …
+```
+
+The chunks arrive. They just do not arrive **together with the definitions they point at**,
+and a top-8 budget cannot afford to guess.
+
+**This is the one that answers the question the test was built to ask.** For hono, the docs
+answers were not sufficient: three lookups, three non-answers, on the task that needed
+hono most. Unlike the zod defect, this is not a subtle wrong detail — it is the tool
+returning nothing usable, repeatedly, for a mainstream library.
+
+It also generalises past hono. Any package that types its public surface through interface
+aliases or generic indirection — which is most modern TypeScript — puts its real
+signatures one hop away from the name a query matches.
