@@ -90,6 +90,13 @@ earlier fix in the same session had created.
    older npm-only limit sweep that said the plateau is 16 (it covered zod and hono
    only), and deriving the defines truth set from the index (124 pairs against
    101, for a circularity risk).
+
+   **And read this before filing anything as unfixable.** Defects 22 and 23 were
+   both filed with a mechanism and "no lever" — an FTS schema change, or splitting
+   class bodies and orphaning signatures. Both were closed by raising a constant
+   two functions away that nobody had measured: `scotty:scotty` 2/7 -> 7/7,
+   hackage 26/33 -> 33/33. Before writing "no lever", check the constants the
+   mechanism runs inside.
 2. **Run the defines harness before and after anything you change.** It is real
    now, with tests. `bun scripts/docs-defines.ts … --out a.jsonl` then
    `--compare a.jsonl b.jsonl` for an exact paired McNemar. Two arms means two
