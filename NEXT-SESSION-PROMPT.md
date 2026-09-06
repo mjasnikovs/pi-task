@@ -64,26 +64,34 @@ It does not pin the model, and a host model is not the container's.
 
 ## The work, in order — and when it runs out, go back to the top of the loop
 
-Defects 14, 16, 18, 20 and 21, the recall gate and five self-review bugs all
-closed in the 2026-09-06 session and shipped as **0.40.10**, **0.40.11** and
-**0.40.12**. Defects 19 and 22 are mechanised and have no lever. Their numbers are
-in `DOC_REGRESSINONS.md`; none needs re-deriving.
+Defects 14, 16, 18, 20, 21 and 24, the recall gate and seven self-review or
+scorer bugs all closed in the 2026-09-06 session, shipped as **0.40.10** through
+**0.40.13**. Defects 19, 22 and 23 are mechanised and have no lever. Their numbers
+are in `DOC_REGRESSINONS.md`; none needs re-deriving.
+
+One number for the whole session, 0.40.8 against HEAD on the defines harness:
+**80/101 -> 90/101 paired, p = 0.0129**.
 
 **"Still open" is empty.** Every item is shipped, refuted, or filed with its
 mechanism. So the next round starts at the top of the loop: the full run in
-`DOCS-LIVE-RUNBOOK.md` is the only remaining DISCOVERY instrument, and the last
-one paid — re-run 4's three HARD FAILs produced defects 19, 20, 21 and 22, none of
-which any subagent harness would have suggested looking for.
+`DOCS-LIVE-RUNBOOK.md` is the only remaining DISCOVERY instrument, and it paid
+twice — re-run 4's three HARD FAILs produced defects 19 to 23, and re-run 5
+verified defect 18 live AND surfaced defect 24 and a scorer artifact that an
+earlier fix in the same session had created.
 
-1. **Score re-run 5, which was launched on 0.40.11 and is the first run to
-   exercise defects 16, 18 and 20.** Its artifacts are in the container under
-   `/home/agent/docs-live/`; the previous run's are in `prev-4/`. Read the answers
-   themselves — every defect in this file came from reading individual records,
-   never from the summary table.
-2. **The one instrument worth building next: "does a retrieved chunk DEFINE the
-   symbol the query names".** It found defect 21's payoff (p=1.2e-4), chose the
-   retrieve limit, and mechanised defect 22 — all without the model. It lives only
-   as a scratch script. Make it a real harness under `scripts/`.
+1. **Defect 24's other half: hop on what the package DECLARES, not on a token's
+   SHAPE.** `hopNames` gates on `IDENTIFIER_SHAPED` — a capital, an underscore, or
+   an internal capital — so it refuses `serve`, `scotty` and `json`. That gate
+   costs **7 of the 11 misses** the defines harness leaves, measured. The rule's
+   own comment says why it exists: widening to every token would hop on
+   `signature` and `return`. The replacement is not a wider shape but a different
+   question — `signature` is declared nowhere and `serve` is declared once, and
+   `valueChunk` already answers that. Cost is a `LIKE` scan per query token
+   instead of per identifier-shaped token, and it is NOT measured. Measure it.
+2. **Run the defines harness before and after anything you change.** It is real
+   now, with tests. `bun scripts/docs-defines.ts … --out a.jsonl` then
+   `--compare a.jsonl b.jsonl` for an exact paired McNemar. Two arms means two
+   trees and two `XDG_CACHE_HOME`s, never one cache re-indexed.
 3. **Defect 14 has no live evidence and may never get it cheaply.** The lever is
    measured on 12,568 task files (3 fires, 3 true, 0 false) and is precise live
    (two correct non-fires in the 2026-09-06 ts run, both robust to a deliberately
@@ -157,7 +165,7 @@ Never guess a constant. Defect 11's hop cap was swept (3, 5, 8, uncapped) and th
 measurement chose it; defect 14's marker window was swept 20 to 4,000, found flat,
 and **deleted** in favour of a clause boundary.
 
-`bun run test` must stay green at 4430. `bun test` alone fails; the `--isolate` in
+`bun run test` must stay green at 4448. `bun test` alone fails; the `--isolate` in
 `bun run test` is load-bearing. `npm run lint:check` must stay green — and read ALL of
 its output. Discarding it let an undefined identifier reach a test run; reading
 only its `tail` let a syntax error reach a commit, because the failure was above
