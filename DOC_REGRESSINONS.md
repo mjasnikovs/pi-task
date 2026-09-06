@@ -2264,6 +2264,70 @@ bytes hackage gains from either constant define nothing new. That is what the
 sweep is for: hackage looked like the ecosystem with a wall and is the one with
 nothing behind it.
 
+## Defect 25. One chunk in twenty-six had no provenance line, and it is why the Bun family abstains
+
+Found by the rule this file keeps proving: check the constants the mechanism runs
+inside. `MAX_CHUNK_BYTES` is 8 KiB and its docstring is a rationale, not a
+measurement — "sized against the retrieval budget", no number attached.
+
+It does not truncate, it slices, so nothing is lost. What is lost is the header.
+`chunkDeclarations` built `// <path>\n<body>` and *then* sliced the result, so the
+second piece onward carried no `// path` line at all:
+
+```
+12,815 chunks indexed        487 headless        3.8%
+  npm:@types/node            269 / 509           53%
+  npm:bun-types              102 / 473           22%
+  cargo:tokio                 86 / 1410           6%
+  npm:hono                    12 / 1124           1%
+```
+
+Three per cent sounds ignorable. It is not, because the packages it lands on are
+the ones the runs cannot get answers out of. Re-run the recorded Bun-family
+queries through `docsRaw` and count what comes back:
+
+```
+95 retrieved chunks over 14 queries      27 headless      28.4%
+node:url        2 chunks, 2 headless     "fileURLToPath export and signature"
+node:fs/promises 3 chunks, 3 headless    "readFile export and signature"
+```
+
+Two queries retrieved nothing else. Opened — because a count is not a finding —
+the `node:url` answer for `fileURLToPath` is two 8,192-byte pieces that begin
+mid-sentence inside a doc comment:
+
+```
+es the correct decodings of percent-encoded characters as
+     * well as ensuring a cross-platform valid absolute path string.
+```
+
+and `Bun.file(path) returns a File with .json()/.text()` came back carrying slices
+about **S3 ETags** and **tar archives**. `bun.d.ts` is one enormous declaration, so
+its 8 KiB pieces share no subject, and bm25 matches words scattered through the
+middle of them.
+
+That is a mechanism for the soft spot this file has recorded twice as "smaller
+than it looks": module `bun` abstains 4 of 5, the Bun family 5 of 12. The chunks it
+is shown are middles.
+
+### The fix, and the fingerprint
+
+`headedSlices(header, body, max)` slices the BODY and gives every piece the header,
+counting the header against the cap. Both tests fail on the tree before it.
+
+It is exported and added to `chunkerFingerprint()`, because both chunkers now
+delegate their slicing and their own source would sit still through a change to
+where an oversized declaration is cut — the third fix to hide one level below a
+`String(fn)` there. The fingerprint moves `5c79aa74` -> `527f415b`, so every cached
+package re-indexes on first touch.
+
+**This restores provenance; it does not fix the middles.** A piece that begins
+inside a doc comment still begins inside a doc comment, it just now says which file
+it is from. Splitting an oversized declaration at nested member boundaries is the
+larger fix and is not attempted here.
+
+---
+
 ### The answer half — REFUTED by its own A/A, and the instrument is what broke
 
 Two trees, 103 paired package records each, production's arm in both, scored on
