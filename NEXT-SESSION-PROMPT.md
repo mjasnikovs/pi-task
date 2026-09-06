@@ -40,16 +40,16 @@ docsRaw(pkg, query, cwd)  ->  chunks          retrieval half
 docsLookup(chunks, query) ->  answer          extraction half, one child
 ```
 
-A full `/task-auto` run is a **discovery** instrument. It found all fifteen
-defects and that job is done. What is left is **verification**, and the live run
-is bad at it: 158 recorded query/module pairs over four runs, 158 of them
-distinct, so two arms are never compared on the same stimulus. Its headline
-number has already failed once — hs abstention went 55%, 80%, 83%, 46% across
-four runs with fixes between each, and the tool was not why.
+A full `/task-auto` run is a **discovery** instrument, and the 2026-09-06 run is
+the proof: it found defect 18 and nothing else, because the defect-14 condition it
+was launched to verify **did not recur**. Its query set has never repeated — five
+runs, every recorded query distinct — so two arms are never compared on the same
+stimulus.
 
-`scripts/docs-replay.ts` is the instrument for verification. 73 recorded records
-carry `retrievedText` and a matching `contentSha256`, so it replays the real
-prompt with no retrieval and no network.
+`scripts/docs-replay.ts` is the instrument for verification. Records carry
+`retrievedText` and a matching `contentSha256`, so it replays the real prompt with
+no retrieval and no network. `--retrieve <project>` is the exception, for index
+fixes, and it must run in the container.
 
 ```bash
 PI_BIN=$(command -v pi) bun scripts/docs-replay.ts \
@@ -57,48 +57,35 @@ PI_BIN=$(command -v pi) bun scripts/docs-replay.ts \
   --only abstained --out /tmp/ledger.jsonl
 ```
 
-Always `--dry-run` first. It rebuilds every prompt and sends nothing — 48 for
-the abstentions above, 146 for the whole corpus.
+Always `--dry-run` first. It rebuilds every prompt and sends nothing.
 
 **Run it against the same model the recording used.** The record pins the prompt.
 It does not pin the model, and a host model is not the container's.
 
 ## The work, in order — and when it runs out, go back to the top of the loop
 
-Defects 15, 12, 11 and the aeson duplicates all closed in the 2026-09-06 session
-and shipped as **0.40.8**. Their numbers are in `DOC_REGRESSINONS.md`; none of
-them needs re-deriving and none needs a live run.
+Defects 14, 16, 18, the recall gate and three self-review bugs all closed in the
+2026-09-06 session and shipped as **0.40.10**. Their numbers are in
+`DOC_REGRESSINONS.md`; none needs re-deriving.
 
-1. **Defect 14 — refine's constraint beats research's refutation.** The chain is
-   read and written down, STEP 0 is measured, and the lever is chosen. Build it.
-   - The base rate is **3 fires in 13,428 task files, 3 of 3 true, 0 false**. The
-     detector and the one pattern the measurement *removed* are both recorded in
-     `DOC_REGRESSINONS.md`. Do not re-derive it; `/home/edgars/hub` and
-     `/home/edgars/tmp` hold the 14,171 files if you want to re-run it.
-   - The fix is a **sibling pass** to `src/task/refuted-constraint.ts`, not a
-     widening of it. That file's own header says why its token class is narrow,
-     and one of the two real cases is an un-backticked API expression it refuses
-     on purpose. Read the header before touching it.
-   - Two real strings to write the failing test against, both quoted in
-     `DOC_REGRESSINONS.md`: ts/TASK_0001's `z.string().email()` inside an
-     `(e.g. …)`, and hs/TASK_0001's backticked `` `wai-test` ``. The first drops
-     to `` `adminEmail` — an email.``; the second is a plain package drop the
-     existing `dropToken` already handles.
-   - Keep it **subtractive**. An appended correction loses to the text it
-     contradicts — that is the whole reason `refuted-constraint.ts` exists.
-   - **Then, and only then, the full run.** This is the one item where no subagent
-     harness can see the outcome, and the only reason to open
-     `DOCS-LIVE-RUNBOOK.md`.
-2. **Defect 16 — a facade package indexes to nothing, in cargo.** `trait
-   IntoResponse` is declared in `axum-core`, which `axum` only re-exports, so both
-   recorded `IntoResponse` records miss and no ranking fix can reach them.
-   `DEFECT-12-STOPPING-RULE.md`'s candidate bound already fits; its **trigger**
-   reads Haskell export lists and does not. Measure a cargo trigger on a package
-   sweep the way the hackage one was measured — do not port it by analogy.
-3. **Defect 17 — retrieval depends on the cache's other packages.** Measured real
-   (55 of 61 records differ) and measured harmless (recall 46/46 both ways). It is
-   a determinism defect. Nothing to ship; the rule it earns is in the file. Reopen
-   it only if a quality metric ever moves on it.
+1. **Defect 16's ANSWER half.** The index fix is proven — `trait IntoResponse`
+   goes from absent to retrieved on 3 of 4 axum queries. What is NOT proven is
+   whether the child's answer improves, and defect 11 is the standing proof that
+   it need not. This is a `--retrieve` replay of the recorded `axum` records
+   against the new corpus, in the container, two arms over the same records.
+   Minutes, not hours. **Hold the cache's package set fixed across arms** —
+   defect 17 names the mechanism.
+2. **Defect 14 has no live evidence and may never get it cheaply.** The lever is
+   measured on 12,568 task files (3 fires, 3 true, 0 false) and is precise live
+   (two correct non-fires in the 2026-09-06 ts run, both robust to a deliberately
+   loosened token class). But the failing CONDITION did not recur: that run's
+   research made no deprecation claim about anything CONSTRAINTS required, and the
+   tree shipped `z.email()` and `.issues` without the pass ever firing. Do not
+   burn four hours hoping it recurs. If you want live evidence, build a stimulus
+   that forces it rather than waiting for one.
+3. **Defect 17 — determinism only.** Measured real (55 of 61 records differ) and
+   measured harmless (recall 46/46 both ways). Nothing to ship; the rule it earns
+   is in the file. Reopen only if a quality metric ever moves on it.
 
 ## Building a new instrument
 
@@ -112,6 +99,11 @@ cache's package set fixed across arms** or you are measuring cache history.
 The container is provisioned for this. `/home/agent/pi-task-replay` holds the
 tree with `bun install` already done, and `/home/agent/docs-live/run/{ts,rs,hs}`
 are the seeded projects `--retrieve` points at. Re-copy the repo when src moves.
+For a retrieval-only probe you do not need to reinstall the extension: unpack the
+built `dist` beside the installed package as
+`~/.pi/agent/npm/node_modules/@mjasnikovs/pi-task-next` and import `docs-core.js`
+from there by path, with its own `XDG_CACHE_HOME`. That leaves a running
+`/task-auto` untouched.
 
 **Set `PI_BIN`.** `getPiInvocation` re-invokes `process.argv[1]` when it exists,
 so a script under `scripts/` that spawns a child spawns *itself*, once per record.
@@ -119,12 +111,16 @@ so a script under `scripts/` that spawns a child spawns *itself*, once per recor
 
 ## Known open — do not report as new
 
-- A query naming no type has nothing to hop to. Unsolved.
 - A query whose key symbol is absent from the corpus cannot be answered. Stripping
   English stopwords was tested and REFUTED; it moves the failure elsewhere.
-- Four fidelity-scorer flags are left and all four are false. No principled rule
-  was found, so they stay flagged rather than guessed away.
-- The recall metric can score a symbol the run never asked about.
+- A query naming no type: **REFUTED at STEP 0**, 1 of 158 and that one is the
+  literal query `test`. Not a class.
+- Four fidelity-scorer flags are left and all four are false. A query-echo guard
+  was measured and NOT shipped — there is no confirmed fabrication in the corpus
+  for it to protect.
+- The project corpus cannot see a manifest. Measured at 2 of 158; below the bar,
+  and the one-line glob would produce garbage chunks.
+- Three of the audit's six metrics have never discriminated. Do not quote them.
 
 ## Discipline
 
@@ -132,11 +128,23 @@ Regression test first, and prove it fails on the current tree before writing the
 fix. If a test cannot fail before the fix — because the fix adds the seam it tests
 — say so and prove the defect on the recorded data instead.
 
-Never guess a constant. Defect 11's hop cap was swept (3, 5, 8, uncapped) and the
-measurement chose it.
+**Never believe a one-line filter without opening what it selected.** Three did
+that in the 2026-09-06 session and all three produced clean, plausible, false
+findings. They are listed under item 4r in `DOC_REGRESSINONS.md`.
 
-`bun run test` must stay green at 4356. `bun test` alone fails; the `--isolate` in
-`bun run test` is load-bearing. `npm run lint:check` must stay green.
+**Self-review your own fix before you ship it.** Four real bugs in that session's
+own new code were found this way and none by the test suite: a whitespace collapse
+that ate a nested bullet's indent, a rename split that turned `Hasher` into `H`, a
+lock read from the crate's root instead of the project's (a machine-dependent
+index), and a content hash that did not cover the rule it was hashing for.
+
+Never guess a constant. Defect 11's hop cap was swept (3, 5, 8, uncapped) and the
+measurement chose it; defect 14's marker window was swept 20 to 4,000, found flat,
+and **deleted** in favour of a clause boundary.
+
+`bun run test` must stay green at 4417. `bun test` alone fails; the `--isolate` in
+`bun run test` is load-bearing. `npm run lint:check` must stay green — and do not
+discard its output, which is how an undefined identifier reached a test run once.
 
 Publish a patch version when you ship a fix, and say plainly whether `dist`
 actually changed — a `scripts/`-only change ships a byte-identical build.
