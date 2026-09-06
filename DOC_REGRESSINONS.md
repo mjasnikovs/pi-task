@@ -74,17 +74,21 @@ So there are three instruments, not one. Pick the cheapest that can move the ite
 
 | instrument | what it drives | cost | environment |
 |---|---|---|---|
+| **defines** — `scripts/docs-defines.ts` | `docsRaw` only, scored on whether a chunk DEFINES the queried symbol | seconds, no model | container, pinned deps |
 | **replay** — `scripts/docs-replay.ts` | extraction only, on recorded `retrievedText` | minutes | any, same model |
-| **retrieval** — not written | `docsRaw` only, scored on what came back | minutes | container, pinned deps |
 | **full run** — `DOCS-LIVE-RUNBOOK.md` | `/task-auto` end to end | 3-4 h | container |
+
+The defines harness is the one to reach for first. It needs no model, it runs in
+seconds, and it is the only quality metric here that is not saturated — see "The
+metric that finally moves" below.
 
 ## The replay corpus already exists
 
-158 recorded answers over four runs. `retrievedText` was added with the defect 9
-fix, so **73 of them replay with no retrieval at all** — re-run 2 and re-run 3.
+186 recorded answers over five runs. `retrievedText` was added with the defect 9
+fix, so **101 of them replay with no retrieval at all** — re-runs 2, 3 and 5.
 
 ```
-73 records   24 abstentions   13 excerptVerified=false   16 modules, 3 ecosystems
+101 records   32 abstentions   24 excerptVerified=false   23 modules, 3 ecosystems
 ```
 
 Every record carries `query` verbatim, `retrievedText` (the exact bytes the child
