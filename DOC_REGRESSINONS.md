@@ -133,7 +133,7 @@ the record; the model is not.
 | 16 | a facade package indexes to nothing, in **cargo** | index | retrieval | **SHIPPED** on retrieval; answer half replayed FLAT at n=4, no recorded stimulus |
 | 17 | retrieval depends on the cache's other packages | retrieval | retrieval | **real, and measured harmless** |
 | 20 | a Rust item inside a `name! { … }` block is not indexed | index | offline + replay | **SHIPPED**, +393 public names; one causal answer, no aggregate at n=14 |
-| 19 | a symbol declared only in a NON-prefixed dependency | both | recorded corpus | caused the rs HARD FAIL; obvious lever **REFUTED**, 4 of 20 and none that mattered |
+| 19 | a symbol declared only in a NON-prefixed dependency | both | recorded corpus | caused the rs HARD FAIL; **BOTH bounds REFUTED** — `[dependencies]` 2 right of 20, lock 3 right of 18 |
 | 18 | one answer in five carries a false hallucination warning | extraction | recorded corpus | **SHIPPED**, 21/21 now report stitched |
 | 14 | correct answer, deprecated code shipped | neither | **full run** | lever SHIPPED, 3/3 on 12,568 files; the condition did NOT recur in re-run 4 |
 
@@ -1215,10 +1215,38 @@ project declares only transitively; `StatusCode` is in `http`, likewise; and
 `TcpListener` is not declared in `tokio`'s own index either. The lever reaches 4
 of 20 and **zero of the symbols behind the rs HARD FAIL**. Refuted as designed.
 
-Widening the bound to the lock would reach `tower` — and re-opens a failure this
-codebase has already paid for once: the 2026-09-05 run answered about `tower`,
-which was in the lock via axum and absent from `[dependencies]`, and the crate did
-not compile. That variant needs its own measurement and carries a known cost.
+**The wider bound was measured too, and it is worse.** Same probe, candidates
+taken from `Cargo.lock` (84 crates) instead of `[dependencies]` (4):
+
+```
+                       reachable   and of those, RIGHT
+[dependencies]            4 / 20          2
+Cargo.lock                9 / 18          3
+```
+
+Recall goes up and precision falls, because a bare name collides across 84 crates
+and the first match wins:
+
+```
+axum  oneshot     -> futures-channel   WRONG — that is a channel, not
+                                       tower::ServiceExt::oneshot
+axum  TcpListener -> mio               WRONG — tokio's is the one meant, and
+                                       tokio IS a declared dependency
+axum  handle      -> futures-util      WRONG — `handle` is a generic word
+serde_json serde_json -> tracing       ABSURD — a `mod serde_json` inside tracing
+axum  StatusCode  -> http              right symbol
+axum  DeserializeOwned -> serde        right
+http  BodyExt     -> http-body-util    right
+```
+
+And it still does not fix the case it was reached for: `oneshot` resolves to the
+wrong crate and `tower_service` to nothing. That is on top of the cost already on
+record — the 2026-09-05 run answered about `tower`, in the lock via axum and
+absent from `[dependencies]`, and the crate did not compile.
+
+**Both bounds refuted.** A lever for defect 19 has to resolve a symbol to a crate
+by something other than "search the dependency set for the name", and nothing in
+the recorded corpus supplies that. Filed, not open.
 
 Widening the doc-comment mention into a trigger is NOT the lever either — half of
 crates.io is mentioned in axum's doc comments.
