@@ -810,6 +810,29 @@ inside a code span, `error_value` is a placeholder binding in an example, and
 `router` names axum's type inside a *tower* answer, whose corpus does not carry it.
 No principled rule was found, so they stay flagged rather than guessed away.
 
+**A fifth candidate — MEASURED, NOT SHIPPED.** The 2026-09-06 full run flagged a
+zod answer for `port`, `adminEmail` and `checkEmail`. Two of those are the
+project's own config field names, echoed straight out of the query, and the answer
+asserts nothing about zod by naming them. That suggests the guard "a token the
+QUERY already contains was not invented by the answer".
+
+Scored over all 73 replayable records:
+
+```
+6 flags, all false.   query-echo clears 2 (`fields`, `rename`).   4 remain.
+```
+
+It is not shipped, and the reason is the corpus rather than the rule. **There is
+not one confirmed fabrication in the recorded corpus** — the `decodeFile` case
+this file cites turns out to be seven records that all DENY it ("the provided
+content does not contain a function named `decodeFile`"), never one that asserts
+it. So the guard can be shown to clear false flags and cannot be shown to preserve
+a true one, and a loose scorer is as fatal as a strict one. Left flagged.
+
+The live number it distorts is worth knowing about: quoting a fidelity rate from
+a run whose project uses `port` and `adminEmail` as field names will read three
+flags low on quality it did not lose.
+
 ---
 
 # Run history
