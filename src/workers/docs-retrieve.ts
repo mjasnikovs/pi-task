@@ -25,14 +25,24 @@ export interface RetrieveOptions {
 }
 
 /**
- * How many chunks a retrieval returns, per corpus. An npm package gets 8 and
- * project source gets 50.
+ * How many chunks a retrieval returns. Both corpora get 50, and that is measured.
  *
- * Nothing in this repo records WHY they differ. They are stated here, together,
- * so the divergence is at least visible — and changing either is a
- * retrieval-policy change, not a tidy-up.
+ * The package limit was 8 and nothing recorded why it differed from project
+ * source's 50. Measured both ways, over every recorded query, on the two things
+ * that can be measured:
+ *
+ *   retrieval — does a chunk DEFINE the queried symbol?   91/101 -> 97/101,
+ *               monotone to 50 and flat at 100, p = 0.0703
+ *   answers   — does the extraction child answer at all?  67/94 -> 79/94,
+ *               only-8 3, only-50 15, McNemar exact p = 0.0075
+ *
+ * Abstention on the replay corpus falls 29% to 16%. The cost is +70% of retrieved
+ * text, and `RETRIEVE_CONTENT_BUDGET` still bounds it — at 8 only 6 of 74 calls
+ * reached that budget, so two thirds of it was never spent.
+ *
+ * Changing either is still a retrieval-policy change, not a tidy-up.
  */
-export const PACKAGE_RETRIEVE_LIMIT = 8
+export const PACKAGE_RETRIEVE_LIMIT = 50
 export const PROJECT_RETRIEVE_LIMIT = 50
 
 /** Character budget for the assembled chunk text. The same for both corpora. */

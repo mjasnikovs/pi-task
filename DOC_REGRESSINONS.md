@@ -1396,12 +1396,33 @@ is defect 23: a big class chunk ranks 9-16 and hackage's declarations sit deeper
 still. `PROJECT_RETRIEVE_LIMIT` is already 50, and this file records that nobody
 knows why the two differ.
 
-**Not changed, on p = 0.0703.** The retrieval evidence favours 50 and does not
-reach the bar, and the cost is +57% of text into the extraction child — which is
-the one thing this measurement cannot see. The deciding experiment is the ANSWER
-side: `docs-replay --retrieve`, two arms at 8 and 50, over the recorded records.
-That is the next round's first item, and it is the first time a limit change has
-had a reason rather than a preference.
+The retrieval side does not reach the bar on its own, and the cost is +57% of text
+into the extraction child — the one thing it cannot see. So the ANSWER side was
+run: `docs-replay --retrieve`, two arms at 8 and 50, every replayable record
+across all three projects, 188 child calls.
+
+### CHANGED to 50 — the answer side is decisive
+
+```
+arm      rows   chunks    retrieved bytes    ANSWERED
+lim8       94      976        1,164,980      67/94
+lim50      94    2,478        1,976,856      79/94
+
+paired 94:  both 64   only-8 3   only-50 15   neither 12
+McNemar exact, two-sided:  p = 0.0075
+```
+
+**Abstention falls 29% to 16%** — twelve records the child would not answer at 8,
+it answers at 50, against three the other way. Both halves now agree and the one
+that matters is significant.
+
+The cost is +70% of retrieved text, and `RETRIEVE_CONTENT_BUDGET` still bounds
+it. At 8 only 6 of 74 calls reached that 24,000-character budget, so two thirds of
+what the tool was allowed to spend was never spent.
+
+It also closes the divergence this file has carried unexplained since the start:
+`PROJECT_RETRIEVE_LIMIT` was already 50, and nothing recorded why a package got 8.
+Now both are 50, and the reason is a number.
 
 ### The npm-only sweep, kept because its conclusion is still true of npm
 
