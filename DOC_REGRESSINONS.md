@@ -807,6 +807,23 @@ immune, which is exactly why the field exists.
 **85 of 158 records cannot be replayed.** The baseline and re-run 1 predate
 `retrievedText`. They keep the sha and nothing to check it against.
 
+## The dead-major fix held — checked on the ANSWERS, not the code
+
+The stale-major table has only ever been run over the shipped tree. Run over the
+answer text of all 158 records instead:
+
+```
+7 answers contain a stale marker
+  2 are project-corpus answers correctly REPORTING what the project's own code says
+  3 mention `z.string().email()` only to say `z.email()` is the v4 form
+  2 assert the v3 shape — "z.string().email() is confirmed — ZodString.email(message?)"
+    both in the BASELINE run, before dropDeadMajors shipped
+```
+
+Zero genuine stale assertions in any run after 0.40.2. That is the dead-major fix
+confirmed on the output rather than on the index it changed — which is the
+distinction defect 11 exists to enforce.
+
 ## Three of the audit's six metrics have never once discriminated
 
 Written down so the next session does not quote a number that cannot move. Across
