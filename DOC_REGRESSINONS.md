@@ -237,6 +237,28 @@ Not monotone, and the wide buckets are 4 and 2 pairs. Query breadth does not
 predict whether the declaration is retrieved. The two `eitherDecode` misses are
 misses, not a class — filed so the plausible story is not retold as a finding.
 
+## What the whole 2026-09-06 session did to retrieval — one paired number
+
+0.40.8 (session start) against HEAD, the defines harness, every recorded query
+that names a ground-truth symbol, one cold cache per arm:
+
+```
+              0.40.8    HEAD
+cargo          26/26    26/26
+hackage        26/33    26/33
+npm            28/42    38/42
+
+paired over all 101:  both 78   only-0.40.8 2   only-HEAD 12   neither 9
+                      80/101 -> 90/101
+                      McNemar exact, two-sided:  p = 1.294e-2
+```
+
+Twelve gained against two lost. All of the movement is npm and all of it is
+defect 21 — cargo was already saturated at 26/26 and hackage's residue is defects
+22 and 23, neither of which has a lever. Defect 20's gain does not show here
+because the corpus holds exactly one `tokio` pair; its evidence is the causal
+answer instead.
+
 ## Defect 23. A class chunk is 50x the median and BM25 buries it
 
 The four npm misses the defines-metric leaves are all hono, and one is clean:
