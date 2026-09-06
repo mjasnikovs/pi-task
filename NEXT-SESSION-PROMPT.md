@@ -66,64 +66,72 @@ It does not pin the model, and a host model is not the container's.
 
 Defects 14, 16, 18, 20, 21 and 24, the recall gate and seven self-review or
 scorer bugs all closed in the 2026-09-06 session, shipped as **0.40.10** through
-**0.40.14**. Defects 19, 22 and 23 are mechanised and have no lever. Their numbers
-are in `DOC_REGRESSINONS.md`; none needs re-deriving.
+**0.40.14**. Defects 22 and 23 are mechanised and have no lever. Defect 19 turned
+out to be the seed — see item 2. Their numbers are in `DOC_REGRESSINONS.md`; none
+needs re-deriving.
 
-One number for the whole session, 0.40.8 against HEAD on the defines harness:
-**80/101 -> 90/101 paired, p = 0.0129**.
+The later 2026-09-06 session shipped **no `src/` change at all**. Everything it
+moved was instrument: the seed, the audit and the replay harness. That is not a
+quiet session — a two-tree A/B that could not tell a constant from a slot had
+already decided a production constant, and an audit that scored a killed run PASS
+had already reported one.
 
-**"Still open" is empty.** Every item is shipped, refuted, or filed with its
-mechanism. So the next round starts at the top of the loop: the full run in
-`DOCS-LIVE-RUNBOOK.md` is the only remaining DISCOVERY instrument, and it paid
-twice — re-run 4's three HARD FAILs produced defects 19 to 23, and re-run 5
-verified defect 18 live AND surfaced defect 24 and a scorer artifact that an
-earlier fix in the same session had created.
+One number for the earlier half, 0.40.8 against HEAD on the defines harness:
+**80/101 -> 90/101 paired, p = 0.0129**. It uses no model and is not affected by
+the position confound below.
 
-0. **RE-RUN 6 IS ALREADY RUNNING IN THE CONTAINER — score it first.** It was
-   launched on 0.40.14 and left mid-flight when the previous session ended, so it
-   will have finished on its own. Artifacts are in `/home/agent/docs-live/`; the
-   previous run's are in `prev-5/`.
+The full run in `DOCS-LIVE-RUNBOOK.md` is still the only DISCOVERY instrument, and
+it paid a third time — re-run 6 is what exposed both the seed defect and the fact
+that the byte budget had become binding.
 
-   ```
-   docker exec mx5-n bash -lc 'cat /tmp/chain.log'      # SEQUENCE COMPLETE?
-   docker exec mx5-n bash -lc 'export PATH="$HOME/.bun/bin:$HOME/.cargo/bin:$PATH"; . ~/.ghcup/env
-     cd /home/agent/docs-live && bun scripts/docs-live-build.ts /home/agent/docs-live/run'
-   ```
-   then copy `run/{ts,rs,hs}`, `*.jsonl` and `*.build.json` out and
-   `bun scripts/docs-live-audit.ts <dir> --build`.
+0. **A two-tree A/B is contaminated unless it is order-balanced. Read this first.**
+   Four alternating passes over one fixed 103-record set answered **76, 85, 88, 89**.
+   Slot 1 is twelve points below everything after it, and the arm alternates, so
+   that line is POSITION, not the constant. The budget A/B's own A/A — the same
+   tree, the same cache, byte-identical content — read p = 0.0118 while the A/B
+   beside it read p = 0.0636.
 
-   **ts had already settled when the session ended: 4 tasks of 4, 10 records,
-   10% abstention, median retrieved 22,781 bytes.** Re-run 5 on the same feature
-   managed 2 tasks of 4 at 43% abstention and 16,493 bytes. rs was on task 3 of 3.
-   That is the first live evidence for the retrieve-limit change and it agrees
-   with the replay (29% -> 16%); finish reading it before anything else.
+   `--arm` is immune: both arms of one record run back to back in one process. Only
+   a build-time constant forces two trees, and only two trees order the arms in
+   blocks. The protocol that survives is one warm-up pass, discarded, then **ABBA**,
+   scored with `docs-replay --compare-pooled a1,a2 b1,b2`.
 
-1. **Then: `RETRIEVE_CONTENT_BUDGET`, the same shape as the limit was.**
-   Raising the limit made the byte budget binding. It is 24,000, carries a
-   one-line comment, and has no measurement. Retrieval is swept and monotone with
-   ZERO losses at every step up — 12k 86/101, 24k 97, 36k 100, 48k 101, 96k 101;
-   24k vs 48k is only-24k 0, only-48k 4, p = 0.125. The deciding experiment is the
-   same one that settled the limit: `docs-replay --retrieve`, two arms at 24,000
-   and 48,000, over the recorded records. Two trees, two `XDG_CACHE_HOME`s.
+   **`PACKAGE_RETRIEVE_LIMIT` 8 -> 50 was decided on the contaminated design**
+   (answers 67/94 -> 79/94, p = 0.0075). Its retrieval half needs no model and
+   stands — defines 91/101 -> 97/101, and a sweep to 200 says 50 is the plateau.
+   Its answer half was being re-run balanced when this was written; if
+   `/home/agent/ledger-lim-{A1,A2,B1,B2}.jsonl` are in the container, score them and
+   record the number.
 
-2. **Nothing else is open.** `PACKAGE_RETRIEVE_LIMIT` was the
-   last question and it is answered: 8 -> 50, defines 91/101 -> 97/101 and
-   ANSWERED 67/94 -> 79/94, McNemar p = 0.0075, abstention 29% -> 16%. Shipped in
-   0.40.14 and **no live run has exercised it**. That is the first thing the next
-   run measures — the replay corpus says the child answers more; a live run says
-   whether the extra text helps or distracts the workers that read the answers.
+1. **`RETRIEVE_CONTENT_BUDGET` is CLOSED at 24,000.** Do not re-open it without a
+   design that can see a four-point effect. Direction favoured 48,000 in every cut
+   and cleared its noise in none: p = 0.0636 uncontrolled, p = 0.1360 balanced,
+   p = 0.2500 on retrieval. The 24k arm's own two passes span 76 and 88, wider than
+   anything between the arms. Nothing about 48,000 is refuted; it is unproven.
 
-   Do not re-open these: dropping `IDENTIFIER_SHAPED` (90/101 -> 88/101), the
-   older npm-only limit sweep that said the plateau is 16 (it covered zod and hono
-   only), and deriving the defines truth set from the index (124 pairs against
-   101, for a circularity risk).
+   Also settled, and not worth re-deriving: hackage is **saturated** on defines
+   (35/35 at every limit and budget tried) and so is cargo (42/42). Every gain
+   either constant can still buy is npm, and it is three hono records.
 
-   **And read this before filing anything as unfixable.** Defects 22 and 23 were
-   both filed with a mechanism and "no lever" — an FTS schema change, or splitting
-   class bodies and orphaning signatures. Both were closed by raising a constant
-   two functions away that nobody had measured: `scotty:scotty` 2/7 -> 7/7,
-   hackage 26/33 -> 33/33. Before writing "no lever", check the constants the
-   mechanism runs inside.
+2. **Re-run 7 has not been launched.** `/home/agent/docs-live/run7.sh` is written
+   and ready: it archives run 6 to `prev-6`, re-seeds all three, then runs ts, rs
+   and hs serially. It has not run. The seed changed since run 6 — see below — so
+   this is the first run that can be read as a test of the rs fix.
+
+   **The rs seed never declared `tower`.** axum's only in-process way to drive a
+   `Router` is `tower::ServiceExt::oneshot`, and the feature's third obligation is
+   to cover both responses in tests. Re-runs 4 and 6 both hand-rolled
+   `poll_ready`/`call` and both failed on `use tower_service::Service`; re-run 6's
+   own test file says it avoided `oneshot` because tower was not a direct
+   dependency. `[dev-dependencies] tower = { version = "0.5", features = ["util"] }`
+   is now in the seed. Two of six runs died on this.
+
+3. **Defect 19 was re-diagnosed three times in one session** and only the last
+   reading came from opening the file the run produced. Do not re-open the first
+   two: the retrieval bound was measured at limit 8 and no longer holds, and the
+   extraction omission is real, under-powered, and not fatal. The seed was the
+   cause.
+
 2. **Run the defines harness before and after anything you change.** It is real
    now, with tests. `bun scripts/docs-defines.ts … --out a.jsonl` then
    `--compare a.jsonl b.jsonl` for an exact paired McNemar. Two arms means two
