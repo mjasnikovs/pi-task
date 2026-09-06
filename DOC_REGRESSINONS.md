@@ -2264,6 +2264,70 @@ bytes hackage gains from either constant define nothing new. That is what the
 sweep is for: hackage looked like the ecosystem with a wall and is the one with
 nothing behind it.
 
+## The retrieve limit, re-measured on a design that survives its own A/A
+
+`PACKAGE_RETRIEVE_LIMIT` 8 -> 50 shipped in 0.40.14 on the block-ordered design,
+with an answer-side claim of **67/94 -> 79/94, McNemar p = 0.0075**. That design
+cannot tell a constant from a slot, so it was re-run: one warm-up pass discarded,
+then ABBA, each arm holding one early slot and one late one.
+
+```
+slot   arm        answered
+warm-up            discarded
+A1     limit 8     79/103
+B1     limit 50    81/103
+B2     limit 50    82/103
+A2     limit 8     80/103
+```
+
+**The warm-up pass works.** Both within-arm controls are exactly null, which is
+what the budget run could not say:
+
+```
+A/A within limit 50   B1 vs B2   only-A 11   only-B 12   p = 1.0000
+A/A within limit 8    A1 vs A2   only-A  8   only-B  9   p = 1.0000
+```
+
+Against that, the treatment:
+
+```
+ABBA pooled    limit 8 159/206    limit 50 163/206
+               8-better 12   50-better 16   tied 75      p = 0.5716
+```
+
+**It does not replicate.** Four answers in 206, p = 0.57, where the block-ordered
+measurement read twelve in 94 at p = 0.0075. The same four ledgers read the old
+way — one pass each, arm B second — give 79 vs 81 at p = 0.8238, so the original
+number was not even reproduced by the original method. Whatever produced 0.0075
+was the sequence it ran in.
+
+### The limit stays at 50, for the reason that was always sound
+
+Nothing here argues for going back to 8. The RETRIEVAL half needs no model and is
+untouched by any of this: defines 91/101 -> 97/101 on the original corpus, 48/51
+npm and 42/42 cargo and 35/35 hackage on the current 128, and a sweep to 200 that
+says 50 is the plateau. The limit change was right to ship. **Its answer-side
+number was not.**
+
+### And the two interventions now agree with the correlation
+
+Three measurements, three ways, one answer:
+
+```
+correlation, between records   size vs abstention          p = 0.20
+budget    24,000 -> 48,000     +16,000 chars per call      p = 0.1360 balanced
+limit     8 -> 50              +5,900 chars per call       p = 0.5716 balanced
+```
+
+More retrieved text does not make this child answer. That was recorded once as a
+correlation and dismissed as not answering the interventional question; two
+interventions have now been run and neither moves it. **Stop tuning retrieval
+volume.** What is left is what the text IS — defect 25's headless middles are a
+worked example, and the extra 5,900 characters the limit buys are the same kind of
+material as the first 15,000.
+
+---
+
 ## Defect 25. One chunk in twenty-six had no provenance line, and it is why the Bun family abstains
 
 Found by the rule this file keeps proving: check the constants the mechanism runs

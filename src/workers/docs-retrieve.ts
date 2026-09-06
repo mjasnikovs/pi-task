@@ -33,12 +33,20 @@ export interface RetrieveOptions {
  *
  *   retrieval — does a chunk DEFINE the queried symbol?   91/101 -> 97/101,
  *               monotone to 50 and flat at 100, p = 0.0703
- *   answers   — does the extraction child answer at all?  67/94 -> 79/94,
- *               only-8 3, only-50 15, McNemar exact p = 0.0075
+ *   answers   — 67/94 -> 79/94, p = 0.0075 when first measured, and it DOES NOT
+ *               replicate. That run was block-ordered, which makes arm and
+ *               position the same variable; re-run as warm-up then ABBA it reads
+ *               159/206 -> 163/206, p = 0.5716, with both within-arm A/A controls
+ *               at p = 1.0000. The retrieval line above is what justifies 50.
  *
- * Abstention on the replay corpus falls 29% to 16%. The cost is +70% of retrieved
- * text, and `RETRIEVE_CONTENT_BUDGET` still bounds it — at 8 only 6 of 74 calls
- * reached that budget, so two thirds of it was never spent.
+ * The cost is +70% of retrieved text, 14,986 characters per call to 20,882, and
+ * `RETRIEVE_CONTENT_BUDGET` now binds where it did not: at 8 only 6 of 74 calls
+ * reached the budget, at 50 it is 90 of 103.
+ *
+ * Do not raise the budget to follow it. 24,000 -> 48,000 was measured the same
+ * balanced way and reads p = 0.1360 on answers and p = 0.2500 on defines. Three
+ * measurements now agree that retrieved VOLUME is not what makes this child
+ * answer; what the text IS, is.
  *
  * Changing either is still a retrieval-policy change, not a tidy-up.
  */
