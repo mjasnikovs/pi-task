@@ -158,6 +158,18 @@ missed `Bun.file`, `decodeFile`, `Data.Text.Text` and `configSchema`, which put
 were all present in the corpus it was reading. Read the bucket before believing
 the rate.
 
+That happened three times in one session, always the same way — a one-line filter
+believed without opening what it selected:
+
+```
+symbol classifier    called Bun.file and decodeFile "nameless"     -> a fake 68% gap
+excerptCheck.ok      the field is `verified`; `ok` is undefined    -> "0 failures" for 20%
+grep -c docs         matched `read: docs-live-hs.cabal`            -> "5 refusals" that were file reads
+```
+
+None survived looking at the rows. All three would have been believable numbers.
+
+
 ## A query whose key symbol is absent from the corpus
 
 FTS matches whole tokens, so `decodeFile` matches nothing when only
