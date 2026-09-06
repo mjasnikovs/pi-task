@@ -1039,6 +1039,23 @@ Artifacts in `live-docs-run-2026-09-05/`, `live-docs-rerun-2026-09-05/`,
 | re-run 1, 09-05 | 0.40.2 | PASS, 7% | PASS, 20% | PASS, 80% |
 | re-run 2, 09-06 | 0.40.3 | PASS, 24% | PASS, 40% | PASS, 83% |
 | re-run 3, 09-06 | 0.40.5 | **HARD FAIL**, 17% | PASS, 22% | PASS, 46% |
+| re-run 4, 09-06 | 0.40.9 | **HARD FAIL**, 0% | **HARD FAIL**, 14% | **HARD FAIL**, 100% (1 call) |
+
+Re-run 4 is three HARD FAILs for three unrelated reasons, and **the docs tool
+caused at most one of them**:
+
+```
+ts   bun test HANGS after one passing test    0 abstentions in 19, 18/19 clean
+     — a test-authoring bug, no docs failure anywhere near it
+rs   `use tower_service::Service` missing     1 abstention in 7, and it IS the question
+     — see defect 19
+hs   two .cabal files in the tree             1 docs call in the whole run
+     — a task-execution bug; the tool was barely used
+```
+
+ts at **0% abstention over 19 records** is the best of any run (24, 7, 24, 17)
+and it still HARD FAILed, which is the same lesson as the baseline read the other
+way round: the abstention rate says nothing about whether the run ships.
 
 Read the verdict the right way round. TypeScript passed the baseline *with* three
 hono non-answers, because the model knew hono already. A green run does not mean
