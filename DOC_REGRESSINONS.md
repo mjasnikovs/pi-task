@@ -795,6 +795,25 @@ immune, which is exactly why the field exists.
 **85 of 158 records cannot be replayed.** The baseline and re-run 1 predate
 `retrievedText`. They keep the sha and nothing to check it against.
 
+## Three of the audit's six metrics have never once discriminated
+
+Written down so the next session does not quote a number that cannot move. Across
+all twelve project-runs:
+
+| metric | history | verdict |
+|---|---|---|
+| build + stale markers | 3 HARD FAIL, 9 PASS | **the instrument** |
+| abstention rate | 0% to 83% | moves, but not on the tool — see below |
+| answers with 0 invented symbols | 4 runs flagged, every flag false | fires, never truly |
+| retrieval recall | 43/44, and the 1 was a scorer bug | **saturated** |
+| pins resolved | 7/7 in every run, three version sources | **saturated** |
+| refusals in research | 0 in 11 of 12; one run had 1 | **saturated** |
+
+Two of the three are saturated because the thing they watch really does work —
+that is worth knowing once, and it is known. Reporting them each run is noise, and
+worse, a false miss in a saturated metric (as recall had) sends a session hunting a
+defect that is not there.
+
 ## Abstention does not track how much was retrieved — measured
 
 The obvious reading of a rising abstention rate is that retrieval starved the
