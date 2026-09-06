@@ -281,6 +281,29 @@ remaining: fields, are, assert, rename, error_value, router, config — all fals
 Worth stating plainly: this was a false number **my own fix produced**, and it
 would have been read as the docs tool fabricating a crate name.
 
+### Widening the harness's denominator — REFUTED as a cheap lever
+
+The limit question landed at p=0.0703 because n is 101 pairs, so the obvious move
+is a bigger denominator: derive the truth set from the index — every symbol a
+recorded query names that the package actually declares — instead of the twelve
+hand-listed `TRUTH` entries.
+
+```
+declared-name sets:  zod 1,302   hono 811   aeson 558   tokio 348   axum 171
+                     scotty 170  serde_json 94
+
+derived pairs, heads only        116
+derived pairs, heads + members   124        hand-listed TRUTH gives  101
+```
+
+**+23% for real complexity and a circularity risk** — the declared set would have
+to be pinned to one reference index, or the two arms of a comparison would score
+against different denominators. `hono` contributes 2 pairs either way, because its
+queries ask about members of members.
+
+n is bounded by the recorded corpus, not by the truth set. The way to grow it is
+more recorded runs, which is the discovery loop.
+
 ## Defect 24. The value hop lands on the chunk whose PATH says the name
 
 re-run 5's one rs abstention asked for `axum::serve`'s signature. `pub fn serve`
