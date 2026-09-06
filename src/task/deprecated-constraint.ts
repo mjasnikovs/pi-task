@@ -235,10 +235,16 @@ export function dropExpression(line: string, token: string): string | null {
         tokRe.lastIndex = 0
     }
     if (next === line) return line
-    next = next
-        .replace(/\s*\((?:\s*e\.g\.,?|\s*i\.e\.,?)\s*\)/gi, '')
-        .replace(/ {2,}/g, ' ')
-        .replace(/ +([.,;:)])/g, '$1')
+    // Leading whitespace is held out of the collapse: it is a nested bullet's
+    // markdown level, not a gap this deletion opened.
+    const indent = /^\s*/.exec(next)?.[0] ?? ''
+    next =
+        indent
+        + next
+            .slice(indent.length)
+            .replace(/\s*\((?:\s*e\.g\.,?|\s*i\.e\.,?)\s*\)/gi, '')
+            .replace(/ {2,}/g, ' ')
+            .replace(/ +([.,;:)])/g, '$1')
     const carcass = next.replace(/^\s*[-*]\s*/, '').replace(/[\s,.;:()]/g, '')
     return carcass.length === 0 ? null : next
 }

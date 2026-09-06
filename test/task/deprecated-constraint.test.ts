@@ -159,6 +159,14 @@ describe('dropExpression', () => {
         expect(out).not.toContain('z.string().email()')
     })
 
+    test('the leading indent survives the whitespace collapse', () => {
+        // The collapse exists to close the gap the deletion left. Applied to the
+        // whole line it also eats a nested bullet's indent, which changes the
+        // markdown level of a constraint this pass is not even firing on.
+        const out = dropExpression(TS_CONSTRAINT, 'z.string().email()')
+        expect(out?.startsWith('  - ')).toBe(true)
+    })
+
     test('a backticked package drops with one adjacent separator', () => {
         const out = dropExpression(HS_CONSTRAINT, 'wai-test')
         expect(out).not.toContain('wai-test')
