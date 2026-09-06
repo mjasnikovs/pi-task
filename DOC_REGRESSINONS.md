@@ -132,7 +132,7 @@ the record; the model is not.
 | — | aeson keeps 55 duplicate bodies | index | offline | **measured fixed** |
 | 16 | a facade package indexes to nothing, in **cargo** | index | retrieval | **SHIPPED** on retrieval; answer half replayed FLAT at n=4, no recorded stimulus |
 | 17 | retrieval depends on the cache's other packages | retrieval | retrieval | **real, and measured harmless** |
-| 21 | `export declare function` never started a chunk | index | offline + retrieval | **SHIPPED**, +99.3% chunks for +0.7% bytes |
+| 21 | `export declare function` never started a chunk | index | offline + retrieval | fixed and COMMITTED, **not published**: retrieved bytes -38%, answer side unmeasured |
 | 20 | a Rust item inside a `name! { … }` block is not indexed | index | offline + replay | **SHIPPED**, +393 public names; one causal answer, no aggregate at n=14 |
 | 19 | a symbol declared only in a NON-prefixed dependency | both | recorded corpus | caused the rs HARD FAIL; **BOTH bounds REFUTED** — `[dependencies]` 2 right of 20, lock 3 right of 18 |
 | 18 | one answer in five carries a false hallucination warning | extraction | recorded corpus | **SHIPPED**, 21/21 now report stitched |
@@ -1036,6 +1036,37 @@ hono     708 -> 1,124
 ```
 
 All four ground-truth probes still hit.
+
+### The cost, measured before publishing — and it is NOT yet paid for
+
+Smaller chunks in a chunk-COUNT budget means less text reaches the child. Eight
+queries over zod and hono, same cache discipline:
+
+```
+                                   before      after
+retrieved chunks                     65          66
+retrieved BYTES                  82,151      50,768   -38%
+"Hono class constructor"         11,324       1,749   -85%
+"z.object schema definition"      7,253       1,209   -83%
+```
+
+**`PACKAGE_RETRIEVE_LIMIT = 8` is the binding constraint, and it is an unmeasured
+constant.** `docs-retrieve.ts` says so in its own header: "Nothing in this repo
+records WHY they differ" (8 for a package, 50 for project source). The byte budget
+is 24,000 and retrieval now uses 7% of it.
+
+So defect 21 is **committed and deliberately NOT published**. Two questions have
+to be answered first, and both need the extraction child, not the index:
+
+1. Does an answer improve on 1,749 bytes of actual declarations where it had
+   11,324 bytes of arbitrary 8 KB slab? Precision may beat volume; defect 11 is
+   the standing proof that an index change need not reach the answer at all.
+2. If it does not, the fix is not to revert the chunker — it is to measure the
+   limit. Sweep it the way defect 11's hop cap was swept, and let the number
+   choose. Do not pick one that restores the old byte total; that is fitting to a
+   number rather than measuring.
+
+`bun run test` 4430 pass / 0 fail; `npm run lint:check` green.
 
 ## `dropDeadMajors` being top-level ONLY is load-bearing — measured
 
