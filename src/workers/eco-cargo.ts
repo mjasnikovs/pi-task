@@ -1044,6 +1044,26 @@ export function cargoExportGap(root: string): ExportGap {
 }
 
 /**
+ * Source of every function `cargoExportGap` delegates to.
+ *
+ * `String(cargoExportGap)` covers only the top level, and the two bugs already
+ * found in this pass — a rename split that truncated `Hasher`, a lock read from
+ * the wrong root — both lived in helpers. A fix to one of them has to move the
+ * index fingerprint or every cached facade keeps the chunks the old rule chose.
+ */
+export function cargoGapFingerprint(): string {
+    return [cargoExportGap, runtimeDeps, useTargets, rustSources, moduleOfPath]
+        .map(String)
+        .concat([
+            PUB_USE_RE.source,
+            RUST_DECL_RE.source,
+            CARGO_SKIP_DIRS.join(','),
+            [...OWN_PATH_ROOTS].join(',')
+        ])
+        .join('\u0000')
+}
+
+/**
  * Which declared dependencies may be opened to fill the gap.
  *
  * Cargo splits a facade from its implementation by name the way hackage does —

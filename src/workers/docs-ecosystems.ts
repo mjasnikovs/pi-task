@@ -43,6 +43,7 @@ import {
     lockedDeps,
     manifestCrates,
     cargoExportGap,
+    cargoGapFingerprint,
     cargoSupplementCandidates,
     CARGO_DECL_SPLIT_RE
 } from './eco-cargo.js'
@@ -55,6 +56,7 @@ import {
     hackageProjectName,
     supplementCandidates,
     hackageExportGap,
+    hackageGapFingerprint,
     findCabalTarball,
     cachedVersions,
     resolvedVersions,
@@ -206,6 +208,12 @@ export interface EcosystemProfile {
      * which of a supplement's chunks are kept.
      */
     exportGap?: (root: string) => ExportGap
+    /**
+     * Source of `exportGap` AND everything it delegates to, for the index
+     * fingerprint. `String(exportGap)` alone leaves a fix in a helper invisible,
+     * which is the failure `chunkerFingerprint` exists to close one level up.
+     */
+    exportGapFingerprint?: () => string
     /** The registry's own newest version, for grounding an answer in the present. */
     latest: (name: string, io: EcosystemIo) => Promise<NpmVersionInfo | null>
 
@@ -497,6 +505,7 @@ const cargoProfile: EcosystemProfile = {
         return out
     },
     exportGap: cargoExportGap,
+    exportGapFingerprint: cargoGapFingerprint,
     latest: (name, io) => cratesLatest(name, io.fetch, io.signal),
 
     isSurfaceFile: isRustFile,
@@ -627,6 +636,7 @@ const hackageProfile: EcosystemProfile = {
         return out
     },
     exportGap: hackageExportGap,
+    exportGapFingerprint: hackageGapFingerprint,
     latest: (name, io) => hackageLatest(name, io.fetch, io.signal),
 
     isSurfaceFile: isHaskellFile,

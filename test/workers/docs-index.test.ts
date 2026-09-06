@@ -603,6 +603,39 @@ describe('a cargo facade reaches its implementation', () => {
         }
     })
 
+    test('changing the gap rule re-indexes a cached crate', () => {
+        // Same class as the chunker fingerprint above. The supplement SET is
+        // hashed, but the rule that decides which of a supplement's chunks are
+        // kept was not — so a fix to `cargoExportGap` left every cached facade
+        // holding the chunks the old rule chose.
+        const cache = openCache(':memory:')
+        try {
+            expect(ensureIndexed(cache, facade(), ECOSYSTEMS.cargo, [core()]).hitCache).toBe(false)
+            expect(ensureIndexed(cache, facade(), ECOSYSTEMS.cargo, [core()]).hitCache).toBe(true)
+            const widened = {
+                ...ECOSYSTEMS.cargo,
+                exportGapFingerprint: () => `${ECOSYSTEMS.cargo.exportGapFingerprint!()} widened`
+            }
+            expect(ensureIndexed(cache, facade(), widened, [core()]).hitCache).toBe(false)
+        } finally {
+            cache.close()
+        }
+    })
+
+    test('the gap fingerprint covers the helpers, not just the entry point', () => {
+        // Both bugs found in this pass lived in helpers: a rename split that
+        // truncated `Hasher`, and a lock read from the crate's root instead of the
+        // project's. `String(cargoExportGap)` shows neither.
+        const fp = ECOSYSTEMS.cargo.exportGapFingerprint!()
+        for (const helper of ['runtimeDeps', 'useTargets', 'rustSources', 'moduleOfPath']) {
+            expect(fp).toContain(helper)
+        }
+        // And the module-level regexes, which the helpers reference BY NAME — so
+        // their source never appears in a helper's own text.
+        expect(fp).toContain('pub\\s+use')
+        expect(fp).toContain('macro_rules!')
+    })
+
     test('the folded declaration says which crate it came from', () => {
         const cache = openCache(':memory:')
         try {
