@@ -132,7 +132,7 @@ the record; the model is not.
 | — | aeson keeps 55 duplicate bodies | index | offline | **measured fixed** |
 | 16 | a facade package indexes to nothing, in **cargo** | index | retrieval | **SHIPPED** on retrieval; answer half replayed FLAT at n=4, no recorded stimulus |
 | 17 | retrieval depends on the cache's other packages | retrieval | retrieval | **real, and measured harmless** |
-| 19 | a symbol declared only in a NON-prefixed dependency | both | retrieval + full run | found in re-run 4, caused the rs HARD FAIL |
+| 19 | a symbol declared only in a NON-prefixed dependency | both | recorded corpus | caused the rs HARD FAIL; obvious lever **REFUTED**, 4 of 20 and none that mattered |
 | 18 | one answer in five carries a false hallucination warning | extraction | recorded corpus | **SHIPPED**, 21/21 now report stitched |
 | 14 | correct answer, deprecated code shipped | neither | **full run** | lever BUILT, 3/3 on the corpus; live run pending |
 
@@ -1016,14 +1016,57 @@ name with the signature in a dependency — and the prefix bound cannot cross fr
 Worse for the trigger: axum does not `pub use ServiceExt` at all, so there is no
 hole for rule 1 to see either. **Both halves of the stopping rule miss it.**
 
-**Candidate lever, UNMEASURED — do not build it before STEP 0.** Extend "resolve,
-do not traverse" from re-exports to QUERIES: when a query names a symbol the asked
-package declares nowhere, and a declared dependency does declare it, answer from
-there. `tower` retrieves for the same query, so the material exists. What is
-unknown is the base rate and the false-positive cost, and both must be measured on
-the 158 recorded queries before a line is written. Widening the doc-comment
-mention into a trigger is NOT the lever — half of crates.io is mentioned in axum's
-doc comments.
+### STEP 0 — the obvious lever, MEASURED and REFUTED as designed
+
+The candidate was: extend "resolve, do not traverse" from re-exports to QUERIES —
+when a query names a symbol the asked package declares nowhere, and a declared
+dependency does declare it, answer from there.
+
+**Upper bound first.** Every symbol-shaped token in all 158 recorded queries,
+checked against the asked package's WHOLE chunk table (not ranked retrieval, so
+defect 17 cannot reach this):
+
+```
+261 symbols named in a query
+121 declared NOWHERE in the package asked          46.4%
+```
+
+That 46% is a contaminated ceiling, and reading the rows says why. It is three
+populations, not one:
+
+```
+names that exist in no crate at all   decodeFile, DecodeError, GenericFromJSON,
+                                      zZodError, safeParseResult, axumRouter
+                                      — the model's inventions, a KNOWN limit
+names in a DIFFERENT crate            DeserializeOwned, StatusCode, TcpListener,
+                                      oneshot, ByteString, HashMap
+classifier noise                      camelCase, snake_case, rename_all,
+                                      TypeScript, main, assert, handle
+```
+
+**The decisive number, cargo, bounded by `[dependencies]`** — the sound bound, and
+`manifestCrates`'s own docstring says why the lock is not (it answers "can this
+resolve", not "may this crate `use` it"):
+
+```
+20 distinct (asked crate, undeclared symbol) pairs
+ 4 reachable in a declared dependency   DeserializeOwned->serde x2, handle->tokio,
+                                        to_bytes->axum
+16 reachable in nothing indexed
+```
+
+**And none of the four is one that mattered.** `oneshot` is in `tower`, which the
+project declares only transitively; `StatusCode` is in `http`, likewise; and
+`TcpListener` is not declared in `tokio`'s own index either. The lever reaches 4
+of 20 and **zero of the symbols behind the rs HARD FAIL**. Refuted as designed.
+
+Widening the bound to the lock would reach `tower` — and re-opens a failure this
+codebase has already paid for once: the 2026-09-05 run answered about `tower`,
+which was in the lock via axum and absent from `[dependencies]`, and the crate did
+not compile. That variant needs its own measurement and carries a known cost.
+
+Widening the doc-comment mention into a trigger is NOT the lever either — half of
+crates.io is mentioned in axum's doc comments.
 
 ## Defect 18. One docs answer in five carries a false hallucination warning
 
