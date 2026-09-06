@@ -253,7 +253,7 @@ no threshold, in both ecosystems — arrived at twice, from opposite directions.
    with the crate's own — `axum`/`axum-core`, `tracing`/`tracing-core`. **Runtime only**:
    scanning dev- and build-dependencies fetches `tokio-test`, `clap-cargo`, `regex-test`
    and `tower-test` and resolves not one extra name.
-3. **Keep only the hole**, and **stop after one hop**. axum goes 381 chunks to 403.
+3. **Keep only the hole**, and **stop after one hop**. axum goes 381 chunks to 401.
 
 The bound's cost, stated as on hackage: `hyper` re-exports twelve names from `http`,
 `bytes` and `http-body`, and axum's own `pub use http;` and `Bytes` stay open. No prefix

@@ -12,7 +12,14 @@ import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
 
-import {cargoExportGap, cargoSupplementCandidates} from '../../src/workers/eco-cargo.js'
+import {
+    cargoExportGap,
+    cargoSupplementCandidates,
+    resolveCrate
+} from '../../src/workers/eco-cargo.js'
+import {ECOSYSTEMS, defaultEcosystemIo} from '../../src/workers/docs-ecosystems.js'
+
+const CARGO_HOME_FIXTURE = path.resolve(__dirname, '__fixtures__', 'cargo-home')
 
 let root = ''
 let plain = ''
@@ -113,7 +120,11 @@ describe('cargoExportGap', () => {
         // which only exists with the spaces intact.
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cargo-as-'))
         try {
-            write(dir, 'Cargo.toml', ['[package]', 'name = "h"', '', '[dependencies.dep]', 'version = "1"'].join('\n'))
+            write(
+                dir,
+                'Cargo.toml',
+                ['[package]', 'name = "h"', '', '[dependencies.dep]', 'version = "1"'].join('\n')
+            )
             write(dir, 'src/lib.rs', 'pub use dep::{Hasher, Inner as Outer};')
             const gap = cargoExportGap(dir)
             expect(gap.fillsHole('pub struct Hasher;')).toBe(true)
@@ -162,5 +173,61 @@ describe('cargoSupplementCandidates', () => {
 
     test('the crate itself is never its own supplement', () => {
         expect(cargoSupplementCandidates('axum', new Set(['axum']), {axum: '0.8.9'})).toEqual([])
+    })
+})
+
+describe('the cargo supplements hook reads the PROJECT lock', () => {
+    // `findLock` walks upward, and a crate unpacked under `~/.cargo/registry` sits
+    // below whatever lock happens to be above it. Reading the crate's own root
+    // returned `axum-macros 0.5.1` on this machine — a version the project never
+    // resolved — which is an index whose shape depends on the machine.
+    let project = ''
+    beforeAll(() => {
+        project = fs.mkdtempSync(path.join(os.tmpdir(), 'cargo-proj-'))
+        write(
+            project,
+            'Cargo.toml',
+            ['[package]', 'name = "app"', '', '[dependencies]', 'tiny-axum = "0.1"'].join('\n')
+        )
+        write(
+            project,
+            'Cargo.lock',
+            [
+                '[[package]]',
+                'name = "tiny-axum"',
+                'version = "0.1.0"',
+                '',
+                '[[package]]',
+                'name = "tiny-axum-core"',
+                'version = "0.1.0"'
+            ].join('\n')
+        )
+    })
+    afterAll(() => fs.rmSync(project, {recursive: true, force: true}))
+
+    const io = () =>
+        defaultEcosystemIo({cargoHome: CARGO_HOME_FIXTURE, modulesDir: CARGO_HOME_FIXTURE})
+
+    test('a dependency the project resolved becomes a supplement', async () => {
+        const pkg = resolveCrate('tiny-axum', project, {
+            cargoHome: CARGO_HOME_FIXTURE,
+            modulesDir: CARGO_HOME_FIXTURE
+        })
+        const sups = await ECOSYSTEMS.cargo.supplements!(pkg, project, io())
+        expect(sups.map(s => s.name)).toEqual(['tiny-axum-core'])
+    })
+
+    test('a project with no lock resolves no version, so no supplement', async () => {
+        const bare = fs.mkdtempSync(path.join(os.tmpdir(), 'cargo-nolock-'))
+        try {
+            const pkg = resolveCrate('tiny-axum', project, {
+                cargoHome: CARGO_HOME_FIXTURE,
+                modulesDir: CARGO_HOME_FIXTURE
+            })
+            const sups = await ECOSYSTEMS.cargo.supplements!(pkg, bare, io())
+            expect(sups).toEqual([])
+        } finally {
+            fs.rmSync(bare, {recursive: true, force: true})
+        }
     })
 })

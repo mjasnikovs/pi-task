@@ -468,7 +468,11 @@ const cargoProfile: EcosystemProfile = {
     supplements: async (pkg, cwd, io) => {
         const deps = manifestCrates(pkg.root)
         if (!deps) return []
-        const candidates = cargoSupplementCandidates(pkg.name, deps, lockedDeps(pkg.root) ?? {})
+        // The PROJECT's lock, never the crate's own root. `findLock` walks upward,
+        // and a crate unpacked under `~/.cargo/registry` sits below whatever lock
+        // happens to be above it — which resolved a version this project never
+        // pinned, making the index a function of the machine.
+        const candidates = cargoSupplementCandidates(pkg.name, deps, lockedDeps(cwd) ?? {})
         const out: ResolvedPackage[] = []
         for (const c of candidates) {
             try {

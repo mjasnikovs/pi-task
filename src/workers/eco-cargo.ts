@@ -924,7 +924,10 @@ function useTargets(body: string): {names: string[]; globs: string[]} {
     // Whitespace is normalised, never removed: `Inner as Outer` collapsed to
     // `InnerasOuter` is unrecoverable, and splitting a leaf on a bare "as" turns
     // `Hasher` into `H`.
-    const flat = body.replace(/#\[[^\]]*\]/g, '').replace(/\s+/g, ' ').trim()
+    const flat = body
+        .replace(/#\[[^\]]*\]/g, '')
+        .replace(/\s+/g, ' ')
+        .trim()
     const names: string[] = []
     const globs: string[] = []
     const expand = (prefix: string, rest: string): void => {
@@ -935,7 +938,11 @@ function useTargets(body: string): {names: string[]; globs: string[]} {
             else {
                 // The SOURCE name of a rename is the hole: the supplier declares
                 // `Inner`, whatever the facade calls it.
-                const leaf = full.split('::').pop()?.split(/\s+as\s+/)[0].trim()
+                const leaf = full
+                    .split('::')
+                    .pop()
+                    ?.split(/\s+as\s+/)[0]
+                    .trim()
                 if (leaf) names.push(leaf)
             }
             return

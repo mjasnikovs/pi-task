@@ -491,7 +491,7 @@ project, one cold cache per arm.** Published 0.40.9 against this tree:
 The fourth is the standing open item, not a new one: the query names no type, so
 there is nothing to hop to.
 
-**Cost.** axum goes 381 chunks to 403 — twenty-two, because rule 3 keeps only the
+**Cost.** axum goes 381 chunks to 401 — twenty, because rule 3 keeps only the
 hole. The `packages` table still holds exactly `axum`: a supplement is folded into
 the asking crate's rows and never registered as a package of its own.
 
@@ -499,6 +499,20 @@ Five tests mirror the hackage ones on a `tiny-axum`/`tiny-axum-core` fixture, an
 three of the five were confirmed to FAIL with the hook commented out. The two that
 survive are the negative guards ("the trait is absent alone", "the unrelated
 helper is never indexed"), which is what a negative guard is supposed to do.
+
+**Two bugs found by self-review after the measurement, both machine-shaped.**
+
+- `useTargets` stripped all whitespace, so `Inner as Outer` became `InnerasOuter`
+  and the rename split had to guess — which turned `Hasher` into `H`. Whitespace
+  is normalised now, and a rename's SOURCE name is the hole.
+- The supplements hook read `lockedDeps(pkg.root)`. `findLock` walks UPWARD, and a
+  crate unpacked under `~/.cargo/registry` sits below whatever lock happens to be
+  above it: on this machine that resolved `axum-macros 0.5.1`, a version the
+  project never pinned. It reads the PROJECT's lock now, `axum-macros` correctly
+  drops out, and axum indexes to 401 rather than 403. **This is the machine-
+  dependent index `DEFECT-12-STOPPING-RULE.md` refuses, and the twenty-two-crate
+  sweep could not see it** — the sweep read manifests directly and never called
+  the hook.
 
 **One thing fixed in passing, in both ecosystems.** `supplementCandidates` sorted
 with `localeCompare`, which orders `-` and `_` differently under a different
