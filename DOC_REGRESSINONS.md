@@ -2390,6 +2390,78 @@ inside a doc comment still begins inside a doc comment, it just now says which f
 it is from. Splitting an oversized declaration at nested member boundaries is the
 larger fix and is not attempted here.
 
+### The other half of defect 25 — MEASURED AND NOT SHIPPED, patch kept
+
+The header fix restores provenance and leaves the middles. Sizing the middles says
+they are most of the corpus:
+
+```
+12,815 chunks        492 sit at the cap (3.8%)
+7,881,182 bytes      4,030,430 of them are in those 492   (51.1%)
+
+npm:@types/node   269/509 chunks at the cap    86.8% of its bytes
+npm:bun-types     102/473                      78.1%
+cargo:tokio        90/1410                     45.1%
+npm:hono           12/1124                     23.1%
+```
+
+One shape causes all of it. `declare module "bun" { … }` is a single top-level
+declaration holding a whole module, so `DECL_SPLIT_RE` matches once and everything
+after is cut at byte offsets:
+
+```
+// bun.d.ts
+declare module "bun" {
+  type PathLike = string | NodeJS.TypedArray | ArrayBufferLike | URL;
+  …8 KiB later, mid-word, a new chunk begins…
+```
+
+**The fix works on what it targets.** `MEMBER_SPLIT_RE` — the same declaration
+heads, indented — applied ONLY when a declaration does not fit, each piece keeping
+the path and the enclosing `declare module` line:
+
+```
+                 chunks    at-cap    their share of bytes
+before           12,815     492            51.1%
+after            17,644     164            16.6%
+@types/node     509 -> 3,838               86.8% -> 28.6%
+bun-types       473 -> 1,167               78.1% -> 32.9%
+```
+
+**And it loses two records on defines, gaining none.**
+
+```
+pairs 128   only-before 2   only-after 0   125/128 -> 123/128   p = 0.5000
+both losses: hono, symbol Hono
+```
+
+Opened, not counted. The lost chunk is 225 bytes from `dist/types/preset/tiny.d.ts`
+and it is `export declare class Hono<…> { constructor(…); }` — the literal answer to
+"Hono class constructor". It is nowhere near the cap and the fix does not touch it.
+What changed is around it: hono went 1,124 -> 1,200 chunks, and `bm25()` scores over
+the whole index, so a package that splits its own giant declarations dilutes its own
+ranking and pushes a small defining chunk out of the result. Defect 17, caused this
+time by a fix.
+
+**Not shipped, and the reason is that the metric cannot see both sides.** `TRUTH`
+holds symbols for the four PINNED package sets only — zod, hono, axum, serde_json,
+tokio, aeson, scotty. It has no entry for `@types/node`, `bun-types`, `bun:test`,
+`node:url` or `node:fs/promises`, which are exactly the packages the split repairs.
+So defines measures this change's cost and is blind to its benefit, and a 2-record
+regression is the only number it can produce.
+
+The patch is kept at `plans/member-split-MEASURED-NOT-SHIPPED.patch`: three
+ecosystem member regexes, `splitOversized`, the profile field, both fingerprints,
+and four tests that fail without it. `bun run test` was green at 4467 with it
+applied.
+
+**What it needs before it can be decided:** truth entries for the Bun family, taken
+from the published docs rather than from the index — `BunFile`, `write`, `describe`,
+`readFile`, `fileURLToPath` are all named by recorded queries — plus the
+`ecosystemOf` lookup in `docs-defines` widened past `PROJECTS` pins. Then re-run
+both arms. Do not ship it on the byte numbers alone; 51.1% -> 16.6% is a
+description of the chunk table, not of an answer.
+
 ---
 
 ### The answer half — REFUTED by its own A/A, and the instrument is what broke
