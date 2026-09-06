@@ -2203,6 +2203,33 @@ text does not distract; the answer is simply not always consumed.
 Recorded so the audit's `stale API` row is not re-read as a retrieval or extraction
 failure. It is neither, in both runs that produced it.
 
+**Re-run 7 is the third, and it is worse than the first two.** Asked the same
+question, the tool answered:
+
+```
+"an email field as z.email() — z.string().email() is deprecated in v4"
+"z.int() is the recommended alternative to the legacy .int()"
+```
+
+and the code shipped:
+
+```ts
+port: z.number().int().min(1).max(65535),
+adminEmail: z.string(),
+```
+
+Not the deprecated form this time. **No email validation at all**, against a feature
+that says "requiring a string name, a port between 1 and 65535, and an admin email".
+
+And the audit cannot see it. `stale` looks for `.email()` written the v3 way; a
+requirement DROPPED leaves nothing to match, so this passes the stale check while
+failing the spec. Three runs, three correct answers, three different ways of not
+using one — the deprecated form twice and now an omission.
+
+Nothing in the docs tool is implicated in any of the three, and that is the finding.
+The audit's blind spot is worth a check of its own: it scores what the code says
+against the wrong major, and never that the code says nothing.
+
 ---
 
 ## Item 1. `RETRIEVE_CONTENT_BUDGET` — the retrieval half, and the constant that
