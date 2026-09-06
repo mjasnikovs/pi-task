@@ -225,7 +225,7 @@ function enforceBudget(chunks: RetrievedChunk[], budget: number): RetrievedChunk
  * `The` both outrank `HandlerInterface` in the same text. What the query names
  * is the signal.
  */
-function hopNames(text: string, tokens: string[]): string[] {
+export function hopNames(text: string, tokens: string[]): string[] {
     const declared = new Set([...text.matchAll(TYPE_DECL_RE)].map(m => m[1]))
     const typeParams = new Set<string>()
     for (const m of text.matchAll(TYPE_PARAMS_RE)) {

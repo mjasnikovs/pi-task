@@ -2368,6 +2368,48 @@ being even a proxy.
 
 ---
 
+## The alias hop cannot see `export const`, and teaching it costs more than it buys
+
+`bun:test`'s remaining misses have a mechanism, and it is defect 3's exactly. The
+package declares its whole API as aliases inside a `declare module` block, with the
+call signatures one declaration away:
+
+```
+// test.d.ts
+declare module "bun:test" {
+  export const describe: Describe<[]>;            285 B
+  export const expect: Expect;                     71 B
+  export interface Describe<T> { (fn: () => void): void; … }   2,134 B
+```
+
+`function describe`, `function it(` and `export function expect` appear NOWHERE in
+`bun-types`' chunk table — 0 rows each. The alias is the declaration.
+
+`MEMBER_TYPE_RE` matches `get: HandlerInterface<…>` and could not see past
+`export const`, so the hop never fired for the shape it exists to follow. Extending
+it to `(?:export|declare)*\s*(?:const|let|var|readonly)?` makes the hop fire.
+
+**And it loses two records and gains none.**
+
+```
+pairs 159   only-before 2   only-after 0   151/159 -> 149/159   p = 0.5000
+both losses, same record:  14 chunks 20,773 B  ->  9 chunks 23,366 B
+```
+
+Opened: the hop pulls in `Describe`, `Expect` and `Test` — 2 KB interfaces — and the
+re-budget `[kept[0], ...hops, ...kept.slice(1)]` pushes out the small chunks at the
+tail. What it pushed out was `export const expect: Expect;` and the `beforeEach`
+declaration: **the hop evicted the declaration of the very symbol it was chasing a
+type for.**
+
+Not shipped. And note what defines can and cannot say here: the cost is measured, the
+benefit — a child seeing `Describe`'s call signatures instead of only the name
+binding — is not something a defining-chunk metric can express at all. Deciding it
+needs an answer-side arm, which after the position confound means a warm-up pass and
+ABBA, four passes for a change whose measured cost is already negative.
+
+---
+
 ## The truth set's SELECTION was loose, and one two-letter entry settled a constant
 
 Three decisions in a row have been limited by what `TRUTH` could see, so the third

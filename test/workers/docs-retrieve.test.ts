@@ -8,7 +8,8 @@ import {ECOSYSTEMS} from '../../src/workers/docs-ecosystems.js'
 import {
     retrieveChunks,
     PACKAGE_RETRIEVE_LIMIT,
-    RETRIEVE_CONTENT_BUDGET
+    RETRIEVE_CONTENT_BUDGET,
+    hopNames
 } from '../../src/workers/docs-retrieve.js'
 
 const FIXTURES = path.resolve(__dirname, '__fixtures__')
@@ -396,4 +397,24 @@ test('the value hop skips a chunk whose PATH carries the name, and a bare `mod`'
     } finally {
         cache.close()
     }
+})
+
+// bun:test declares its API as `export const describe: Describe<[]>` inside a
+// `declare module` block, with the call signatures in the `Describe` interface —
+// defect 3's alias shape exactly, and the hop does NOT follow it. Teaching
+// MEMBER_TYPE_RE to see past `export const` was measured: defines 151/159 -> 149/159,
+// because the 2 KB interfaces it fetches evict the small `export const expect: Expect;`
+// the query was actually about. Pinned as deliberate so it is not "fixed" back.
+test('an aliased `export const` member is NOT a hop candidate, on purpose', () => {
+    const text =
+        '// test.d.ts\ndeclare module "bun:test" {\n  export const describe: Describe<[]>;\n'
+    expect(hopNames(text, ['describe'])).toEqual([])
+})
+
+test('a plain interface member is still a hop candidate', () => {
+    expect(hopNames('  get: HandlerInterface<E>;\n', ['get'])).toContain('HandlerInterface')
+})
+
+test('a member whose type is lowercase is not a hop candidate', () => {
+    expect(hopNames('  export const port: number;\n', ['port'])).toEqual([])
 })
