@@ -275,6 +275,62 @@ export async function retrieveLive(rec: ReplayRecord, cwd: string): Promise<Mate
  * ABSTENTION is the scored outcome. It is the one thing a child does that is not a
  * matter of degree, and it is what the retrieve limit moved.
  */
+/**
+ * Pool several passes per arm before pairing, which is the only honest way to read
+ * a two-tree A/B.
+ *
+ * WHY. Running arm A's whole record set and then arm B's makes ARM and POSITION the
+ * same variable, and position is worth more than any constant measured so far: four
+ * alternating passes over one fixed record set answered 76, 85, 88 and 89 of 103,
+ * and an A/A over identical bytes read p = 0.0118 while the A/B beside it read
+ * p = 0.0636. A single-pass two-tree comparison cannot tell a constant from a slot.
+ *
+ * So the protocol is one warm-up pass, discarded, then ABBA — each arm holding one
+ * early slot and one late one — and this scores it. A record counts for an arm when
+ * that arm answered it more often across its passes.
+ *
+ * `--arm` does not need any of this: both arms of one record run back to back in
+ * one process, so they share a position. Only a build-time constant forces two
+ * trees, and only two trees order the arms in blocks.
+ */
+export function comparePooled(
+    aPasses: readonly (readonly ReplayRow[])[],
+    bPasses: readonly (readonly ReplayRow[])[]
+): string {
+    const key = (r: ReplayRow): string => `${r.source}|${r.module}|${r.query}|${r.trial}`
+    const index = (rows: readonly ReplayRow[]): Map<string, ReplayRow> =>
+        new Map(rows.map(r => [key(r), r]))
+    const a = aPasses.map(index)
+    const b = bPasses.map(index)
+    const all = [...a, ...b]
+    if (all.length === 0) return 'no passes given'
+    let onlyA = 0
+    let onlyB = 0
+    let tied = 0
+    for (const k of all[0].keys()) {
+        if (!all.every(m => m.has(k))) continue
+        const answered = (ms: Map<string, ReplayRow>[]): number =>
+            ms.filter(m => !(m.get(k) as ReplayRow).unclear).length
+        const ca = answered(a)
+        const cb = answered(b)
+        if (ca > cb) onlyA++
+        else if (cb > ca) onlyB++
+        else tied++
+    }
+    const n = onlyA + onlyB + tied
+    if (n === 0) return 'no record appears in every pass'
+    const rate = (ms: Map<string, ReplayRow>[]): string => {
+        const answered = ms.reduce((t, m) => t + [...m.values()].filter(r => !r.unclear).length, 0)
+        const of = ms.reduce((t, m) => t + m.size, 0)
+        return `${answered}/${of}`
+    }
+    return [
+        `records ${n}   A better ${onlyA}   B better ${onlyB}   tied ${tied}`,
+        `answered over all passes  A ${rate(a)}   B ${rate(b)}`,
+        `McNemar exact, two-sided: p = ${mcnemar(onlyA, onlyB).toExponential(3)}`
+    ].join('\n')
+}
+
 export function comparePaired(a: readonly ReplayRow[], b: readonly ReplayRow[]): string {
     const key = (r: ReplayRow): string => `${r.source}|${r.module}|${r.query}|${r.trial}`
     const mb = new Map(b.map(r => [key(r), r]))
@@ -455,6 +511,8 @@ interface Options {
     retrieve: string | null
     /** Two ledgers to pair and score, instead of running anything. */
     compare: [string, string] | null
+    /** Ledgers per arm, `a1,a2 b1,b2`, pooled before pairing. */
+    comparePooled: [string, string] | null
 }
 
 export function parseArgs(argv: readonly string[]): Options {
@@ -469,7 +527,8 @@ export function parseArgs(argv: readonly string[]): Options {
         out: null,
         cwd: process.cwd(),
         retrieve: null,
-        compare: null
+        compare: null,
+        comparePooled: null
     }
     for (let i = 0; i < argv.length; i++) {
         const a = argv[i]
@@ -479,6 +538,7 @@ export function parseArgs(argv: readonly string[]): Options {
         else if (a === '--module') opts.module = argv[++i]
         else if (a === '--retrieve') opts.retrieve = argv[++i]
         else if (a === '--compare') opts.compare = [argv[++i], argv[++i]]
+        else if (a === '--compare-pooled') opts.comparePooled = [argv[++i], argv[++i]]
         else if (a === '--limit') opts.limit = Number(argv[++i])
         else if (a === '--out') opts.out = argv[++i]
         else if (a === '--cwd') opts.cwd = argv[++i]
@@ -486,7 +546,7 @@ export function parseArgs(argv: readonly string[]): Options {
         else if (a.startsWith('--')) throw new Error(`docs-replay: unknown flag ${a}`)
         else opts.files.push(a)
     }
-    if (opts.compare === null && opts.files.length === 0) {
+    if (opts.compare === null && opts.comparePooled === null && opts.files.length === 0) {
         throw new Error('docs-replay: give at least one recorded .jsonl')
     }
     return opts
@@ -504,6 +564,13 @@ async function main(): Promise<void> {
     const opts = parseArgs(process.argv.slice(2))
     if (opts.compare) {
         console.log(comparePaired(readLedger(opts.compare[0]), readLedger(opts.compare[1])))
+        return
+    }
+    if (opts.comparePooled) {
+        const passes = (spec: string): ReplayRow[][] => spec.split(',').map(readLedger)
+        console.log(
+            comparePooled(passes(opts.comparePooled[0]), passes(opts.comparePooled[1]))
+        )
         return
     }
     const {records, skipped} = loadCorpusFiles(opts.files)
