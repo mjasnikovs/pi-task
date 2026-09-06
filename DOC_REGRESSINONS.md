@@ -132,6 +132,7 @@ the record; the model is not.
 | — | aeson keeps 55 duplicate bodies | index | offline | **measured fixed** |
 | 16 | a facade package indexes to nothing, in **cargo** | index | retrieval | **SHIPPED** on retrieval; answer half replayed FLAT at n=4, no recorded stimulus |
 | 17 | retrieval depends on the cache's other packages | retrieval | retrieval | **real, and measured harmless** |
+| 23 | a class chunk is 50x the median and BM25 buries it | retrieval | retrieval | found and MECHANISED; the tempting lever orphans signatures |
 | 22 | on hackage a package's own name has ~0 IDF | retrieval | retrieval | found and MECHANISED; no lever without an FTS schema change |
 | 21 | `export declare function` never started a chunk | index | offline + retrieval | **SHIPPED**, defining chunks 16/62 -> 34/62 paired, p=1.2e-4 |
 | 20 | a Rust item inside a `name! { … }` block is not indexed | index | offline + replay | **SHIPPED**, +393 public names; one causal answer, no aggregate at n=14 |
@@ -212,6 +213,42 @@ cargo   26/26 (100%)     npm 38/42 (90%)     hackage 26/33 (79%)
   hono:Hono           12/14     hono:json           8/10
   aeson:eitherDecode    4/6     scotty:scotty       2/7   <--
 ```
+
+## Defect 23. A class chunk is 50x the median and BM25 buries it
+
+The four npm misses the defines-metric leaves are all hono, and one is clean:
+
+```
+query   "Context class `c.json()` helper: method signature, accepted data type,
+         optional status code parameter, and returned Response content-type"
+        11 chunks retrieved, 5,804 B, and no chunk declares `json`
+```
+
+The declaration is indexed. `dist/types/context.d.ts` holds
+`export declare class Context { … json(…) … }`, and six hono chunks declare
+`json` as a member. It is a RANKING miss, and the mechanism is size:
+
+```
+hono chunk bytes:   min 51    median 153    p90 567    max 8,192
+the Context chunk:  7,520 B   —  49x the median
+its rank for that query:  10        PACKAGE_RETRIEVE_LIMIT: 8
+```
+
+BM25 normalises for document length, and a 7.5 KB chunk in a corpus whose median
+is 153 bytes is penalised hard. The chunk that holds the member declarations is
+pushed to rank 10 and the cut is at 8.
+
+**This is one of the three the limit sweep found.** 8 -> 16 recovers it, which is
+why the plateau sits at 16 — and at 3 of 62, p=0.25, that is still not enough to
+double the payload. The mechanism is recorded so a future session with more data
+can decide it on more than a p-value.
+
+**The tempting lever is worse than the problem.** Splitting a class body into
+member-sized chunks would even out the distribution and orphan every signature
+from its receiver type — which is precisely the bug `CARGO_DECL_SPLIT_RE`'s own
+comment records paying for once ("an orphan signature with no receiver type,
+carrying the next method's doc comment"). Filed with the mechanism, no cheap
+lever.
 
 ## Defect 22. On hackage, the package's own name has no ranking power at all
 
