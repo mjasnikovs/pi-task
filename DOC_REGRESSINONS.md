@@ -2167,7 +2167,30 @@ Running total across six runs: the invented-symbol flag has fired for **26 excer
 and 6 symbols, and not one has been a fabrication.** The prior session measured a
 query-echo guard and did not ship it, on the grounds that there is nothing in the
 corpus for it to protect. Two more false flags is more of the same evidence, not new
-evidence. Left alone.
+evidence.
+
+**And the obvious narrow fix was checked at STEP 0 and does not apply.** `ZodError`
+suggested a precise rule — a PROJECT-corpus answer naming a type an indexed
+dependency declares — so every flag in every archived run was re-derived:
+
+```
+flags across five archived runs                                     10
+    from the project corpus                                          0
+    name a symbol another record in the SAME run retrieved           7
+```
+
+Zero. The run 7 case is the first of its kind, and the ten before it are a different
+shape entirely:
+
+```
+zod  fields   zod  are    hono assert   serde rename   axum router
+zod  age      serde_json msg   axum config x2   axum error_value
+```
+
+`are` is an English word. The rest are code-example variable names. That is the
+PROSE-SYMBOLS class this file already recorded as REFUTED, and the seven a
+same-run rule would clear it clears for the wrong reason — `config` and `router`
+appear in every package's chunks. Not built.
 
 Twenty-four cases and the warning has never once been right. It stays, because
 the thing it watches for is real and would matter; but nothing in five live runs
