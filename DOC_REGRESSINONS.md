@@ -132,10 +132,10 @@ the record; the model is not.
 | — | aeson keeps 55 duplicate bodies | index | offline | **measured fixed** |
 | 16 | a facade package indexes to nothing, in **cargo** | index | retrieval | **SHIPPED** on retrieval; answer half replayed FLAT at n=4, no recorded stimulus |
 | 17 | retrieval depends on the cache's other packages | retrieval | retrieval | **real, and measured harmless** |
-| 20 | a Rust item inside a `name! { … }` block is not indexed | index | offline | **SHIPPED**, +393 public names, tokio 672 -> 822 |
+| 20 | a Rust item inside a `name! { … }` block is not indexed | index | offline + replay | **SHIPPED**, +393 public names; one causal answer, no aggregate at n=14 |
 | 19 | a symbol declared only in a NON-prefixed dependency | both | recorded corpus | caused the rs HARD FAIL; obvious lever **REFUTED**, 4 of 20 and none that mattered |
 | 18 | one answer in five carries a false hallucination warning | extraction | recorded corpus | **SHIPPED**, 21/21 now report stitched |
-| 14 | correct answer, deprecated code shipped | neither | **full run** | lever BUILT, 3/3 on the corpus; live run pending |
+| 14 | correct answer, deprecated code shipped | neither | **full run** | lever SHIPPED, 3/3 on 12,568 files; the condition did NOT recur in re-run 4 |
 
 ## 4's residue. A query that names no type — REFUTED at STEP 0
 
