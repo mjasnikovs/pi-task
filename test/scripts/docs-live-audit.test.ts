@@ -53,3 +53,42 @@ test('the same symbol CONFIRMED is still invented', () => {
 test('a quote swallowed by the prime rule is not an invented symbol', () => {
     expect(inventedSymbols("Pass `{ method: 'POST' }`.", 'method?: POST | GET')).toEqual([])
 })
+
+// Four false-positive families, every string below lifted verbatim from the recorded
+// answers of the 2026-09-06 re-runs. Together they were 4 of the 8 remaining flags.
+test('a language literal is not the package API', () => {
+    expect(
+        inventedSymbols('It returns `{ success: false, error }`.', 'success data error')
+    ).toEqual([])
+})
+
+test('a member of a language global is not the package API', () => {
+    expect(inventedSymbols('Serialize with `JSON.stringify(err.issues)`.', 'issues err')).toEqual(
+        []
+    )
+})
+
+test('a node stdlib module path is not the package API', () => {
+    expect(
+        inventedSymbols('Use the `readFile` export from `node:fs/promises`.', 'readFile')
+    ).toEqual([])
+})
+
+// `#[serde(rename_all = "camelCase")]` over `pub admin_email`. The child derived the
+// wire name correctly, and the corpus carries the symbol it derived it from.
+test('a rename of a known symbol is not invented', () => {
+    expect(inventedSymbols('The field is `adminEmail`.', 'pub admin_email: String')).toEqual([])
+})
+
+// The same fold clears `let router = Router::new()` — a binding named after its type.
+test('a binding named after its own type is not invented', () => {
+    expect(
+        inventedSymbols('Pass `axum::serve(listener, router)`.', 'axum Router listener serve')
+    ).toEqual([])
+})
+
+// The fold must not reach past a case difference. `decodeFile` and `decodeFileStrict`
+// are the confusion these runs keep producing, and it is the one the scorer must keep.
+test('the fold does not clear a symbol that only shares a stem', () => {
+    expect(inventedSymbols('Use `decodeFile` here.', 'decodeFileStrict')).toContain('decodeFile')
+})

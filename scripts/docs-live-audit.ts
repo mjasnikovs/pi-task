@@ -23,6 +23,40 @@ const SENTENCE_SPLIT_RE = /(?<=[.;])\s+/
 const DENIAL_RE = /\b(not|no|neither|nor|never|cannot|absent|missing|unconfirmed|contradicts)\b|n't/i
 
 /**
+ * Words the LANGUAGE provides, not the package. A literal or a stdlib global says
+ * nothing about the package's API, so it cannot be a fabrication of one. Kept to
+ * one union of the three ecosystems: a name here that a package also exports is
+ * in that package's corpus anyway, so the union costs nothing.
+ */
+const LANGUAGE_WORDS = new Set([
+    'true', 'false', 'null', 'undefined', 'void', 'await', 'async', 'return', 'const', 'let',
+    'JSON', 'Promise', 'Array', 'Object', 'String', 'Number', 'Boolean', 'Date', 'Map', 'Set',
+    'Math', 'console', 'RegExp', 'Symbol', 'BigInt', 'Error', 'TypeError',
+    'Ok', 'Err', 'Some', 'None', 'Vec', 'Option', 'Result', 'bool', 'str', 'u16', 'u32', 'i32',
+    'usize', 'pub', 'struct', 'impl', 'enum', 'trait', 'derive',
+    'Just', 'Nothing', 'Maybe', 'Either', 'Left', 'Right', 'Int', 'Bool', 'True', 'False',
+])
+
+/** Node's own module namespace. `node:fs/promises` is a claim about Node, not about zod. */
+const STDLIB_PATH_RE = /^node:/
+
+/**
+ * Members reached through a language global: the `stringify` of `JSON.stringify`.
+ * The claim is about the language, and the package's corpus has no reason to carry it.
+ */
+function memberOfLanguageGlobal(span: string): Set<string> {
+    const out = new Set<string>()
+    for (const m of span.matchAll(/([A-Za-z_][A-Za-z0-9_]*)\s*(?:\.|::)\s*([A-Za-z_][A-Za-z0-9_]*)/g))
+        if (LANGUAGE_WORDS.has(m[1])) out.add(m[2])
+    return out
+}
+
+/** `admin_email` and `adminEmail` are the same symbol under `#[serde(rename_all)]`. */
+function caseFold(token: string): string {
+    return token.replace(/_/g, '').toLowerCase()
+}
+
+/**
  * Identifiers the answer ASSERTS as code that occur nowhere in what the tool
  * retrieved.
  *
@@ -42,16 +76,24 @@ const DENIAL_RE = /\b(not|no|neither|nor|never|cannot|absent|missing|unconfirmed
  */
 export function inventedSymbols(answer: string, corpus: string): string[] {
     const known = new Set(corpus.match(IDENTIFIER_RE) ?? [])
+    const folded = new Set([...known].map(caseFold))
     const out = new Set<string>()
     for (const sentence of answer.split(SENTENCE_SPLIT_RE)) {
         if (DENIAL_RE.test(sentence)) continue
         for (const span of sentence.matchAll(CODE_SPAN_RE)) {
+            if (STDLIB_PATH_RE.test(span[1].trim())) continue
+            const languageMembers = memberOfLanguageGlobal(span[1])
             for (const token of span[1].match(IDENTIFIER_RE) ?? []) {
                 // IDENTIFIER_RE admits a trailing `'` so Haskell primes survive whole,
                 // and it swallows the closing quote of a string literal too: `'POST'`
                 // arrives as `POST'`. A prime over a stem the corpus knows is that.
                 if (known.has(token)) continue
                 if (token.endsWith("'") && known.has(token.slice(0, -1))) continue
+                if (LANGUAGE_WORDS.has(token)) continue
+                if (languageMembers.has(token)) continue
+                // Covers two shapes at once: `let router = Router::new()`, a binding named
+                // after its own real type, and `adminEmail` for `admin_email`.
+                if (folded.has(caseFold(token))) continue
                 out.add(token)
             }
         }

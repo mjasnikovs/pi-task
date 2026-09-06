@@ -99,6 +99,8 @@ export function buildExtractionPrompt(opts: {
         + `4. If the answer is unclear, ambiguous, or absent from <${tag}-content>, write exactly:\n`
         + `   <answer>${abstentionSentence(opts.kind)}</answer> and put the closest related text in <excerpt>.\n`
         + `   Do not guess.\n`
+        + `   A question with several parts: answer the parts <${tag}-content> covers, and name\n`
+        + `   the parts it does not. Use rule 4's sentence alone only when it covers no part.\n`
         + `5. Be terse. One short paragraph in <answer> max.\n`
         + `\n`
         + `<${tag}>${opts.identity}</${tag}>\n`
