@@ -707,11 +707,31 @@ may only delete, and the sibling's `dropToken` behaves identically wherever a
 token is not in a list. It no longer *requires* the unresolvable dependency, which
 is the whole job.
 
-**Residue, stated so it is not rediscovered as new.** The drop touches CONSTRAINTS
-only. GOAL still restates `wai-test` and `z.string().email()` verbatim, because
-GOAL is refine's copy of the raw prompt and rewriting it is not a deletion this
-pass can make. Whether that residue is enough to re-cause the failure is exactly
-what the live run measures.
+**Residue — measured, and it splits the two cases cleanly.** After the drop, is
+the token still anywhere in the prompt?
+
+```
+                       GOAL  KNOWN-UNKNOWNS  EXTERNAL-DEPS  RAW PROMPT
+ts/TASK_0001  z.string().email()   no    no    no    no
+ts/TASK_0002  z.string().email()   no    no    no    no
+hs/TASK_0001  `wai-test`          YES   YES   YES   YES
+```
+
+**The zod case — the one that caused the ts HARD FAIL — is removed completely.**
+It appears nowhere else, because refine invented it: it is not in the raw prompt
+at all.
+
+**The Haskell case cannot be closed this way, and should not be.** `wai-test` is
+in the RAW PROMPT — the user pinned it by name, in a decision line that says
+"add wai-test to the test-build-depends". Refine invented nothing. A CONSTRAINTS
+drop leaves GOAL, KNOWN-UNKNOWNS and EXTERNAL-DEPENDENCIES still naming it, so the
+pass is inert there by construction, and rewriting a user's own words is not a
+deletion this pass may make. That run's grill auto-answer resolved it correctly on
+its own.
+
+So the lever's real reach is the refine-invented half, which is the half the
+`refuted-constraint.ts` sibling was also built for. Stated here rather than
+discovered again.
 
 `bun run test` 4388 pass / 0 fail; `npm run lint:check` green.
 
