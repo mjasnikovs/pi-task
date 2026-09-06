@@ -1079,6 +1079,31 @@ Two axum/tower queries retrieve slightly FEWER bytes (1,080 -> 1,061 and
 gained chunks. That is defect 17's mechanism inside a single package, and it is
 the reason a retrieval A/B must hold the cache fixed.
 
+### The ANSWER half — no aggregate signal, and one record that says everything
+
+Two arms of the same tree, differing only in the macro descent, over every
+replayable `rs` record. **The aggregate says nothing and cannot**: 14 records
+across five modules, 1 to 7 per module, and the abstention counts bounce both
+ways (`recorded-answer -> abstain` 0/9 to 1/9). That is not a measurement.
+
+**The one record with a real stimulus is a different matter.** `tokio` was asked
+for `TcpListener::bind`'s signature — and `tokio:TcpListener` is one of this
+test's own ground-truth symbols:
+
+```
+HEAD~1  "…no explicit generic bound `A: ToSocketAddrs` … from the provided text"
+HEAD    "The package shows `pub async fn bind<A: ToSocketAddrs>(addr: A)
+         -> io::Result<TcpListener>`"
+```
+
+That signature is the declaration inside `cfg_net! { … }`. Not a statistical
+result at n=1 — a mechanistic one: the answer quotes the exact text the fix
+unlocked, and the pre-fix arm states it is unavailable.
+
+One more reading of the abstention metric while we are here: the HEAD arm that
+produced the correct signature **also set `unclear`**. The child answered
+correctly and flagged itself. Defect 15's class, still alive.
+
 ### Haskell does NOT have this shape — checked, not assumed
 
 The obvious next question is whether `haskellSurface` has its own opaque-block
