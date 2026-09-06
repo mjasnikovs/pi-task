@@ -68,6 +68,21 @@ function body(chunk: string): string {
         .replace(/^(?:export\s+)?declare\s+(?:module|namespace)\s[^\n]*\{\s*\n/, '')
 }
 
+/**
+ * `export { test as it }` — a rename, which IS how a caller learns what `it` is.
+ *
+ * `bun-types` declares `it` nowhere: line 596 of `test.d.ts` renames `test`, and
+ * `declare var it` in `test-globals.d.ts` points back at the module. A metric that
+ * cannot read the rename scores the chunk that answers the question as a miss.
+ *
+ * Only `X as SYMBOL` counts, never a bare `export { X }` — a plain re-export moves a
+ * name that is declared elsewhere and tells a caller nothing it did not know.
+ */
+function exportRenames(text: string, symbol: string): boolean {
+    const escaped = symbol.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    return new RegExp(`\\bas\\s+${escaped}\\s*[,}]`).test(text)
+}
+
 export function definesSymbol(
     chunks: readonly {content: string}[],
     ecosystem: EcosystemId,
@@ -77,6 +92,7 @@ export function definesSymbol(
         const head = HEAD[ecosystem].exec(body(c.content))
         if (head && (head[1] ?? head[2]) === symbol) return true
         if (memberDeclaration(symbol).test(body(c.content))) return true
+        if (exportRenames(c.content, symbol)) return true
     }
     return false
 }

@@ -216,3 +216,26 @@ test('the long symbols the set already had are unaffected', () => {
     expect(queryAsks('what does safeParse return on failure', 'safeParse')).toBe(true)
     expect(queryAsks('eitherDecode :: L.ByteString -> Either', 'eitherDecode')).toBe(true)
 })
+
+// bun-types declares `it` nowhere. Line 596 of test.d.ts is
+// `export { test as it, xtest as xit };` and that IS the answer a caller needs —
+// `it` is `test`. A defining-chunk metric that cannot read a rename scores the
+// right chunk as a miss.
+test('an export rename defines the name it exports', () => {
+    const c = {
+        content:
+            '// test.d.ts\ndeclare module "bun:test" {\n  export { test as it, xtest as xit };\n'
+    }
+    expect(definesSymbol([c], 'npm', 'it')).toBe(true)
+    expect(definesSymbol([c], 'npm', 'xit')).toBe(true)
+})
+
+test('an export rename does not define the name it renames FROM', () => {
+    const c = {content: '// test.d.ts\n  export { test as it };\n'}
+    expect(definesSymbol([c], 'npm', 'test')).toBe(false)
+})
+
+test('a plain re-export is not a rename and defines nothing new', () => {
+    const c = {content: '// index.d.ts\n  export { Hono } from "./hono";\n'}
+    expect(definesSymbol([c], 'npm', 'Hono')).toBe(false)
+})

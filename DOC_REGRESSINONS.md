@@ -2368,6 +2368,50 @@ being even a proxy.
 
 ---
 
+## `it` is a rename, and the scorer now reads one — correct, narrow, and inert
+
+`bun:test:it` is the largest hole left, 3/6. `bun-types` declares `it` nowhere:
+
+```
+test.d.ts:595   export const test: Test<[]>;
+test.d.ts:596   export { test as it, xtest as xit };
+test-globals.d.ts:10   declare var it: typeof import("bun:test").it;
+```
+
+The rename IS the answer a caller needs. `definesSymbol` could not read one, so a
+chunk that says exactly what `it` is scored as a miss. `exportRenames` accepts
+`X as SYMBOL`, and only that — a bare `export { X }` moves a name declared elsewhere
+and tells a caller nothing, which is pinned by its own test.
+
+**And it moves nothing.**
+
+```
+same tree, scorer without the rename rule -> with it
+pairs 159   only-A 0   only-B 0   151/159 both ways   p = 1.0000
+```
+
+Shipped anyway, and here is the honest label: correct, narrow, tested, and inert on
+this corpus. The shape is real — the chunk exists —
+
+```
+bun-types 1.4.2  test.d.ts  276 B
+  declare module "bun:test" {
+    export const test: Test<[]>;
+    export { test as it, xtest as xit };
+```
+
+— it is simply never retrieved for the six queries that ask about `it`. Which puts
+`it` back in the same bucket as everything else left: the material is indexed and the
+ranking does not deliver it.
+
+**One correction, and it is the session's own lesson landing on me.** The first pass
+at this reported the rename "absent from the whole chunk table". It was not. The
+query returned twenty rows and the probe printed `rows.slice(0, 4)`, all four of them
+English prose — "as it was", "as it arrives". A truncated print is a filter, and
+this file's own rule is never to believe one without opening what it selected.
+
+---
+
 ## The alias hop cannot see `export const`, and teaching it costs more than it buys
 
 `bun:test`'s remaining misses have a mechanism, and it is defect 3's exactly. The
