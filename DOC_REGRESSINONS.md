@@ -947,6 +947,13 @@ The other direction is pinned too: an excerpt carrying one invented word still
 warns, and the two worker tests that assert the warning appear still pass — they
 now require a genuinely absent word to do so, so they got stricter, not looser.
 
+And the verdict really is untouched, replayed rather than asserted:
+
+```
+73 records carrying a recorded excerptCheck
+73 verdicts identical      0 changed      0 content hashes moved
+```
+
 ---
 
 # Run history
