@@ -1980,6 +1980,52 @@ produced six wrong scorers in this project before. **Filed as correctly diagnose
 and under-powered, which is a different thing from the two "no lever" filings it
 replaces.**
 
+### Then the rs test file was opened, and defect 19 is a SEED defect
+
+The extraction reading above is still true — the import is in the bytes and the
+answer omits it — and it is still not why the run failed. Run 6's own
+`tests/config.rs` opens with the worker explaining itself:
+
+```
+//! driving the router through its `Service` impl — the `Router::oneshot` contract
+//! (`poll_ready` -> `call` -> await the response; the same oneshot semantics as
+//! `tower::util::ServiceExt::oneshot`, WHICH CANNOT BE IMPORTED HERE BECAUSE
+//! `tower` is in the dependency tree via axum's default features but is not a
+//! direct dependency of this crate).
+```
+
+**The worker knew the answer and refused to use it, correctly.** It then hand-rolled
+`poll_ready` -> `call` and failed on `use tower_service::Service`, which is not a
+direct dependency either. Re-run 4 did the same thing with a hand-rolled
+`RawWaker`. Two of six runs, the same wall.
+
+And the seed is the wall:
+
+```
+[dependencies]
+axum, tokio, serde_json, serde          <- no tower, and no [dev-dependencies] at all
+```
+
+The rs feature's third obligation is "cover both responses in tests/config.rs,
+passing under `cargo test`", and axum's only in-process way to drive a `Router` is
+`tower::ServiceExt::oneshot`. Without `tower` declared, **that obligation has no
+correct answer.** A seed that makes a task impossible measures the seed, which is
+the same lesson as defect 13's missing `.gitignore`.
+
+`cargoManifest()` now writes a `[dev-dependencies]` block with
+`tower = { version = "0.5", features = ["util"] }`, split out of `seedRs` so it is
+testable without running `cargo fetch`.
+
+This also closes the docs half properly. `tower` becomes a declared dependency, so
+`manifestCrates` admits it, the `[DEPENDENCY]` banner stops firing on it, and the
+one recorded record that asks `tower` about `oneshot` — the one that answers with
+the supertrait bound correctly — is the answer a worker can now act on.
+
+**Three readings of defect 19 in one session, each one right about the layer it
+looked at and wrong about the cause:** a retrieval bound that no longer holds, an
+extraction omission that is real and not fatal, and a manifest that made the task
+impossible. Only the last one was found by opening the file the run produced.
+
 ## Defect 18. One docs answer in five carries a false hallucination warning
 
 Nothing in this file had ever looked at `excerptVerified`. It is checked on every

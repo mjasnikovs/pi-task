@@ -89,23 +89,37 @@ function seedTs(root: string, pins: Record<string, string>): void {
     run('npm', ['install', '--no-audit', '--no-fund', '--loglevel=error'], root)
 }
 
+/**
+ * The rs manifest, split out so the dev-dependency below is testable without
+ * running `cargo fetch`.
+ */
+export function cargoManifest(pins: Record<string, string>): string {
+    return [
+        '[package]',
+        'name = "docs-live-rs"',
+        'version = "0.1.0"',
+        'edition = "2021"',
+        '',
+        '[dependencies]',
+        `axum = "${pins.axum}"`,
+        `tokio = { version = "${pins.tokio}", features = ["full"] }`,
+        `serde_json = "${pins.serde_json}"`,
+        'serde = { version = "1", features = ["derive"] }',
+        '',
+        // The third obligation is "cover both responses in tests", and axum's only
+        // in-process way to drive a Router is `tower::ServiceExt::oneshot`. Without
+        // tower declared, that obligation has no correct answer: re-runs 4 and 6 both
+        // hand-rolled poll_ready/call and both failed to compile on
+        // `use tower_service::Service`, and re-run 6 wrote a comment saying it avoided
+        // oneshot BECAUSE tower was not a direct dependency. A seed that makes a task
+        // impossible measures the seed.
+        '[dev-dependencies]',
+        'tower = { version = "0.5", features = ["util"] }'
+    ].join('\n')
+}
+
 function seedRs(root: string, pins: Record<string, string>): void {
-    write(
-        root,
-        'Cargo.toml',
-        [
-            '[package]',
-            'name = "docs-live-rs"',
-            'version = "0.1.0"',
-            'edition = "2021"',
-            '',
-            '[dependencies]',
-            `axum = "${pins.axum}"`,
-            `tokio = { version = "${pins.tokio}", features = ["full"] }`,
-            `serde_json = "${pins.serde_json}"`,
-            'serde = { version = "1", features = ["derive"] }'
-        ].join('\n')
-    )
+    write(root, 'Cargo.toml', cargoManifest(pins))
     // cargo refuses to resolve a package with no target at all.
     write(root, 'src/main.rs', 'fn main() {}')
     write(root, 'config.json', CONFIG_JSON)
