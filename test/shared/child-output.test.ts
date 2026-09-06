@@ -99,6 +99,27 @@ describe('a stitched excerpt is not a fabricated one', () => {
         )
     })
 
+    test("the prompt's own provenance tag is not the child inventing anything", () => {
+        // Re-run 5, hs/aeson: the one excerpt in 24 whose absent word was not an
+        // elision. It was `<package>aeson@2.2.5.1</package>` — the tag
+        // `buildExtractionPrompt` puts in the prompt, echoed back. Not source
+        // text, and not evidence of invention either.
+        const check = verifyExcerpt(
+            '<package>aeson@2.2.5.1</package> export interface Context { status: (s: StatusCode) => void; }',
+            SOURCE
+        )
+        expect(check.absent).toEqual([])
+        expect(formatResultText('h', {answer: 'a', excerpt: 'e'}, check)).not.toMatch(
+            /hallucinated/
+        )
+    })
+
+    test('a generic is not a tag, and still counts as absent', () => {
+        expect(verifyExcerpt('Vec<Elephant> and <T> stay absent', SOURCE).absent).toContain(
+            'Vec<Elephant>'
+        )
+    })
+
     test('the elision marker the child writes is not counted as absent', () => {
         expect(verifyExcerpt('export interface Context { ... } ... Hono', SOURCE).absent).toEqual(
             []

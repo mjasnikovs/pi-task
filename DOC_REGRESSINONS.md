@@ -1668,6 +1668,29 @@ The cover is greedy and runs on every answer; measured over the 73 records it
 costs 0.25 ms mean, 0.7 ms worst, and 1.5 ms on a synthetic 400-word excerpt
 against a full 24 KB corpus.
 
+**Verified LIVE in re-run 5, on the shipped 0.40.11.** Eleven unverified excerpts
+across the three projects: **10 reported "stitched from N spans"**, and one kept
+the warning. Before the fix all eleven carried "may have paraphrased or
+hallucinated".
+
+**And the one that kept it was not a fabrication either.** Its single absent word
+was `<package>aeson@2.2.5.1</package>` — the provenance tag
+`buildExtractionPrompt` puts in the prompt, quoted back inside an otherwise
+verbatim excerpt. A complete lowercase element is now excused alongside the
+elision marks; `Vec<String>` does not start with `<` and `<T>` has no closing tag,
+so neither is.
+
+```
+unverified excerpts across runs 2, 3 and 5:  24
+                            report stitched:  24
+                       hallucination-warned:   0
+                         real fabrications:    0
+```
+
+Twenty-four cases and the warning has never once been right. It stays, because
+the thing it watches for is real and would matter; but nothing in five live runs
+has tripped it honestly.
+
 And the verdict really is untouched, replayed rather than asserted:
 
 ```

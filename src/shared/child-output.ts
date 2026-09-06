@@ -77,9 +77,18 @@ export interface ExcerptVerification {
     absent: string[]
 }
 
-/** The child writes these to mark its own join, so they are not source text and
- *  not evidence of invention either. */
+/**
+ * Tokens that are not source text and not evidence of invention either: the
+ * child's own elision marks, and the provenance tag the PROMPT gave it.
+ *
+ * `buildExtractionPrompt` wraps the identity as `<package>aeson@2.2.5.1</package>`,
+ * and re-run 5 caught a child quoting that back inside an otherwise verbatim
+ * excerpt — the only absent word in 24 unverified excerpts across three runs. A
+ * complete lowercase element is the whole rule; `Vec<String>` does not start with
+ * `<` and `<T>` has no closing tag, so neither is excused.
+ */
 const ELISION = /^(?:\.{3}|\u2026|\/\/\s*\.{3})$/
+const PROMPT_TAG = /^<([a-z_]+)>[^<]*<\/\1>$/
 
 /**
  * Cover the excerpt with the longest runs the source actually contains, greedily.
@@ -109,7 +118,7 @@ function coverBySource(
             run++
         }
         if (run === 0) {
-            if (!ELISION.test(words[i])) absent.push(words[i])
+            if (!ELISION.test(words[i]) && !PROMPT_TAG.test(words[i])) absent.push(words[i])
             i++
         } else {
             verbatimSpans++
