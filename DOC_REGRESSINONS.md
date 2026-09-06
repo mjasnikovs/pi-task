@@ -1947,6 +1947,39 @@ import and the symbol in the query are different names linked by Rust's trait
 rules, which no lexical filter reaches. Recorded so the next attempt does not build
 the tight filter again and conclude n=12.
 
+The loose filter's complement was read instead — all thirteen rs records whose
+answer names none of the crates their bytes import from, opened one at a time:
+
+```
+ 4  serde / serde_json, and the import is serde_derive::Serialize — a re-export
+    detail, never what a caller writes
+ 5  axum, and the unnamed import has nothing to do with the question asked
+    (to_bytes, axum::serve, Router::new, handler signatures)
+ 1  tokio, and the import is socket2
+ 2  axum asked about Router + oneshot — both ABSTAINED
+ 1  tower asked about oneshot — and it is the answer the whole defect wants
+```
+
+The last one, in full, is the tool getting it exactly right:
+
+```
+"requires Self: Sized and that Self implements tower_service::Service<Request>
+ (the Service trait is a supertrait of ServiceExt)"
+```
+
+**Zero of thirteen is a needed import present and omitted**, and the one live case
+that is exactly that is not in the thirteen — its answer mentions `http`, so the
+filter counted it as naming an import. Two filters, two misses, in opposite
+directions.
+
+So the extraction reframing stands on the one opened record and not on a base rate:
+the corpus holds three axum-side occurrences, two of which abstained, and one
+tower-side occurrence which already answers correctly. That is not enough to power
+a prompt A/B, and a prompt clause aimed at three records is the shape that has
+produced six wrong scorers in this project before. **Filed as correctly diagnosed
+and under-powered, which is a different thing from the two "no lever" filings it
+replaces.**
+
 ## Defect 18. One docs answer in five carries a false hallucination warning
 
 Nothing in this file had ever looked at `excerptVerified`. It is checked on every
