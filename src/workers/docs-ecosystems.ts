@@ -27,7 +27,7 @@ import {
     type AutoInstallPin
 } from './docs-core.js'
 import {resolvePackage, isDtsFile, isValidModuleName, type ResolvedPackage} from './docs-resolve.js'
-import {DECL_SPLIT_RE} from './docs-chunk.js'
+import {DECL_SPLIT_RE, MEMBER_SPLIT_RE} from './docs-chunk.js'
 import {npmVersionLookup, type NpmVersionInfo} from './npm-version.js'
 import {
     resolveCrate,
@@ -45,7 +45,8 @@ import {
     cargoExportGap,
     cargoContentFingerprint,
     cargoSupplementCandidates,
-    CARGO_DECL_SPLIT_RE
+    CARGO_DECL_SPLIT_RE,
+    CARGO_MEMBER_SPLIT_RE
 } from './eco-cargo.js'
 import {
     resolveHackage,
@@ -65,7 +66,8 @@ import {
     isHaskellFile,
     haskellSurface,
     HACKAGE_DECL_SPLIT_RE,
-    HACKAGE_SKIP_DIRS
+    HACKAGE_SKIP_DIRS,
+    HACKAGE_MEMBER_SPLIT_RE
 } from './eco-hackage.js'
 import {runChild, type SpawnFn} from '../shared/child-process.js'
 import type {ExportGap} from './export-gap.js'
@@ -231,6 +233,12 @@ export interface EcosystemProfile {
     /** Where a declaration begins, so a chunk never splits a signature. */
     declSplitRe: RegExp
     /**
+     * Where a MEMBER of a declaration begins — the same heads, indented. Reached
+     * only when one declaration does not fit a chunk, which in npm is
+     * `declare module "bun" { … }` holding a whole module.
+     */
+    memberSplitRe: RegExp
+    /**
      * The keywords that INTRODUCE a named type in this language, for finding the
      * chunk that defines a name rather than the many that use it.
      */
@@ -322,6 +330,7 @@ export function npmProfile(hooks: NpmProfileHooks = {}): EcosystemProfile {
         // identity for a fingerprint to miss.
         contentFingerprint: () => String(npmSurface),
         declSplitRe: DECL_SPLIT_RE,
+        memberSplitRe: MEMBER_SPLIT_RE,
         typeKeywords: ['interface', 'type', 'class', 'enum'],
         commentPrefix: '//',
         // A nested node_modules is another package's surface, never this one's.
@@ -525,6 +534,7 @@ const cargoProfile: EcosystemProfile = {
     // index as `insideTrait`. `contentFingerprint` is what covers its source.
     surface: content => rustSurface(content),
     declSplitRe: CARGO_DECL_SPLIT_RE,
+    memberSplitRe: CARGO_MEMBER_SPLIT_RE,
     typeKeywords: ['struct', 'trait', 'enum', 'type', 'union'],
     commentPrefix: '//',
     skipDirs: ['tests', 'benches', 'examples', 'target'],
@@ -656,6 +666,7 @@ const hackageProfile: EcosystemProfile = {
     isSurfaceFile: isHaskellFile,
     surface: haskellSurface,
     declSplitRe: HACKAGE_DECL_SPLIT_RE,
+    memberSplitRe: HACKAGE_MEMBER_SPLIT_RE,
     typeKeywords: ['type', 'data', 'newtype', 'class'],
     commentPrefix: '--',
     skipDirs: HACKAGE_SKIP_DIRS,

@@ -3,7 +3,14 @@ import * as fs from 'node:fs'
 import * as path from 'node:path'
 import type {CacheHandle} from './docs-cache.js'
 import {type ResolvedPackage} from './docs-resolve.js'
-import {chunkDeclarations, chunkReadme, splitAtMatches, headedSlices} from './docs-chunk.js'
+import {
+    chunkDeclarations,
+    chunkReadme,
+    splitAtMatches,
+    headedSlices,
+    splitOversized,
+    MEMBER_SPLIT_RE
+} from './docs-chunk.js'
 import {ECOSYSTEMS, type EcosystemProfile} from './docs-ecosystems.js'
 
 const ZERO_SEP = Buffer.from([0])
@@ -65,7 +72,12 @@ export function chunkerFingerprint(): string {
         // Both chunkers now delegate their slicing, so their own source would sit
         // still through a change to where an oversized declaration is cut. That is
         // the third fix to hide one level below a `String(fn)` here.
-        String(headedSlices)
+        String(headedSlices),
+        String(splitOversized),
+        // The member split is per-ecosystem, and a profile's regex is not source
+        // this function can see. `declSplitRe` is already hashed beside it in
+        // computeContentHash; this puts its sibling there too.
+        MEMBER_SPLIT_RE.source
     ].join('\u0000')
 }
 
@@ -77,7 +89,13 @@ function computeContentHash(
     const hash = createHash('sha256')
     hash.update(Buffer.from(`${pkg.name}@${pkg.version}`, 'utf8'))
     hash.update(ZERO_SEP)
-    hash.update(Buffer.from(`${profile.declSplitRe.source}\u0000${profile.commentPrefix}`, 'utf8'))
+    hash.update(
+        Buffer.from(
+            `${profile.declSplitRe.source}\u0000${profile.memberSplitRe.source}`
+                + `\u0000${profile.commentPrefix}`,
+            'utf8'
+        )
+    )
     hash.update(ZERO_SEP)
     hash.update(Buffer.from(chunkerFingerprint(), 'utf8'))
     hash.update(ZERO_SEP)
@@ -263,7 +281,8 @@ function ingestBody(
             profile.surface(raw),
             rel,
             profile.declSplitRe,
-            profile.commentPrefix
+            profile.commentPrefix,
+            profile.memberSplitRe
         )
         if (!chunks.length) continue
         filesIngested++
@@ -297,7 +316,8 @@ function ingestBody(
                 profile.surface(raw),
                 rel,
                 profile.declSplitRe,
-                profile.commentPrefix
+                profile.commentPrefix,
+                profile.memberSplitRe
             )) {
                 if (!whole && !gap!.fillsHole(c.replace(/^\S.*\n/, ''))) continue
                 if (seen.has(c)) continue

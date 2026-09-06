@@ -118,11 +118,19 @@ async function collect(opts: Options): Promise<DefinesRow[]> {
     // rather than duplicated, so a new pin cannot disagree with a hand-written map.
     const ecosystemOf = new Map<string, EcosystemId>()
     for (const spec of PROJECTS) for (const pkg of Object.keys(spec.pins)) ecosystemOf.set(pkg, spec.ecosystem)
-    const byModule = new Map<string, {symbol: string; ecosystem: EcosystemId}[]>()
+    // A truth entry for a package no project PINS still has an ecosystem: the Bun
+    // family and the node builtins are npm, resolved by auto-install rather than by
+    // a manifest. Without this they were silently dropped, which is why the chunk
+    // table's worst-shaped packages had no metric.
+    for (const t of TRUTH) if (!ecosystemOf.has(t.pkg)) ecosystemOf.set(t.pkg, 'npm')
+    const byModule = new Map<string, {symbol: string; named?: string; ecosystem: EcosystemId}[]>()
     for (const t of TRUTH) {
         const eco = ecosystemOf.get(t.pkg)
         if (eco === undefined) continue
-        byModule.set(t.pkg, [...(byModule.get(t.pkg) ?? []), {symbol: t.symbol, ecosystem: eco}])
+        byModule.set(t.pkg, [
+            ...(byModule.get(t.pkg) ?? []),
+            {symbol: t.symbol, named: t.named, ecosystem: eco}
+        ])
     }
     const rows: DefinesRow[] = []
     for (const file of opts.files) {
@@ -139,7 +147,7 @@ async function collect(opts: Options): Promise<DefinesRow[]> {
             }
             const truths = rec.module === undefined ? undefined : byModule.get(rec.module)
             if (!truths || rec.query === undefined) continue
-            const named = truths.filter(t => rec.query!.includes(t.symbol))
+            const named = truths.filter(t => rec.query!.includes(t.named ?? t.symbol))
             if (named.length === 0) continue
             const res = await docsRaw({
                 pkg: rec.module!,

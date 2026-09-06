@@ -5,6 +5,7 @@ import {
     splitAtMatches,
     sliceBytes,
     DECL_SPLIT_RE,
+    MEMBER_SPLIT_RE,
     MAX_CHUNK_BYTES
 } from '../../src/workers/docs-chunk.js'
 import {CARGO_DECL_SPLIT_RE} from '../../src/workers/eco-cargo.js'
@@ -246,6 +247,54 @@ test('every slice of an oversized README section keeps its heading', () => {
 test('a slice still fits the cap once its header is counted', () => {
     const body = `export interface Huge {\n${'  member: string\n'.repeat(1200)}}\n`
     for (const c of chunkDeclarations(body, 'bun.d.ts', DECL_SPLIT_RE, '//')) {
+        expect(Buffer.byteLength(c, 'utf8')).toBeLessThanOrEqual(MAX_CHUNK_BYTES)
+    }
+})
+
+// 3.8% of indexed chunks sit at the cap and they hold 51.1% of all indexed bytes —
+// 86.8% of @types/node's, 78.1% of bun-types'. The cause is one shape:
+// `declare module "bun" { … }` is a single top-level declaration holding a whole
+// module, so DECL_SPLIT_RE matches once and the rest is cut at byte offsets.
+const BUN_MODULE = `declare module "bun" {
+  type PathLike = string | URL;
+
+  /** Read a file. ${'x'.repeat(4000)} */
+  function file(path: PathLike): BunFile;
+
+  /** Write a file. ${'y'.repeat(4000)} */
+  function write(path: PathLike, data: string): Promise<number>;
+}
+`
+
+test('an oversized declaration splits at its members, not at a byte offset', () => {
+    const chunks = chunkDeclarations(BUN_MODULE, 'bun.d.ts', DECL_SPLIT_RE, '//', MEMBER_SPLIT_RE)
+    expect(chunks.length).toBeGreaterThan(1)
+    const heads = chunks.map(c => c.split('\n').filter(l => /function |type /.test(l))[0] ?? '')
+    expect(heads.some(h => h.includes('function file'))).toBe(true)
+    expect(heads.some(h => h.includes('function write'))).toBe(true)
+})
+
+test('every member chunk carries the path and the declaration it is inside', () => {
+    for (const c of chunkDeclarations(
+        BUN_MODULE,
+        'bun.d.ts',
+        DECL_SPLIT_RE,
+        '//',
+        MEMBER_SPLIT_RE
+    )) {
+        expect(c.startsWith('// bun.d.ts\ndeclare module "bun" {')).toBe(true)
+    }
+})
+
+test('a declaration that fits is not member-split', () => {
+    const small = 'export interface Small {\n  a: string\n  b: string\n}\n'
+    const chunks = chunkDeclarations(small, 'x.d.ts', DECL_SPLIT_RE, '//', MEMBER_SPLIT_RE)
+    expect(chunks).toHaveLength(1)
+})
+
+test('a member still wider than the cap falls back to byte slicing', () => {
+    const huge = `declare module "bun" {\n  function f(): void; // ${'z'.repeat(20000)}\n}\n`
+    for (const c of chunkDeclarations(huge, 'bun.d.ts', DECL_SPLIT_RE, '//', MEMBER_SPLIT_RE)) {
         expect(Buffer.byteLength(c, 'utf8')).toBeLessThanOrEqual(MAX_CHUNK_BYTES)
     }
 })

@@ -212,7 +212,13 @@ export function ensureProjectIndexed(
             // `pi-worker-docs(".", …)` answers "no chunks" for the whole project.
             // Only the CHUNK BOUNDARY is language-specific.
             const profile = profileForFile(abs, profiles)
-            const chunks = chunkDeclarations(raw, rel, profile.declSplitRe, profile.commentPrefix)
+            const chunks = chunkDeclarations(
+                raw,
+                rel,
+                profile.declSplitRe,
+                profile.commentPrefix,
+                profile.memberSplitRe
+            )
             if (!chunks.length) continue
             filesIngested++
             for (const c of chunks) {

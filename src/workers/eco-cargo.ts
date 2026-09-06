@@ -399,6 +399,10 @@ export function crateTarballUrl(name: string, version: string): string {
 export const CARGO_DECL_SPLIT_RE =
     /^(?:#\[[^\n]*\]\s*)*(?:pub\s+)?(?:async\s+|unsafe\s+|const\s+|extern\s+)*(?:fn|struct|enum|union|trait|type|impl|mod|const|static)\b/m
 
+/** The same heads, indented — a member of an oversized `impl` or `mod` block. */
+export const CARGO_MEMBER_SPLIT_RE =
+    /^[ \t]+(?:#\[[^\n]*\]\s*)*(?:pub\s+)?(?:async\s+|unsafe\s+|const\s+|extern\s+)*(?:fn|struct|enum|union|trait|type|impl|mod|const|static)\b/m
+
 // `macro_rules!` carries its own terminator, so it sits OUTSIDE the `\b` — a word
 // boundary after `!` requires a word character next, and what follows is a space.
 const ITEM_HEAD_RE =

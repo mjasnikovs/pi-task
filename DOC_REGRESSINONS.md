@@ -2390,7 +2390,7 @@ inside a doc comment still begins inside a doc comment, it just now says which f
 it is from. Splitting an oversized declaration at nested member boundaries is the
 larger fix and is not attempted here.
 
-### The other half of defect 25 — MEASURED AND NOT SHIPPED, patch kept
+### The other half of defect 25 — rejected on a blind metric, then SHIPPED
 
 The header fix restores provenance and leaves the middles. Sizing the middles says
 they are most of the corpus:
@@ -2461,6 +2461,73 @@ from the published docs rather than from the index — `BunFile`, `write`, `desc
 `ecosystemOf` lookup in `docs-defines` widened past `PROJECTS` pins. Then re-run
 both arms. Do not ship it on the byte numbers alone; 51.1% -> 16.6% is a
 description of the chunk table, not of an answer.
+
+### And then the truth set was widened, and the verdict reversed
+
+The paragraph above is right about everything except the conclusion. Defines said
+125/128 -> 123/128 because `TRUTH` had no entry for a single package the split
+repairs. The fix was to give it some — not to argue with the number.
+
+**Eight entries, and the rule they were written under.** Every symbol is named by a
+recorded query and declared by the published docs. Reading the index for candidates
+is how a truth set stops being one, so nothing below was chosen that way:
+
+```
+bun               file (queries say Bun.file)   write (Bun.write)
+bun-types         file
+bun:test          describe   expect   beforeEach
+node:url          fileURLToPath
+node:fs/promises  readFile
+```
+
+`Bun.file` is what every query calls it and `function file` is what `bun.d.ts`
+declares, so `TruthEntry` gained an optional `named`: select on what the question
+says, score on what the code declares. Selecting on `file` alone would match the
+word in almost every question asked.
+
+These packages are pinned by no project, and both existing consumers —
+`scoreRecall` and `checkTruth` — gate on `t.pkg in spec.pins`, so the entries reach
+`docs-defines` and nothing else. `ecosystemOf` had to stop being built from pins
+alone; before that it dropped them silently, which is the whole reason the
+worst-shaped packages in the table had no metric.
+
+**On the shipped tree the new entries are not saturated. They are the failures.**
+
+```
+bun:test:expect             1/6        bun:write                  1/3
+bun:test:describe           2/6        node:fs/promises:readFile  0/2
+bun:test:beforeEach         3/4        node:url:fileURLToPath     0/1
+```
+
+npm reads 63/80 where the old entries alone read 48/51.
+
+### The member split, re-measured against a metric that can see it
+
+```
+                                pairs   before    after    lost  gained       p
+the Bun family + node builtins     29    14/29    23/29       0       9   0.0039
+pre-existing truth entries        128   126/128  123/128      3       0   0.2500
+all                               157   140/157  146/157      3       9   0.1460
+```
+
+**It does exactly what it claims, on what it claims, significantly.** `bun:test`
+retrieval goes from 3 chunks to 34 for the same query, because a `declare module
+"bun:test"` that used to arrive as three byte-cuts now arrives as its members.
+
+The cost is three records and it is real, reproducible and understood: two hono and
+one axum. `bm25()` scores over the whole FTS index, and the index grew 12,815 ->
+17,644 chunks, so every package's ranking moved — axum's own chunk count did not
+change at all and it still lost one. Defect 17, structural, and nothing local fixes
+it.
+
+Read the p-values the right way round. `docs-defines` uses no model: the same tree
+scored twice is byte-identical, verified, so the A/A noise floor is exactly zero and
+every discordant pair is a reproducible difference rather than a coin. What
+p = 0.1460 asks is whether another sample of queries would show the same direction,
+not whether this one is an artifact — which is the opposite of the budget A/B, where
+the A/A beat the treatment.
+
+Shipped. Net +6 on a deterministic metric, +9/0 where it is aimed, -3 elsewhere.
 
 ---
 

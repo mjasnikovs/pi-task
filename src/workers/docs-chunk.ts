@@ -38,6 +38,21 @@ export const MAX_CHUNK_BYTES = 8 * 1024
 export const DECL_SPLIT_RE =
     /^(?:export\s+)?(?:declare\s+)?(?:default\s+)?(?:abstract\s+)?(?:async\s+)?(?:function|class|interface|type|namespace|module|const|let|var|enum)\s+/m
 
+/**
+ * Where a member of an oversized declaration begins — the same heads, indented.
+ *
+ * `declare module "bun" { … }` is ONE top-level declaration holding a whole module,
+ * so `DECL_SPLIT_RE` matches once and everything after it was cut at byte offsets.
+ * That shape is rare and enormous: 3.8% of indexed chunks sat at the cap and held
+ * 51.1% of all indexed bytes, 86.8% of `@types/node`'s and 78.1% of `bun-types`'.
+ *
+ * Only reached when a declaration does not fit. A member split applied to every
+ * declaration would cut an interface away from its own members, which is the thing
+ * `DECL_SPLIT_RE` exists to prevent.
+ */
+export const MEMBER_SPLIT_RE =
+    /^[ \t]+(?:export\s+)?(?:declare\s+)?(?:default\s+)?(?:abstract\s+)?(?:async\s+)?(?:function|class|interface|type|namespace|module|const|let|var|enum)\s+/m
+
 /** Where a README section starts. */
 export const README_SPLIT_RE = /^#{1,2} /m
 
@@ -142,15 +157,47 @@ export function chunkDeclarations(
     content: string,
     relPath: string,
     splitRe: RegExp = DECL_SPLIT_RE,
-    commentPrefix = '//'
+    commentPrefix = '//',
+    memberRe: RegExp = MEMBER_SPLIT_RE
 ): string[] {
     const chunks: string[] = []
+    const header = `${commentPrefix} ${relPath}`
     for (const part of splitAtMatches(content, new RegExp(splitRe.source, 'gm'))) {
         const trimmed = part.trim()
         if (!trimmed) continue
-        chunks.push(...headedSlices(`${commentPrefix} ${relPath}`, trimmed, MAX_CHUNK_BYTES))
+        chunks.push(...splitOversized(header, trimmed, memberRe))
     }
     return chunks
+}
+
+/**
+ * Cut a declaration that does not fit at its own member boundaries, keeping the
+ * line that says what it is a member OF.
+ *
+ * Without that line a piece of `declare module "bun"` is an anonymous list of
+ * functions: a `Bun.file` question came back carrying slices about S3 ETags and
+ * tar archives, because bm25 was matching words in the middles of byte cuts that
+ * shared no subject.
+ *
+ * Byte slicing stays as the floor. A single member wider than the cap — one
+ * function with a 20 KB doc comment — still has to be cut somewhere.
+ */
+export function splitOversized(header: string, body: string, memberRe: RegExp): string[] {
+    if (Buffer.byteLength(`${header}\n${body}`, 'utf8') <= MAX_CHUNK_BYTES) {
+        return [`${header}\n${body}`]
+    }
+    const parts = splitAtMatches(body, new RegExp(memberRe.source, 'gm'))
+    if (parts.length < 2) return headedSlices(header, body, MAX_CHUNK_BYTES)
+    // The first part carries the enclosing head; every later one has to be told.
+    const enclosing = parts[0].split('\n')[0].trim()
+    const out: string[] = []
+    for (const [i, part] of parts.entries()) {
+        const trimmed = part.replace(/\s+$/, '')
+        if (!trimmed.trim()) continue
+        const withContext = i === 0 ? trimmed : `${enclosing}\n${trimmed}`
+        out.push(...headedSlices(header, withContext, MAX_CHUNK_BYTES))
+    }
+    return out
 }
 
 /** Chunk a README, one chunk per top-level section, each labelled by heading. */

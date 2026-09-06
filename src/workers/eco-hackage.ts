@@ -339,6 +339,10 @@ export async function hackageLatest(
 export const HACKAGE_DECL_SPLIT_RE =
     /^(?:[a-z_][\w']*\s*::|data\s|newtype\s|type\s|class\s|instance\s|pattern\s)/m
 
+/** The same heads, indented — a member of an oversized `class` or `instance`. */
+export const HACKAGE_MEMBER_SPLIT_RE =
+    /^[ \t]+(?:[a-z_][\w']*\s*::|data\s|newtype\s|type\s|class\s|instance\s|pattern\s)/m
+
 const SIGNATURE_RE = /^[a-z_][\w']*(?:\s*,\s*[a-z_][\w']*)*\s*::/
 const OPERATOR_SIGNATURE_RE = /^\([^)]+\)\s*::/
 /** The same heads with the `::` wrapped onto the next line. */

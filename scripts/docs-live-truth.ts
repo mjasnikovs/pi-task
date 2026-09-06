@@ -42,6 +42,15 @@ export interface TruthEntry {
     symbol: string
     /** What a worker would plausibly ask to reach it. */
     topic: string
+    /**
+     * What a QUERY says when it is asking for `symbol`, when the two differ.
+     *
+     * `Bun.file` is how every recorded query names it and `function file` is how
+     * `bun.d.ts` declares it. Selecting on the declared name would match the word
+     * "file" in almost every question asked; selecting on the written name would
+     * look for a declaration head that does not exist. Defaults to `symbol`.
+     */
+    named?: string
 }
 
 /**
@@ -97,7 +106,25 @@ export const TRUTH: readonly TruthEntry[] = [
     {pkg: 'aeson', symbol: 'eitherDecode', topic: 'decoding with an error'},
     {pkg: 'aeson', symbol: 'FromJSON', topic: 'the decoding class'},
     {pkg: 'scotty', symbol: 'scotty', topic: 'starting the server'},
-    {pkg: 'scotty', symbol: 'ActionM', topic: 'the handler monad'}
+    {pkg: 'scotty', symbol: 'ActionM', topic: 'the handler monad'},
+
+    // The Bun family and node builtins. NOT pinned in any project — both existing
+    // consumers gate on `t.pkg in spec.pins`, so these reach `docs-defines` and
+    // nothing else. They exist because the chunk table's worst-shaped packages are
+    // the ones no truth entry could see: `@types/node` and `bun-types` hold 87% and
+    // 78% of their bytes in cap-filling slices, and defines was blind to both.
+    //
+    // Every symbol below is named by a recorded query and declared by the published
+    // docs, which is the only sound way to write one — reading the index for
+    // candidates is how a truth set stops being a truth set.
+    {pkg: 'bun', symbol: 'file', named: 'Bun.file', topic: 'reading a file'},
+    {pkg: 'bun', symbol: 'write', named: 'Bun.write', topic: 'writing a file'},
+    {pkg: 'bun-types', symbol: 'file', named: 'Bun.file', topic: 'reading a file'},
+    {pkg: 'bun:test', symbol: 'describe', topic: 'grouping tests'},
+    {pkg: 'bun:test', symbol: 'expect', topic: 'asserting'},
+    {pkg: 'bun:test', symbol: 'beforeEach', topic: 'per-test setup'},
+    {pkg: 'node:url', symbol: 'fileURLToPath', topic: 'import.meta.url to a path'},
+    {pkg: 'node:fs/promises', symbol: 'readFile', topic: 'reading a file'}
 ]
 
 export const STALE: readonly StaleMarker[] = [
