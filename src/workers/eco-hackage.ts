@@ -700,9 +700,9 @@ function haskellSources(root: string): string[] {
     return out
 }
 
-/** Source of every function {@link hackageExportGap} delegates to — see
- *  `cargoGapFingerprint` for why the top level alone is not enough. */
-export function hackageGapFingerprint(): string {
+/** Source of everything this row contributes to a chunk's content — see
+ *  `cargoContentFingerprint` for why a top-level `String(fn)` is not enough. */
+export function hackageContentFingerprint(): string {
     return [hackageExportGap, haskellSources, exportListText, declaredInSurface, haskellSurface]
         .map(String)
         .concat([REEXPORT_RE.source, EXPORT_NAME_RE.source])

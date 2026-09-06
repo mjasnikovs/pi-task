@@ -43,7 +43,7 @@ import {
     lockedDeps,
     manifestCrates,
     cargoExportGap,
-    cargoGapFingerprint,
+    cargoContentFingerprint,
     cargoSupplementCandidates,
     CARGO_DECL_SPLIT_RE
 } from './eco-cargo.js'
@@ -56,7 +56,7 @@ import {
     hackageProjectName,
     supplementCandidates,
     hackageExportGap,
-    hackageGapFingerprint,
+    hackageContentFingerprint,
     findCabalTarball,
     cachedVersions,
     resolvedVersions,
@@ -209,11 +209,15 @@ export interface EcosystemProfile {
      */
     exportGap?: (root: string) => ExportGap
     /**
-     * Source of `exportGap` AND everything it delegates to, for the index
-     * fingerprint. `String(exportGap)` alone leaves a fix in a helper invisible,
-     * which is the failure `chunkerFingerprint` exists to close one level up.
+     * Source of everything this row contributes to a chunk's CONTENT — `surface`,
+     * `exportGap`, and every function and regex they delegate to.
+     *
+     * Required, and not derived from `String(surface)`, because that has hidden a
+     * real fix three times: `surface` here is the wrapper
+     * `content => rustSurface(content)`, which shows none of `rustSurface`, and
+     * neither gap rule's helpers appear in its entry point either.
      */
-    exportGapFingerprint?: () => string
+    contentFingerprint: () => string
     /** The registry's own newest version, for grounding an answer in the present. */
     latest: (name: string, io: EcosystemIo) => Promise<NpmVersionInfo | null>
 
@@ -277,6 +281,10 @@ export interface NpmProfileHooks {
  * hooks, and those hooks must keep reaching the resolution they are injected
  * for. A per-call row carries them; {@link ECOSYSTEMS} holds the plain one.
  */
+/** A `.d.ts` is already declarations only, so npm's extractor is the identity.
+ *  Named rather than inline so `contentFingerprint` can point at it. */
+const npmSurface = (content: string): string => content
+
 export function npmProfile(hooks: NpmProfileHooks = {}): EcosystemProfile {
     const resolve = hooks.resolvePackage ?? resolvePackage
     const versionLookup = hooks.npmVersionLookup ?? npmVersionLookup
@@ -309,7 +317,10 @@ export function npmProfile(hooks: NpmProfileHooks = {}): EcosystemProfile {
             versionLookup(name, io.signal === undefined ? {} : {signal: io.signal}),
 
         isSurfaceFile: isDtsFile,
-        surface: content => content,
+        surface: npmSurface,
+        // No gap rule, and a `.d.ts` IS the surface, so there is nothing below the
+        // identity for a fingerprint to miss.
+        contentFingerprint: () => String(npmSurface),
         declSplitRe: DECL_SPLIT_RE,
         typeKeywords: ['interface', 'type', 'class', 'enum'],
         commentPrefix: '//',
@@ -505,10 +516,13 @@ const cargoProfile: EcosystemProfile = {
         return out
     },
     exportGap: cargoExportGap,
-    exportGapFingerprint: cargoGapFingerprint,
+    contentFingerprint: cargoContentFingerprint,
     latest: (name, io) => cratesLatest(name, io.fetch, io.signal),
 
     isSurfaceFile: isRustFile,
+    // Wrapped, not passed by reference: `rustSurface` takes two more optional
+    // arguments, and a bare reference would let a `.map(profile.surface)` pass an
+    // index as `insideTrait`. `contentFingerprint` is what covers its source.
     surface: content => rustSurface(content),
     declSplitRe: CARGO_DECL_SPLIT_RE,
     typeKeywords: ['struct', 'trait', 'enum', 'type', 'union'],
@@ -636,7 +650,7 @@ const hackageProfile: EcosystemProfile = {
         return out
     },
     exportGap: hackageExportGap,
-    exportGapFingerprint: hackageGapFingerprint,
+    contentFingerprint: hackageContentFingerprint,
     latest: (name, io) => hackageLatest(name, io.fetch, io.signal),
 
     isSurfaceFile: isHaskellFile,

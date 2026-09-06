@@ -132,7 +132,7 @@ the record; the model is not.
 | — | aeson keeps 55 duplicate bodies | index | offline | **measured fixed** |
 | 16 | a facade package indexes to nothing, in **cargo** | index | retrieval | **SHIPPED** on retrieval; answer half replayed FLAT at n=4, no recorded stimulus |
 | 17 | retrieval depends on the cache's other packages | retrieval | retrieval | **real, and measured harmless** |
-| 20 | a Rust item inside a `name! { … }` block is not indexed | index | offline | found, tokio 441 of 2,919; fix needs its own STEP 0 |
+| 20 | a Rust item inside a `name! { … }` block is not indexed | index | offline | **SHIPPED**, +393 public names, tokio 672 -> 822 |
 | 19 | a symbol declared only in a NON-prefixed dependency | both | recorded corpus | caused the rs HARD FAIL; obvious lever **REFUTED**, 4 of 20 and none that mattered |
 | 18 | one answer in five carries a false hallucination warning | extraction | recorded corpus | **SHIPPED**, 21/21 now report stitched |
 | 14 | correct answer, deprecated code shipped | neither | **full run** | lever BUILT, 3/3 on the corpus; live run pending |
@@ -1023,11 +1023,52 @@ It is an async-ecosystem pattern, not a universal one. `TcpListener` is in the
 metric scored a HIT anyway, because the answer carried the name from a doc
 comment. One more reading of why that metric is saturated.
 
-**Unfixed, and the fix is not "descend into every macro block".** `quote!`
-(60 blocks in serde_derive), `test_parse!` and `ffi_fn!` bodies are templates and
-test code, not items — descending blindly would index `pub fn #ident` templates as
-API. The cost of descending has to be measured on the quote-heavy crates before
-any rule is written.
+### The fix, and the guard that is NOT a macro-name allowlist
+
+`quote!` (60 blocks in serde_derive), `test_parse!` and `ffi_fn!` bodies are token
+templates and test code, not items. The guard is what the body IS, never which
+macro it is: a body is descended into when it does not INTERPOLATE — `#ident`,
+`#(`. Comments come out first, because a doctest hides lines with `# use …` and
+the first cut of this measurement flagged `cfg_rt! { pub fn spawn … }` as a
+template because of one.
+
+```
+818 public items sit inside an item-shaped macro block
+  0 public items sit inside an interpolating one
+```
+
+The two populations do not overlap at all, across all twenty-two crates.
+
+### Shipped, and measured before and after on the same 52 crate trees
+
+```
+                    pub names            surface bytes
+tokio          672 ->  822  (+150)   1,274,804 -> 1,582,982    TcpListener false -> TRUE
+futures-util   232 ->  314  (+82)
+axum           195 ->  233  (+38)
+tokio-stream    51 ->   77  (+26)
+tokio-util     181 ->  203  (+22)
+tower          182 ->  201  (+19)
+tower-http     265 ->  277  (+12)
+hyper          132 ->  140  (+8)
+                                     TOTAL  +393 public names, +388 KB
+```
+
+Thirty-two of the fifty-two trees are byte-identical — the ones with no macro
+block. Nothing is taken from any of them.
+
+### And it exposed the same hash hole a THIRD time
+
+`computeContentHash` hashed `String(profile.surface)`. Cargo's `surface` is
+declared as the wrapper `content => rustSurface(content)`, which shows **none** of
+`rustSurface` — so this fix would have changed nothing for a cached crate.
+
+That is now three bugs one level below a `String(fn)`: the chunker (closed by
+`chunkerFingerprint`), the gap rule's helpers, and `surface` itself. The three
+ad-hoc fingerprints are replaced by one **required** `EcosystemProfile.contentFingerprint()`,
+owned by each ecosystem row, naming every function and regex that shapes a chunk's
+content. `String(profile.surface)` is still hashed beside it, so overriding either
+one alone still re-indexes.
 
 ## Defect 19. The prefix bound's stated cost, caught causing a live HARD FAIL
 

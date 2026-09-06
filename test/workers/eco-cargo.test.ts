@@ -619,3 +619,59 @@ describe('end to end', () => {
         }
     })
 })
+
+// Defect 20. tokio wraps `pub struct TcpListener` in `cfg_net! { … }`, and a
+// macro invocation was one opaque item, so 441 of tokio's 2,919 public items were
+// dropped from the surface — including one of this test suite's own ground-truth
+// symbols. Measured across 22 crates: 818 items sit inside an item-shaped macro
+// block and 0 inside an interpolating one.
+describe('an item inside a `name! { … }` block', () => {
+    const CFG_NET = [
+        'use crate::io::PollEvented;',
+        '',
+        'cfg_net! {',
+        '    /// A TCP socket server, listening for connections.',
+        '    pub struct TcpListener {',
+        '        io: PollEvented<mio::net::TcpListener>,',
+        '    }',
+        '',
+        '    impl TcpListener {',
+        '        pub async fn bind<A: ToSocketAddrs>(addr: A) -> io::Result<TcpListener> {',
+        '            todo!()',
+        '        }',
+        '    }',
+        '}'
+    ].join('\n')
+
+    test('is reached, with its doc comment', () => {
+        const s = rustSurface(CFG_NET)
+        expect(s).toContain('pub struct TcpListener')
+        expect(s).toContain('A TCP socket server')
+        expect(s).toContain('pub async fn bind')
+    })
+
+    test('a private item inside one is still dropped', () => {
+        expect(rustSurface('cfg_rt! {\n    struct Hidden { a: u8 }\n}')).not.toContain('Hidden')
+    })
+
+    test('a token template is not source, so nothing is taken from it', () => {
+        const q = [
+            'quote! {',
+            '    pub struct #ident {',
+            '        pub #field: #ty,',
+            '    }',
+            '}'
+        ].join('\n')
+        expect(rustSurface(q)).not.toContain('struct')
+    })
+
+    test('a body with no item at all contributes nothing', () => {
+        expect(rustSurface('test_parse! {\n    parse_ok "GET / HTTP/1.1";\n}').trim()).toBe('')
+    })
+
+    test('a macro CALL with arguments is untouched', () => {
+        expect(rustSurface('pub fn f() {}\nassert_eq!(a, b);').replace(/\s+/g, ' ')).toContain(
+            'pub fn f'
+        )
+    })
+})

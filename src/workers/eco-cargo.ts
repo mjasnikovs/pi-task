@@ -677,6 +677,36 @@ const LIST_KINDS = new Set(['use'])
  * Inside a `trait` every member is public by definition, so the `pub` test is
  * suspended there; anywhere else a bare or `pub(crate)` item is dropped.
  */
+/** A `#name` interpolation. Rust item syntax has none; a `quote!` template is
+ *  nothing but. Comments come out first — a doctest hides lines with `# use …`. */
+const INTERPOLATION = /#[A-Za-z_(]/
+function withoutComments(body: string): string {
+    return body
+        .split('\n')
+        .map(l => (/^\s*(?:\/\/|\*)/.test(l) ? '' : l.replace(/\/\/.*$/, '')))
+        .join('\n')
+}
+
+/**
+ * The body of a `name! { … }` block that WRAPS items, or null.
+ *
+ * tokio declares `pub struct TcpListener` inside `cfg_net! { … }`, and every
+ * async crate does the same: 818 public items across twenty-two crates sit inside
+ * such a block, 441 of them tokio's. Treating the invocation as one opaque item
+ * dropped all of them, `TcpListener` — a ground-truth symbol of the live test —
+ * included.
+ *
+ * The guard is what the body IS, never which macro it is. A `quote!` body is a
+ * token template, and the same measurement found zero public items inside an
+ * interpolating body, so the two populations do not overlap.
+ */
+function macroWrappedItems(item: {head: string; body: string | null}): string | null {
+    if (item.body === null) return null
+    if (!/^[a-z_][a-z0-9_]*!$/.test(item.head.trim())) return null
+    if (INTERPOLATION.test(withoutComments(item.body))) return null
+    return item.body
+}
+
 export function rustSurface(src: string, insideTrait = false, topLevel = true): string {
     const out: string[] = []
     const items = splitRustItems(src)
@@ -690,7 +720,11 @@ export function rustSurface(src: string, insideTrait = false, topLevel = true): 
     if (topLevel && moduleDoc) out.push(moduleDoc)
     for (const item of items) {
         const headMatch = ITEM_HEAD_RE.exec(item.head)
-        if (!headMatch) continue
+        if (!headMatch) {
+            const wrapped = macroWrappedItems(item)
+            if (wrapped !== null) out.push(rustSurface(wrapped, insideTrait, false))
+            continue
+        }
         const kind = headMatch[1]
         // A `#[macro_export]` macro IS the crate's API — `anyhow::bail!`,
         // `serde_json::json!`. Dropping every macro answered "no such thing"
@@ -1044,19 +1078,38 @@ export function cargoExportGap(root: string): ExportGap {
 }
 
 /**
- * Source of every function `cargoExportGap` delegates to.
+ * Source of everything this row contributes to a chunk's CONTENT — the surface
+ * extractor, the gap rule, and every function and regex they delegate to.
  *
- * `String(cargoExportGap)` covers only the top level, and the two bugs already
- * found in this pass — a rename split that truncated `Hasher`, a lock read from
- * the wrong root — both lived in helpers. A fix to one of them has to move the
- * index fingerprint or every cached facade keeps the chunks the old rule chose.
+ * `String(fn)` covers only a top level, and three separate bugs have now hidden
+ * one level below it: the chunker (which `chunkerFingerprint` closes), the gap
+ * rule's helpers, and `surface` itself, declared as the wrapper
+ * `content => rustSurface(content)` which shows none of `rustSurface`. A fix that
+ * does not move this leaves every cached crate holding the chunks the old rule
+ * chose.
  */
-export function cargoGapFingerprint(): string {
-    return [cargoExportGap, runtimeDeps, useTargets, rustSources, moduleOfPath]
+export function cargoContentFingerprint(): string {
+    return [
+        rustSurface,
+        splitRustItems,
+        macroWrappedItems,
+        withoutComments,
+        keptPreamble,
+        privateTypeNames,
+        implTarget,
+        fieldsOf,
+        cargoExportGap,
+        runtimeDeps,
+        useTargets,
+        rustSources,
+        moduleOfPath
+    ]
         .map(String)
         .concat([
             PUB_USE_RE.source,
             RUST_DECL_RE.source,
+            ITEM_HEAD_RE.source,
+            INTERPOLATION.source,
             CARGO_SKIP_DIRS.join(','),
             [...OWN_PATH_ROOTS].join(',')
         ])
