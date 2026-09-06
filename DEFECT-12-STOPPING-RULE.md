@@ -209,3 +209,80 @@ The claim still to test is whether the `hspec` child stops abstaining.
 That is no longer a live-run claim. Index the new corpus, then replay the four recorded
 `hspec` records through `scripts/docs-replay.ts` against it. Minutes, not four hours.
 See "Read this first" in `DOC_REGRESSINONS.md`.
+
+---
+
+# The cargo half — measured separately, not ported
+
+Defect 16 is this class in a second ecosystem: `pub trait IntoResponse` is declared in
+`axum-core`, `axum` only `pub use`s it, and both recorded `IntoResponse` records missed.
+
+Rust has no export list. It has `pub use`, which makes the hole *easier* to see than in
+Haskell — a name the crate publishes through a dependency and declares nowhere is
+directly readable. Twenty-two crates, sources from `static.crates.io`, no indexer.
+
+## The ratio does not transfer, and that confirms the rule above
+
+Hackage put facades at 87.7% unresolved and ordinary packages under 3%. Cargo will not
+draw that line: `axum-core`, `clap`, `rand`, `itertools` and `tokio-util` all read 100%
+on one to seven re-exports, and ten of the twenty-two re-export nothing external at all.
+
+Which is the same answer this document already gives. **The trigger is the hole**, with
+no threshold, in both ecosystems — arrived at twice, from opposite directions.
+
+## Depth 1, measured again
+
+| crate | unresolved | resolved in 1 hop | fetched |
+|---|---|---|---|
+| **axum** | **22** | **20 (91%)** | **axum-core axum-macros** |
+| futures | 55 | 53 (96%) | futures-{channel,core,executor,io,sink,task,util} |
+| tracing | 15 | 14 | tracing-attributes tracing-core |
+| tokio | 6 | 6 | tokio-macros |
+| rand | 7 | 5 | rand_chacha rand_core |
+| tower | 5 | 4 | tower-layer tower-service |
+| clap | 5 | 4 | clap_builder clap_derive |
+| hyper | 12 | 0 | — its suppliers are http, bytes, http-body |
+| reqwest | 3 | 0 | — http, url |
+| serde, serde_json, regex, chrono, uuid, anyhow, thiserror, bytes, http, tower-http | 0 | — | never fires |
+
+## The three rules, in cargo terms
+
+1. **Trigger.** A name in `pub use <dep>::…` that the crate declares nowhere; or a glob
+   `pub use <dep>::<module>::*`, which is the `module X` re-export's counterpart.
+2. **Candidates.** A `[dependencies]` entry whose name, under either separator, starts
+   with the crate's own — `axum`/`axum-core`, `tracing`/`tracing-core`. **Runtime only**:
+   scanning dev- and build-dependencies fetches `tokio-test`, `clap-cargo`, `regex-test`
+   and `tower-test` and resolves not one extra name.
+3. **Keep only the hole**, and **stop after one hop**. axum goes 381 chunks to 403.
+
+The bound's cost, stated as on hackage: `hyper` re-exports twelve names from `http`,
+`bytes` and `http-body`, and axum's own `pub use http;` and `Bytes` stay open. No prefix
+rule can see any of them.
+
+## What the indexer had to stop knowing
+
+The gap was hardcoded to Haskell — `hackageExportGap`, a `module X` header read out of
+the source, `declaredInSurface`. `EcosystemProfile.exportGap` replaces all three with
+`empty` / `wholesale(relPath, source)` / `fillsHole(chunk)`, and the indexer asks those
+three questions without knowing either language. `wholesale` takes both the path and the
+source because Haskell names its module in the source and Rust names it by file location.
+
+## Verified through the real `docsRaw`
+
+In the container, on the seeded `rs` project, a cold cache per arm. Published 0.40.9
+against this tree:
+
+| query | 0.40.9 | this tree |
+|---|---|---|
+| `IntoResponse` | no declaration | **`trait IntoResponse`** |
+| `trait IntoResponse signature` | no declaration | **`trait IntoResponse`** |
+| `FromRequestParts extractor trait` | no declaration | **`trait FromRequestParts`** |
+| `how do I return a custom response from a handler` | no declaration | no declaration |
+
+The fourth names no type, so there is nothing to hop to — the standing limit, not a new
+finding. The `packages` table still holds exactly `axum`.
+
+## The same caveat as the hackage half
+
+This is retrieval. Defect 11 is the standing proof that a better index is not a better
+answer, and no recorded cargo record has been replayed against the new corpus yet.
