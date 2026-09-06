@@ -64,24 +64,26 @@ It does not pin the model, and a host model is not the container's.
 
 ## The work, in order — and when it runs out, go back to the top of the loop
 
-Defects 14, 16, 18 and 20, the recall gate and four self-review bugs all closed in
-the 2026-09-06 session and shipped as **0.40.10** and **0.40.11**. Their numbers
-are in `DOC_REGRESSINONS.md`; none needs re-deriving. Defect 16's answer half was
-replayed and is FLAT — the recorded corpus has no stimulus for it.
+Defects 14, 16, 18, 20 and 21, the recall gate and five self-review bugs all
+closed in the 2026-09-06 session and shipped as **0.40.10**, **0.40.11** and
+**0.40.12**. Defects 19 and 22 are mechanised and have no lever. Their numbers are
+in `DOC_REGRESSINONS.md`; none needs re-deriving.
 
-1. **Defect 20's ANSWER half, and its hackage twin.** +393 public names is a
-   retrieval result. Whether an answer improves is unmeasured, and there is now a
-   real stimulus for it: `tokio:TcpListener` is one of this test's own ground-truth
-   symbols. Replay the recorded `tokio` records with `--retrieve`, two arms over
-   the same records, cache package set held fixed. **Then ask whether Haskell has
-   the same shape** — `haskellSurface` may have its own opaque-block class (CPP
-   `#ifdef`, `$(…)` Template Haskell). Measure before assuming.
-2. **Defect 19 needs a NEW lever, not the obvious one.** The obvious one is
-   measured and refuted (4 of 20, none that mattered). What is NOT measured: the
-   same rule bounded by the LOCK rather than `[dependencies]`. It would reach
-   `oneshot`, and it re-opens a failure this codebase has paid for once — the
-   2026-09-05 run answered about `tower`, in the lock via axum and absent from
-   `[dependencies]`, and the crate did not compile. Measure both halves.
+**"Still open" is empty.** Every item is shipped, refuted, or filed with its
+mechanism. So the next round starts at the top of the loop: the full run in
+`DOCS-LIVE-RUNBOOK.md` is the only remaining DISCOVERY instrument, and the last
+one paid — re-run 4's three HARD FAILs produced defects 19, 20, 21 and 22, none of
+which any subagent harness would have suggested looking for.
+
+1. **Score re-run 5, which was launched on 0.40.11 and is the first run to
+   exercise defects 16, 18 and 20.** Its artifacts are in the container under
+   `/home/agent/docs-live/`; the previous run's are in `prev-4/`. Read the answers
+   themselves — every defect in this file came from reading individual records,
+   never from the summary table.
+2. **The one instrument worth building next: "does a retrieved chunk DEFINE the
+   symbol the query names".** It found defect 21's payoff (p=1.2e-4), chose the
+   retrieve limit, and mechanised defect 22 — all without the model. It lives only
+   as a scratch script. Make it a real harness under `scripts/`.
 3. **Defect 14 has no live evidence and may never get it cheaply.** The lever is
    measured on 12,568 task files (3 fires, 3 true, 0 false) and is precise live
    (two correct non-fires in the 2026-09-06 ts run, both robust to a deliberately
@@ -155,7 +157,7 @@ Never guess a constant. Defect 11's hop cap was swept (3, 5, 8, uncapped) and th
 measurement chose it; defect 14's marker window was swept 20 to 4,000, found flat,
 and **deleted** in favour of a clause boundary.
 
-`bun run test` must stay green at 4425. `bun test` alone fails; the `--isolate` in
+`bun run test` must stay green at 4430. `bun test` alone fails; the `--isolate` in
 `bun run test` is load-bearing. `npm run lint:check` must stay green — and do not
 discard its output, which is how an undefined identifier reached a test run once.
 
