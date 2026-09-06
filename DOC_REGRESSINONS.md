@@ -124,22 +124,38 @@ the record; the model is not.
 
 | # | item | half | instrument | state |
 |---|---|---|---|---|
-| 4r | a query naming no type has nothing to hop to | retrieval | retrieval | unfixed |
+| 4r | a query naming no type has nothing to hop to | retrieval | recorded corpus | **REFUTED**, 1 of 158 and it is junk input |
 | — | a key symbol absent from the corpus | retrieval | — | **limit, not a defect** |
 | 11 | English question loses the declaration | both | retrieval + replay | **closed**: `from_str` fixed, `IntoResponse` is defect 16 |
 | 12 | a facade package indexes to nothing | both | retrieval + replay | **closed on hackage**, 3 of 4 answered |
 | 15 | child abstains with the answer in hand | extraction | **replay** | **SHIPPED**, p=0.0386 paired over 73 |
 | — | aeson keeps 55 duplicate bodies | index | offline | **measured fixed** |
-| 16 | a facade package indexes to nothing, in **cargo** | index | retrieval | found, unfixed |
+| 16 | a facade package indexes to nothing, in **cargo** | index | retrieval | **SHIPPED**, 3 of 4 axum queries reach the trait |
 | 17 | retrieval depends on the cache's other packages | retrieval | retrieval | **real, and measured harmless** |
-| 14 | correct answer, deprecated code shipped | neither | **full run** | unfixed, no lever |
+| 14 | correct answer, deprecated code shipped | neither | **full run** | lever BUILT, 3/3 on the corpus; live run pending |
 
-## 4's residue. A query that names no type has nothing to hop to
+## 4's residue. A query that names no type — REFUTED at STEP 0
 
-`the handler monad` and `handler type for a route` still miss. The name-directed
-hop has no name to chase. All seven of the baseline's real queries named `ScottyM`
-or `ActionM`, so the observed failure is covered. A query with no proper noun is
-unsolved.
+`the handler monad` and `handler type for a route` still miss, and the
+name-directed hop has no name to chase. What was never measured is how often a
+real query looks like that.
+
+```
+158 recorded queries, four runs
+157 name a symbol
+  1 does not   <- module ".", query "test"
+```
+
+The one is degenerate input, not a class. Both failing strings above came from a
+probe an earlier session wrote by hand, never from a run. A lever for one junk
+query in 158 is not worth building, so this closes as refuted rather than unfixed.
+
+**The first classifier was wrong, and it invented a finding.** Its symbol test
+missed `Bun.file`, `decodeFile`, `Data.Text.Text` and `configSchema`, which put
+19 queries in the nameless bucket and reported a 68.4% abstention rate against
+30.2% for the rest — a large, clean, entirely fictional gap. The shapes it needed
+were all present in the corpus it was reading. Read the bucket before believing
+the rate.
 
 ## A query whose key symbol is absent from the corpus
 
@@ -733,9 +749,34 @@ immune, which is exactly why the field exists.
 
 # Two standing cautions about the instrument
 
-**The recall metric can score a symbol the run never asked about.**
-`scotty:ActionM` was reported missed in re-run 3. It is indexed, and a query naming
-it retrieves it. No scotty query in that run named it.
+**The recall metric could score a symbol the run never asked about — FIXED, and
+the fix exposed that the metric is saturated.**
+
+`scotty:ActionM` was reported missed in re-run 3. It is indexed, a query naming it
+retrieves it, and no scotty query in that run named it. The gate was the PACKAGE:
+ask about scotty at all and every scotty truth symbol is scored.
+
+It is now the SYMBOL. A truth entry counts when a query named it, or when an
+answer carried it anyway — the second half matters, because the tool volunteering
+the right name is the behaviour being measured and gating that away is the
+opposite error. `scoreRecall` is extracted and unit-tested; four tests, all of
+which fail on the old package gate.
+
+Re-scored over all four recorded runs it moves **exactly one cell**:
+
+```
+run 1   ts 4/4  rs 3/3  hs 4/4        unchanged
+run 2   ts 4/4  rs 3/3  hs 2/2        unchanged
+run 3   ts 4/4  rs 3/3  hs 2/2        unchanged
+run 4   ts 4/4  rs 4/4  hs 3/4 -> 3/3   scotty:ActionM dropped
+```
+
+**And that is the real finding.** 43 of 44 before the fix, 44 of 44 after. A metric
+that reads 100% in eleven of twelve cells across four runs and three ecosystems is
+not measuring anything — it is the "verify that cannot fail" this file has caught
+twice already. The correction is worth having because a false miss sends the next
+session hunting a defect that is not there. The number itself should stop being
+quoted as evidence.
 
 **The fidelity scorer had known false-positive families.** Four are now guarded: a
 language literal (`false`), a member of a language global (`stringify` of

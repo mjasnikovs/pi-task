@@ -1,5 +1,6 @@
 import {test, expect} from 'bun:test'
-import {inventedSymbols} from '../../scripts/docs-live-audit.js'
+import {inventedSymbols, scoreRecall} from '../../scripts/docs-live-audit.js'
+import type {TypeOnlyLogRecord} from '../../src/workers/typeonly-log.js'
 
 // The tool's return embeds the answer prose, so scoring the answer against it asks
 // whether the answer contains itself. It always does: two live runs read 13/13,
@@ -91,4 +92,46 @@ test('a binding named after its own type is not invented', () => {
 // are the confusion these runs keep producing, and it is the one the scorer must keep.
 test('the fold does not clear a symbol that only shares a stem', () => {
     expect(inventedSymbols('Use `decodeFile` here.', 'decodeFileStrict')).toContain('decodeFile')
+})
+
+// Re-run 3 reported `scotty:ActionM` missed. It is indexed, and a query naming it
+// retrieves it — no scotty query in that run named it. Gating on the PACKAGE is
+// what let a symbol nobody asked about count as a miss.
+const askedForScotty = (query: string, answer: string): Map<string, TypeOnlyLogRecord[]> =>
+    new Map([['scotty', [{module: 'scotty', query, answer} as TypeOnlyLogRecord]]])
+
+test('a symbol no query named and no answer carried is not scored at all', () => {
+    const r = scoreRecall(
+        [{pkg: 'scotty', symbol: 'ActionM', topic: 'the handler monad'}],
+        {scotty: '0.30'},
+        askedForScotty('type signature of json in scotty', 'json :: ToJSON a => a -> ActionT m ()')
+    )
+    expect(r).toEqual({hit: 0, of: 0, missed: []})
+})
+
+test('a symbol the query named and the answer missed is still a miss', () => {
+    const r = scoreRecall(
+        [{pkg: 'scotty', symbol: 'ActionM', topic: 'the handler monad'}],
+        {scotty: '0.30'},
+        askedForScotty('what is ActionM', 'The handler runs in a monad.')
+    )
+    expect(r).toEqual({hit: 0, of: 1, missed: ['scotty:ActionM']})
+})
+
+test('an answer that carries the symbol is a hit however the query was phrased', () => {
+    const r = scoreRecall(
+        [{pkg: 'scotty', symbol: 'ActionM', topic: 'the handler monad'}],
+        {scotty: '0.30'},
+        askedForScotty('the handler monad', 'Handlers run in `ActionM`.')
+    )
+    expect(r).toEqual({hit: 1, of: 1, missed: []})
+})
+
+test('a package the run never asked about is not scored', () => {
+    const r = scoreRecall(
+        [{pkg: 'aeson', symbol: 'FromJSON', topic: 'the decoding class'}],
+        {aeson: '2.2.5.1'},
+        new Map()
+    )
+    expect(r).toEqual({hit: 0, of: 0, missed: []})
 })

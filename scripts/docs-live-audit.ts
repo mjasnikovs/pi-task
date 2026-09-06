@@ -15,7 +15,7 @@ import {execFileSync} from 'node:child_process'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 import {readTypeOnlyLog, type TypeOnlyLogRecord} from '../src/workers/typeonly-log.js'
-import {PROJECTS, TRUTH, STALE, type ProjectSpec} from './docs-live-truth.js'
+import {PROJECTS, TRUTH, STALE, type ProjectSpec, type TruthEntry} from './docs-live-truth.js'
 
 const IDENTIFIER_RE = /[A-Za-z_][A-Za-z0-9_']{2,}/g
 const CODE_SPAN_RE = /`([^`]+)`/g
@@ -74,6 +74,39 @@ function caseFold(token: string): string {
  * is deliberate: these questions name the fabrication, so trusting the query would
  * clear `Use ``decodeFile`` to read a file` as well, and that answer is the defect.
  */
+/**
+ * Retrieval recall, scored only where the run actually put the question.
+ *
+ * The gate is the SYMBOL, not the package. Re-run 3 reported `scotty:ActionM`
+ * missed: it is indexed, a query naming it retrieves it, and no scotty query in
+ * that run named it. Scoring it made the tool answer for a question nobody asked.
+ *
+ * An answer that carries the symbol still counts as a hit however the query was
+ * phrased — the tool volunteering the right name is the behaviour this measures,
+ * and gating that away would be the opposite error.
+ *
+ * Re-scored over all four recorded runs this moves exactly one cell, hs re-run 3
+ * from 3/4 to 3/3, and leaves the other eleven untouched.
+ */
+export function scoreRecall(
+    truth: readonly TruthEntry[],
+    pins: Readonly<Record<string, string>>,
+    byPkg: ReadonlyMap<string, readonly TypeOnlyLogRecord[]>
+): {hit: number; of: number; missed: string[]} {
+    const out = {hit: 0, of: 0, missed: [] as string[]}
+    for (const t of truth) {
+        if (!(t.pkg in pins)) continue
+        const asked = byPkg.get(t.pkg) ?? []
+        if (asked.length === 0) continue
+        const hit = asked.some(r => (r.toolText ?? r.answer).includes(t.symbol))
+        if (!hit && !asked.some(r => r.query.includes(t.symbol))) continue
+        out.of++
+        if (hit) out.hit++
+        else out.missed.push(`${t.pkg}:${t.symbol}`)
+    }
+    return out
+}
+
 export function inventedSymbols(answer: string, corpus: string): string[] {
     const known = new Set(corpus.match(IDENTIFIER_RE) ?? [])
     const folded = new Set([...known].map(caseFold))
@@ -255,15 +288,7 @@ function auditProject(runRoot: string, spec: ProjectSpec, build: boolean): Proje
         const key = r.module.replace(/^@?([^/]+).*$/, '$1')
         byPkg.set(key, [...(byPkg.get(key) ?? []), r])
     }
-    for (const t of TRUTH) {
-        if (!(t.pkg in spec.pins)) continue
-        const asked = byPkg.get(t.pkg) ?? []
-        if (asked.length === 0) continue
-        rep.recall.of++
-        const hit = asked.some(r => (r.toolText ?? r.answer).includes(t.symbol))
-        if (hit) rep.recall.hit++
-        else rep.recall.missed.push(`${t.pkg}:${t.symbol}`)
-    }
+    rep.recall = scoreRecall(TRUTH, spec.pins, byPkg)
     for (const r of records) {
         // The RETRIEVED chunks, never `toolText`. The tool return embeds the child's
         // own prose, so scoring the answer against it asks whether the answer contains
