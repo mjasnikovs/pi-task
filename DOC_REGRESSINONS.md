@@ -132,6 +132,7 @@ the record; the model is not.
 | — | aeson keeps 55 duplicate bodies | index | offline | **measured fixed** |
 | 16 | a facade package indexes to nothing, in **cargo** | index | retrieval | **SHIPPED** on retrieval; answer half replayed FLAT at n=4, no recorded stimulus |
 | 17 | retrieval depends on the cache's other packages | retrieval | retrieval | **real, and measured harmless** |
+| 21 | `export declare function` never started a chunk | index | offline + retrieval | **SHIPPED**, +99.3% chunks for +0.7% bytes |
 | 20 | a Rust item inside a `name! { … }` block is not indexed | index | offline + replay | **SHIPPED**, +393 public names; one causal answer, no aggregate at n=14 |
 | 19 | a symbol declared only in a NON-prefixed dependency | both | recorded corpus | caused the rs HARD FAIL; **BOTH bounds REFUTED** — `[dependencies]` 2 right of 20, lock 3 right of 18 |
 | 18 | one answer in five carries a false hallucination warning | extraction | recorded corpus | **SHIPPED**, 21/21 now report stitched |
@@ -982,6 +983,59 @@ a true one, and a loose scorer is as fatal as a strict one. Left flagged.
 The live number it distorts is worth knowing about: quoting a fidelity rate from
 a run whose project uses `port` and `adminEmail` as field names will read three
 flags low on quality it did not lose.
+
+## Defect 21. `export declare function` never started a chunk
+
+Defect 20 asked what the CARGO extractor treats as opaque. The same question of
+npm's chunker: `DECL_SPLIT_RE` alternated the modifiers —
+`(?:export\s+|declare\s+)?` — so `export` and `declare` were mutually exclusive.
+
+`export declare function` is what `tsc --declaration` emits for every exported
+function in a module.
+
+```
+4,000 .d.ts files sampled from installed packages
+6,935 `export declare` lines        of which  3,479 function
+                                              2,075 const
+                                                478 interface
+                                                448 class
+                                                263 type
+    0 of them start a chunk
+```
+
+`export declare abstract class` missed on a second count, and so did the bare
+`declare abstract class`.
+
+**What that costs, seen in a real file.** `undici-types/fetch.d.ts`:
+
+```
+chunk 2 begins   "export type RequestInfo = string | URL | Request"
+and contains     "export declare function fetch(" 
+```
+
+Nothing can retrieve the chunk that DEFINES `fetch`, because there is no such
+chunk — the declaration is a tail of the one above it. With no split point a
+file falls back to the 8 KB size cap, so declarations are severed mid-signature
+at arbitrary offsets.
+
+**Fixed by making the modifiers sequential** rather than alternatives, and adding
+`abstract`. Over the 1,569 sampled files that contain an `export declare`:
+
+```
+chunks  5,237 -> 10,436   (+99.3%)
+bytes   2,916,982 -> 2,937,677   (+0.7%)
+```
+
+Bytes barely move, which is the point: nothing is duplicated, the same text is
+cut where a declaration begins. Through the real `docsRaw` in the container:
+
+```
+zod    1,078 -> 1,956 indexed chunks
+hono     708 -> 1,124
+"Hono class constructor"   retrieved chunks that BEGIN at a declaration: 2/8 -> 7/8
+```
+
+All four ground-truth probes still hit.
 
 ## `dropDeadMajors` being top-level ONLY is load-bearing — measured
 

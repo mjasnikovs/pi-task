@@ -26,9 +26,17 @@ export const MAX_CHUNK_BYTES = 8 * 1024
 /**
  * Where a declaration starts. Splitting here keeps a signature and its body in
  * one chunk, which is what makes a retrieved chunk quotable as evidence.
+ *
+ * The modifiers are SEQUENTIAL, not alternatives. Written as `export|declare`
+ * they excluded `export declare function` — which is what `tsc --declaration`
+ * emits for every exported function in a module: 6,935 such lines in a
+ * 4,000-file sample, 3,479 of them functions, and not one started a chunk.
+ * `undici-types/fetch.d.ts` put `export declare function fetch(` inside a chunk
+ * headed `export type RequestInfo`, so nothing could retrieve the chunk that
+ * defines `fetch`.
  */
 export const DECL_SPLIT_RE =
-    /^(?:export\s+|declare\s+)?(?:default\s+)?(?:async\s+)?(?:function|class|interface|type|namespace|module|const|let|var|enum)\s+/m
+    /^(?:export\s+)?(?:declare\s+)?(?:default\s+)?(?:abstract\s+)?(?:async\s+)?(?:function|class|interface|type|namespace|module|const|let|var|enum)\s+/m
 
 /** Where a README section starts. */
 export const README_SPLIT_RE = /^#{1,2} /m

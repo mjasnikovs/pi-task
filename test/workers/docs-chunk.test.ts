@@ -156,3 +156,71 @@ describe('an attribute stays with the declaration it decorates', () => {
         expect(chunks[1]).toContain('impl<E> Foo for Baz<E>')
     })
 })
+
+// Defect 21. `DECL_SPLIT_RE` alternated `export` WITH `declare` rather than
+// allowing both, so `export declare function` — the shape `tsc --declaration`
+// emits for a module — never started a chunk. 6,935 such lines in a 4,000-file
+// sample, 3,479 of them functions, every one glued into the chunk above it.
+describe('a chunk starts at every declaration tsc actually emits', () => {
+    const starts = (line: string): boolean => DECL_SPLIT_RE.test(line)
+
+    test('export declare <kind> starts one', () => {
+        for (const kind of [
+            'function foo(): void;',
+            'const x: number;',
+            'class C {}',
+            'interface I {}',
+            'type T = string;',
+            'enum E {}',
+            'namespace N {}',
+            'let y: string;'
+        ]) {
+            expect(starts(`export declare ${kind}`)).toBe(true)
+        }
+    })
+
+    test('an abstract class starts one, with or without export', () => {
+        expect(starts('export declare abstract class A {}')).toBe(true)
+        expect(starts('declare abstract class A {}')).toBe(true)
+        expect(starts('export abstract class A {}')).toBe(true)
+    })
+
+    test('the forms that already worked still do', () => {
+        for (const line of [
+            'export function foo(): void;',
+            'declare function foo(): void;',
+            'export default function f() {}',
+            'export async function g(): Promise<void>;',
+            'interface Bare {}',
+            'declare module "x" {}'
+        ]) {
+            expect(starts(line)).toBe(true)
+        }
+    })
+
+    test('prose and imports do not', () => {
+        for (const line of [
+            'import type { X } from "y";',
+            ' * See the docs for more.',
+            'export { a, b };',
+            'export * from "./x";'
+        ]) {
+            expect(starts(line)).toBe(false)
+        }
+    })
+
+    test('the real shape chunks at the declaration, not through it', () => {
+        const src = [
+            'export type RequestInfo = string | URL | Request;',
+            '',
+            'export declare function fetch(',
+            '    input: RequestInfo,',
+            '    init?: RequestInit',
+            '): Promise<Response>;'
+        ].join('\n')
+        const chunks = [...chunkDeclarations(src, 'fetch.d.ts', DECL_SPLIT_RE, '//')]
+        expect(chunks.some(c => /^(?:\/\/[^\n]*\n)?export declare function fetch\(/.test(c))).toBe(
+            true
+        )
+    })
+})
