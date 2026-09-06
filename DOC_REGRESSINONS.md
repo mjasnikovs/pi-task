@@ -1784,6 +1784,30 @@ Artifacts in `live-docs-run-2026-09-05/`, `live-docs-rerun-2026-09-05/`,
 | re-run 2, 09-06 | 0.40.3 | PASS, 24% | PASS, 40% | PASS, 83% |
 | re-run 3, 09-06 | 0.40.5 | **HARD FAIL**, 17% | PASS, 22% | PASS, 46% |
 | re-run 4, 09-06 | 0.40.9 | **HARD FAIL**, 0% | **HARD FAIL**, 14% | **HARD FAIL**, 100% (1 call) |
+| re-run 5, 09-06 | 0.40.11 | **HARD FAIL**, 43% | PASS, 17% | PASS, 33% |
+
+**Re-run 5 is the best result any run has had on the hard half**: rs and hs both
+PASS, and hs has passed twice in five runs. ts HARD FAILs on `bun test`'s
+"No tests found!" — its plan had four tasks and it executed two, having spent the
+run fighting `Cannot find name 'Bun'` and `Property 'dir' does not exist on type
+'ImportMeta'` after adding a `tsconfig.json` of its own.
+
+The docs tool is not implicated. It was asked five questions and abstained on
+three: two about the TypeScript COMPILER (`what changed in TypeScript 7.0.2`,
+`does tsc 5.x support bodyless function declarations`) and one about Bun's runtime
+globals. It answered every zod and hono question, recall 2/2, 4/4 clean.
+
+Bun's globals are the one recurring soft spot, and it is smaller than it looks:
+
+```
+Bun-global records across five runs   12, abstained 5   42%
+all records                          186, abstained 63  34%
+```
+
+`bun:test` answers 5 of 5 — it is a real module with declarations. Module `bun`
+abstains 4 of 5, because the runtime's globals are not a package the indexer can
+resolve. n=12 and an 8-point gap is not a finding; recorded so it is not
+rediscovered as one.
 
 Re-run 4 is three HARD FAILs for three unrelated reasons, and **the docs tool
 caused at most one of them**:
