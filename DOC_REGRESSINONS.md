@@ -1068,6 +1068,24 @@ to be answered first, and both need the extraction child, not the index:
 
 `bun run test` 4430 pass / 0 fail; `npm run lint:check` green.
 
+### The other two split regexes were audited and are clean
+
+The same question of cargo and hackage: which surface lines look like a
+declaration head and do not start a chunk?
+
+```
+CARGO      252 misses, and ALL 252 are `pub use` — re-export statements, not
+           declarations. Splitting on them would fragment the surface into noise;
+           `use` is in ITEM_HEAD_RE and deliberately absent from the split regex.
+HACKAGE    600 `--` comments and 126 `module` headers (both correct), 13
+           `foreign import`, 4 `instance`, and ~10 signatures whose `::` wraps
+           to the next line.
+```
+
+`foreign import` and the wrapped signatures are real misses, at roughly 23 in
+three packages of several thousand declarations. Below the bar, and recorded so
+the audit is not repeated.
+
 ## `dropDeadMajors` being top-level ONLY is load-bearing — measured
 
 Defect 20's mirror: is npm's DROP too eager, or too shallow? Scanned 1,095
