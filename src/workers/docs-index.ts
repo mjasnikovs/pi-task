@@ -3,7 +3,7 @@ import * as fs from 'node:fs'
 import * as path from 'node:path'
 import type {CacheHandle} from './docs-cache.js'
 import {type ResolvedPackage} from './docs-resolve.js'
-import {chunkDeclarations, chunkReadme, splitAtMatches} from './docs-chunk.js'
+import {chunkDeclarations, chunkReadme, splitAtMatches, headedSlices} from './docs-chunk.js'
 import {ECOSYSTEMS, type EcosystemProfile} from './docs-ecosystems.js'
 
 const ZERO_SEP = Buffer.from([0])
@@ -58,7 +58,15 @@ interface IngestResult {
  * have said so.
  */
 export function chunkerFingerprint(): string {
-    return `${String(splitAtMatches)}\u0000${String(chunkDeclarations)}\u0000${String(chunkReadme)}`
+    return [
+        String(splitAtMatches),
+        String(chunkDeclarations),
+        String(chunkReadme),
+        // Both chunkers now delegate their slicing, so their own source would sit
+        // still through a change to where an oversized declaration is cut. That is
+        // the third fix to hide one level below a `String(fn)` here.
+        String(headedSlices)
+    ].join('\u0000')
 }
 
 function computeContentHash(

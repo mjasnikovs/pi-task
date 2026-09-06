@@ -1,5 +1,5 @@
 import {test, expect} from 'bun:test'
-import {comparePaired, comparePooled} from '../../scripts/docs-replay.js'
+import {comparePaired, comparePooled, type ReplayRow} from '../../scripts/docs-replay.js'
 
 // A budget or limit A/B runs production's arm in two TREES, so both ledgers say
 // `treatment` and only the pairing key separates them. Scored on abstention.
@@ -26,10 +26,7 @@ test('a pair where only B answers counts as only-B', () => {
 })
 
 test('rows that do not pair are dropped, not counted as a difference', () => {
-    const out = comparePaired(
-        [{...ROW, unclear: false}],
-        [{...ROW, query: 'q2', unclear: true}]
-    )
+    const out = comparePaired([{...ROW, unclear: false}], [{...ROW, query: 'q2', unclear: true}])
     expect(out).toContain('no paired rows')
 })
 
@@ -51,7 +48,7 @@ test('the same trial number is part of the key, so trials pair with trials', () 
 // and the A/A beside the budget A/B was the significant one. A single-pass two-tree
 // comparison cannot tell a constant from a slot, so each arm is pooled over an early
 // pass and a late one.
-const pass = (unclear: boolean[]): typeof ROW[] =>
+const pass = (unclear: boolean[]): ReplayRow[] =>
     unclear.map((u, i) => ({...ROW, query: `q${i}`, unclear: u}))
 
 test('an arm that answers more often across its passes wins the record', () => {
@@ -63,10 +60,7 @@ test('an arm that answers more often across its passes wins the record', () => {
 })
 
 test('one win each way is a tie, not two discordant pairs', () => {
-    const out = comparePooled(
-        [pass([false]), pass([true])],
-        [pass([true]), pass([false])]
-    )
+    const out = comparePooled([pass([false]), pass([true])], [pass([true]), pass([false])])
     expect(out).toContain('A better 0   B better 0   tied 1')
 })
 

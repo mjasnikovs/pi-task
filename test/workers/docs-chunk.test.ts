@@ -224,3 +224,28 @@ describe('a chunk starts at every declaration tsc actually emits', () => {
         )
     })
 })
+
+// 487 of 12,815 indexed chunks carried no provenance line, because an oversized
+// declaration was prefixed once and then sliced — 53% of @types/node's chunks and
+// 22% of bun-types'. A `node:url` query for `fileURLToPath` retrieved two 8,192-byte
+// slices, both starting mid-sentence inside a doc comment, neither saying which file.
+test('every slice of an oversized declaration keeps its path line', () => {
+    const body = `export interface Huge {\n${'  member: string\n'.repeat(1200)}}\n`
+    const chunks = chunkDeclarations(body, 'bun.d.ts', DECL_SPLIT_RE, '//')
+    expect(chunks.length).toBeGreaterThan(1)
+    for (const c of chunks) expect(c.startsWith('// bun.d.ts\n')).toBe(true)
+})
+
+test('every slice of an oversized README section keeps its heading', () => {
+    const readme = `# Guide\n${'a line of prose that is long enough to matter\n'.repeat(400)}`
+    const chunks = chunkReadme(readme)
+    expect(chunks.length).toBeGreaterThan(1)
+    for (const c of chunks) expect(c.startsWith('<!-- README: Guide -->\n')).toBe(true)
+})
+
+test('a slice still fits the cap once its header is counted', () => {
+    const body = `export interface Huge {\n${'  member: string\n'.repeat(1200)}}\n`
+    for (const c of chunkDeclarations(body, 'bun.d.ts', DECL_SPLIT_RE, '//')) {
+        expect(Buffer.byteLength(c, 'utf8')).toBeLessThanOrEqual(MAX_CHUNK_BYTES)
+    }
+})
