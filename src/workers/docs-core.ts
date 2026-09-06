@@ -717,6 +717,16 @@ export async function docsRaw(input: DocsRawInput): Promise<DocsRawResult> {
         cacheError = err instanceof Error ? err.message : String(err)
     }
 
+    // A facade package exports names it does not declare, and its index is a
+    // table of contents until the packages that DO declare them are folded in.
+    // Best-effort: a supplement that will not resolve leaves the index as it was.
+    let supplements: ResolvedPackage[]
+    try {
+        supplements = (await profile.supplements?.(pkg, input.cwd, io)) ?? []
+    } catch {
+        supplements = []
+    }
+
     const result =
         cache ?
             docsRawCached(
@@ -726,7 +736,8 @@ export async function docsRaw(input: DocsRawInput): Promise<DocsRawResult> {
                 input.query,
                 ensureIndexed,
                 retrieveChunks,
-                autoInstalled
+                autoInstalled,
+                supplements
             )
         :   docsRawUncached(pkg, profile, cacheError ?? 'unknown cache error', autoInstalled)
     result.npmVersion = await npmVersionPromise
@@ -742,12 +753,13 @@ function docsRawCached(
     query: string,
     ensureIndexed: typeof defaultEnsureIndexed,
     retrieveChunks: typeof defaultRetrieveChunks,
-    autoInstalled: boolean
+    autoInstalled: boolean,
+    supplements: readonly ResolvedPackage[] = []
 ): DocsRawResult {
     let indexResult: IndexResult
     const t0 = Date.now()
     try {
-        indexResult = ensureIndexed(cache, pkg, profile)
+        indexResult = ensureIndexed(cache, pkg, profile, supplements)
     } catch (err) {
         return {
             kind: 'error',

@@ -1,0 +1,9 @@
+name: tiny-facade
+version: 1.0
+library
+  build-depends:
+      base
+    , tiny-facade-core ==1.0
+    , tiny-facade-expect ==1.0
+  exposed-modules:
+      Tiny.Facade

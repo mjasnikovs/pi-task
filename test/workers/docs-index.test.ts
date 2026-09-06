@@ -457,3 +457,87 @@ test('the content hash covers the CHUNKER, not just the split regex', () => {
     expect(fp).toContain(String(splitAtMatches))
     expect(fp).toContain(String(chunkDeclarations))
 })
+
+describe('a facade package reaches its implementation', () => {
+    // hspec indexes to 14 chunks of export lists. `it`, `describe` and `shouldBe`
+    // are in the corpus as bare names; every signature is in hspec-core, and the
+    // child abstained three times because the tool returned everything it had.
+    // DEFECT-12-STOPPING-RULE.md carries the boundary and the measurement.
+    const facade = () => resolveHackage('tiny-facade', HS_MODULES, {modulesDir: HS_MODULES})
+    const core = () => resolveHackage('tiny-facade-core', HS_MODULES, {modulesDir: HS_MODULES})
+    const expect_ = () => resolveHackage('tiny-facade-expect', HS_MODULES, {modulesDir: HS_MODULES})
+
+    function bodies(cache: ReturnType<typeof openCache>, name: string): string {
+        const rows = cache.db
+            .prepare("SELECT content FROM chunks WHERE ecosystem = 'hackage' AND name = ?")
+            .all(name) as Array<{content: string}>
+        return rows.map(r => r.content).join('\n')
+    }
+
+    test('alone, the facade carries no signature at all', () => {
+        const cache = openCache(':memory:')
+        try {
+            ensureIndexed(cache, facade(), ECOSYSTEMS.hackage)
+            const text = bodies(cache, 'tiny-facade')
+            expect(text).toContain('runSpec')
+            expect(text).not.toContain('runSpec :: String -> IO ()')
+            expect(text).not.toContain('shouldMatch')
+        } finally {
+            cache.close()
+        }
+    })
+
+    test('with its implementation packages, the signatures arrive', () => {
+        const cache = openCache(':memory:')
+        try {
+            ensureIndexed(cache, facade(), ECOSYSTEMS.hackage, [core(), expect_()])
+            const text = bodies(cache, 'tiny-facade')
+            expect(text).toContain('runSpec :: String -> IO ()')
+            expect(text).toContain('describeIt :: String -> IO () -> IO ()')
+            // Named nowhere in the facade's export list — only `module X` reaches it.
+            expect(text).toContain('shouldMatch :: Eq a => a -> a -> IO ()')
+        } finally {
+            cache.close()
+        }
+    })
+
+    test('only the hole is filled, not the whole dependency', () => {
+        const cache = openCache(':memory:')
+        try {
+            ensureIndexed(cache, facade(), ECOSYSTEMS.hackage, [core(), expect_()])
+            // `unrelatedHelper` is exported by tiny-facade-core and by nothing the
+            // facade re-exports. Indexing it would be indexing hspec-core wholesale.
+            expect(bodies(cache, 'tiny-facade')).not.toContain('unrelatedHelper')
+        } finally {
+            cache.close()
+        }
+    })
+
+    test('the folded declaration says which package it came from', () => {
+        const cache = openCache(':memory:')
+        try {
+            ensureIndexed(cache, facade(), ECOSYSTEMS.hackage, [core(), expect_()])
+            const row = cache.db
+                .prepare(
+                    "SELECT file_path FROM chunks WHERE name = 'tiny-facade' AND content LIKE '%runSpec ::%'"
+                )
+                .get() as {file_path: string} | null
+            expect(row?.file_path).toContain('tiny-facade-core-1.0/')
+        } finally {
+            cache.close()
+        }
+    })
+
+    test('gaining a supplement re-indexes a package already cached', () => {
+        const cache = openCache(':memory:')
+        try {
+            expect(ensureIndexed(cache, facade(), ECOSYSTEMS.hackage).hitCache).toBe(false)
+            expect(ensureIndexed(cache, facade(), ECOSYSTEMS.hackage, [core()]).hitCache).toBe(
+                false
+            )
+            expect(ensureIndexed(cache, facade(), ECOSYSTEMS.hackage, [core()]).hitCache).toBe(true)
+        } finally {
+            cache.close()
+        }
+    })
+})

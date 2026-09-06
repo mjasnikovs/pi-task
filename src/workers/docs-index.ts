@@ -5,6 +5,7 @@ import type {CacheHandle} from './docs-cache.js'
 import {type ResolvedPackage} from './docs-resolve.js'
 import {chunkDeclarations, chunkReadme, splitAtMatches} from './docs-chunk.js'
 import {ECOSYSTEMS, type EcosystemProfile} from './docs-ecosystems.js'
+import {hackageExportGap, declaredInSurface} from './eco-hackage.js'
 
 const ZERO_SEP = Buffer.from([0])
 
@@ -61,7 +62,11 @@ export function chunkerFingerprint(): string {
     return `${String(splitAtMatches)}\u0000${String(chunkDeclarations)}\u0000${String(chunkReadme)}`
 }
 
-function computeContentHash(pkg: ResolvedPackage, profile: EcosystemProfile): string {
+function computeContentHash(
+    pkg: ResolvedPackage,
+    profile: EcosystemProfile,
+    supplements: readonly ResolvedPackage[] = []
+): string {
     const hash = createHash('sha256')
     hash.update(Buffer.from(`${pkg.name}@${pkg.version}`, 'utf8'))
     hash.update(ZERO_SEP)
@@ -84,6 +89,9 @@ function computeContentHash(pkg: ResolvedPackage, profile: EcosystemProfile): st
     // wrapped `instance` head is in aeson's `Types/FromJSON.hs`, never its entry
     // — and nothing surfaced the duplicate drop in `ingestBody` at all.
     hash.update(Buffer.from(`${String(profile.surface)}\u0000${String(ingestBody)}`, 'utf8'))
+    hash.update(ZERO_SEP)
+    // Which packages were folded in, so gaining or losing one re-indexes.
+    hash.update(Buffer.from(supplements.map(s => `${s.name}@${s.version}`).join('\u0000'), 'utf8'))
     hash.update(ZERO_SEP)
     if (pkg.entry && fs.existsSync(pkg.entry)) {
         try {
@@ -195,7 +203,8 @@ function ingestBody(
     cache: CacheHandle,
     pkg: ResolvedPackage,
     profile: EcosystemProfile,
-    contentHash: string
+    contentHash: string,
+    supplements: readonly ResolvedPackage[] = []
 ): IngestResult {
     const ecosystem = profile.id
     const inside = cache.db
@@ -248,6 +257,43 @@ function ingestBody(
             chunksWritten++
         }
     }
+    // A facade package indexes to a table of contents: `hspec` is 14 chunks of
+    // export lists and every signature is in `hspec-core`. Fill only the holes —
+    // see DEFECT-12-STOPPING-RULE.md for the boundary and why it stops here.
+    const gap = supplements.length > 0 ? hackageExportGap(pkg.root) : null
+    for (const sup of gap && (gap.unresolved.size > 0 || gap.reexportedModules.size > 0) ?
+        supplements
+    :   []) {
+        for (const abs of collectFiles(sup, profile).surface) {
+            let raw: string
+            try {
+                raw = fs.readFileSync(abs, 'utf8')
+            } catch {
+                continue
+            }
+            const module = /^module\s+([\w.']+)/m.exec(raw)?.[1]
+            const whole = module !== undefined && gap!.reexportedModules.has(module)
+            // The path names the package the declaration really came from: the
+            // chunk header is model-facing, and a signature attributed to the
+            // wrong package is the bug this whole table exists for.
+            const rel =
+                `${sup.name}-${sup.version}/` + path.relative(sup.root, abs).replace(/\\/g, '/')
+            for (const c of chunkDeclarations(
+                profile.surface(raw),
+                rel,
+                profile.declSplitRe,
+                profile.commentPrefix
+            )) {
+                const declares = declaredInSurface(c.replace(/^\S.*\n/, ''))
+                if (!whole && ![...declares].some(n => gap!.unresolved.has(n))) continue
+                if (seen.has(c)) continue
+                seen.add(c)
+                insertChunk.run(ecosystem, pkg.name, pkg.version, rel, 'dts', c)
+                chunksWritten++
+            }
+        }
+    }
+
     if (files.readme) {
         const rel = path.relative(pkg.root, files.readme).replace(/\\/g, '/')
         const raw = fs.readFileSync(files.readme, 'utf8')
@@ -271,10 +317,11 @@ function ingestBody(
 export function ensureIndexed(
     cache: CacheHandle,
     pkg: ResolvedPackage,
-    profile: EcosystemProfile = ECOSYSTEMS[pkg.ecosystem]
+    profile: EcosystemProfile = ECOSYSTEMS[pkg.ecosystem],
+    supplements: readonly ResolvedPackage[] = []
 ): IndexResult {
     const ecosystem = profile.id
-    const contentHash = computeContentHash(pkg, profile)
+    const contentHash = computeContentHash(pkg, profile, supplements)
     const existing = cache.db
         .prepare(
             'SELECT content_hash FROM packages WHERE ecosystem = ? AND name = ? AND version = ?'
@@ -287,7 +334,7 @@ export function ensureIndexed(
     cache.db.exec('BEGIN IMMEDIATE')
     let result: IngestResult
     try {
-        result = ingestBody(cache, pkg, profile, contentHash)
+        result = ingestBody(cache, pkg, profile, contentHash, supplements)
         cache.db.exec('COMMIT')
     } catch (err) {
         cache.db.exec('ROLLBACK')

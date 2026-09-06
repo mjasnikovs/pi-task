@@ -51,6 +51,7 @@ import {
     hackageTarballUrl,
     hackageExtractDir,
     hackageProjectName,
+    supplementCandidates,
     findCabalTarball,
     cachedVersions,
     resolvedVersions,
@@ -189,6 +190,12 @@ export interface EcosystemProfile {
         cwd: string,
         io: EcosystemIo
     ) => Promise<{pkg: ResolvedPackage; installed: boolean; pin?: AutoInstallPin}>
+    /**
+     * Packages whose declarations belong in THIS package's index, because this
+     * package exports names it does not declare. Only hackage has facades of the
+     * `hspec`/`hspec-core` shape; see DEFECT-12-STOPPING-RULE.md.
+     */
+    supplements?: (pkg: ResolvedPackage, cwd: string, io: EcosystemIo) => Promise<ResolvedPackage[]>
     /** The registry's own newest version, for grounding an answer in the present. */
     latest: (name: string, io: EcosystemIo) => Promise<NpmVersionInfo | null>
 
@@ -553,6 +560,29 @@ const hackageProfile: EcosystemProfile = {
                 stderr: err instanceof Error ? err.message : String(err)
             }
         }
+    },
+    supplements: async (pkg, cwd, io) => {
+        const deps = manifestPackages(pkg.root)
+        if (!deps) return []
+        const candidates = supplementCandidates(pkg.name, deps, resolvedVersions(cwd) ?? {})
+        const out: ResolvedPackage[] = []
+        for (const c of candidates) {
+            try {
+                out.push(resolveHackage(c.name, cwd, {modulesDir: io.modulesDir}))
+                continue
+            } catch {
+                // Not unpacked yet. `acquire` prefers the tarball cabal already
+                // downloaded as a dependency, so this is local work, not a fetch.
+            }
+            const got = await hackageProfile.acquire(c.name, c.version, io)
+            if (!got.success) continue
+            try {
+                out.push(resolveHackage(c.name, cwd, {modulesDir: io.modulesDir}))
+            } catch {
+                // A supplement that will not resolve leaves the facade as it was.
+            }
+        }
+        return out
     },
     latest: (name, io) => hackageLatest(name, io.fetch, io.signal),
 

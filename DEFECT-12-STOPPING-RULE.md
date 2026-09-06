@@ -75,16 +75,43 @@ the index whether the module has one hole or forty-two. The trigger is the hole.
 
 **Resolve, do not traverse.**
 
-1. **Trigger.** A name the package exports and declares nowhere in its own sources.
-   No threshold, no ratio.
-2. **Candidates.** Only modules the package's own sources `import`, owned by a package in
-   the already-resolved dependency set the indexer reads versions from. GHC boot packages
-   are excluded — the point of this tool is packages the model predates, and it knows
-   `base`.
-3. **Keep only the hole.** Fetch a candidate supplier once, extract its surface, keep only
-   the declarations matching an unresolved name. `hspec-core` is not indexed wholesale.
-   Chunks are attributed to the asking package and carry their true origin.
+1. **Trigger, two shapes.** A name the package exports and declares nowhere in its own
+   sources; or a `module X` re-export of a module the package does not own. No threshold,
+   no ratio. Both shapes are needed — see below.
+2. **Candidates.** A `build-depends` entry named `<package>-<suffix>`, present in the
+   already-resolved dependency set the indexer reads versions from. GHC boot packages
+   never match; the point of this tool is packages the model predates, and it knows `base`.
+3. **Keep only the hole.** Take a candidate's surface and keep only the declarations
+   matching an unresolved name, or belonging to a wholesale-re-exported module.
+   `hspec-core` is not indexed wholesale. The chunks are stored under the asking package
+   and their path names the package they really came from.
 4. **Stop after one hop.** Do not recurse into the supplier's own unresolved exports.
+
+### Why the second trigger shape exists — measured
+
+The name-level trigger alone was prototyped first. It carried `it ::` and `describe ::`
+into retrieval and left `shouldBe` behind, because `Test.Hspec` re-exports it as
+`module Test.Hspec.Expectations` — the name is nowhere in hspec's export list, so there is
+no hole for a name-level rule to see. Adding the module-level trigger carried all four.
+
+### Why the candidate bound is a name prefix, and what it costs
+
+Hackage splits a facade from its implementation by name: `hspec`/`hspec-core`,
+`hspec`/`hspec-expectations`. Without that bound the rule has to open every
+`build-depends` entry to discover whether it declares anything, and the measured cost of
+that is the reason it is not done:
+
+| package | build-depends | candidates under the rule |
+|---|---|---|
+| hspec | 5 | hspec-core, hspec-discover, hspec-expectations |
+| aeson | 48 | **none** |
+| scotty | 38 | **none** |
+
+aeson has nine unresolved exports — CPP macros and internal punctuation helpers that no
+dependency declares — so an unbounded rule would open 48 packages and resolve nothing.
+
+The bound's cost is stated, not hidden: `scotty` re-exports sixteen names from `cookie`,
+which shares no prefix, so that hole stays open.
 
 ## Why depth 1, measured
 
@@ -114,8 +141,27 @@ residue is `base`, again excluded. There is no measured case in this sample wher
 hop has anything left to fetch, so depth 2 cannot be justified and is not taken. Depth is
 1 because the measurement says the next hop is empty, not because 1 is a tidy number.
 
+## Implemented — what it does, measured
+
+End to end through the real `docsRaw`, on the seeded `hs` project, against cabal's own
+store. Three questions the live runs asked, and which of the four signatures the retrieved
+chunks carry:
+
+| | published 0.40.5 | this tree |
+|---|---|---|
+| `type signature of it, describe and shouldBe` | NONE | `it ::` `describe ::` `shouldBe ::` |
+| `signature of shouldBe and shouldReturn` | NONE | `shouldBe ::` `shouldReturn ::` |
+| `how do I write a spec with describe and it` | NONE | `it ::` `describe ::` |
+
+`hspec` goes from 14 chunks to 133. The retrieved budget is unchanged at 8 chunks; bytes
+go 1,960 to 2,914, well inside the 24,000 budget.
+
+Cost, same run, same cache: aeson 533 ms, scotty 232 ms, hspec 546 ms, and the `packages`
+table holds exactly the three packages that were asked about. A supplement is folded into
+the asking package's rows and is never registered as a package of its own.
+
 ## What this does not claim
 
 The rule is derived from twenty hackage packages. It is an indexing change, and defect 11
 is the standing proof that an index that improves does not mean an answer that improves.
-The claim to test after implementing is a live one: does `hspec` stop abstaining.
+The claim still to test is a live one: does the `hspec` child stop abstaining.

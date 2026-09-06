@@ -617,3 +617,148 @@ export function manifestPackages(cwd: string): Set<string> | undefined {
     }
     return out
 }
+
+// ── re-export resolution ────────────────────────────────────────────────────
+
+/**
+ * What a package exports but does not declare.
+ *
+ * `hspec` indexes to 14 chunks of export lists: `it`, `describe` and `shouldBe`
+ * are in the corpus as bare names with no signature attached, because every
+ * signature is in `hspec-core`. The whole index is a table of contents.
+ *
+ * Both shapes are here because either alone misses half of it. A name-level
+ * re-export puts the name in the export list; a `module X` re-export puts
+ * nothing there at all, which is why `shouldBe` is invisible to the first.
+ *
+ * See DEFECT-12-STOPPING-RULE.md for why this triggers on the hole itself
+ * rather than on a fraction of the export list.
+ */
+export interface HackageExportGap {
+    /** Exported names with no declaration anywhere in the package. */
+    unresolved: Set<string>
+    /** `module X` re-exports of modules this package does not own. */
+    reexportedModules: Set<string>
+}
+
+const EXPORT_NAME_RE = /^[A-Za-z_][\w']*$/
+/** `module X` inside an export list is a re-export; `Prelude` is base, and base is not fetched. */
+const REEXPORT_RE = /\bmodule\s+([\w.']+)/g
+
+/** The text between `module M (` and its balancing `)`. */
+function exportListText(src: string): string {
+    const m = /^module\s+[\w.']+\s*/m.exec(src)
+    if (!m) return ''
+    const open = src.indexOf('(', m.index)
+    if (open < 0) return ''
+    let depth = 0
+    for (let i = open; i < src.length; i++) {
+        if (src[i] === '(') depth++
+        else if (src[i] === ')' && --depth === 0) return src.slice(open + 1, i)
+    }
+    return ''
+}
+
+const SURFACE_DECL_RE =
+    /^([a-z_][\w']*)\s*::|^\(([^)]+)\)\s*::|^(?:data|newtype|type|class)\s+(?:family\s+)?(?:[^=>]*=>\s*)?([A-Z][\w']*)/
+
+/** Every name the extracted surface declares: signatures, heads, constructors, fields. */
+export function declaredInSurface(surface: string): Set<string> {
+    const out = new Set<string>()
+    const lines = surface.split('\n')
+    for (let i = 0; i < lines.length; i++) {
+        const line = lines[i]
+        const m = SURFACE_DECL_RE.exec(line)
+        if (m) {
+            out.add((m[1] ?? m[2] ?? m[3]).trim())
+            continue
+        }
+        if (BARE_NAME_RE.test(line) && (lines[i + 1]?.trim().startsWith('::') ?? false)) {
+            for (const n of line.split(',')) out.add(n.trim())
+            continue
+        }
+        if (!/^\s/.test(line)) continue
+        for (const c of line.matchAll(/(?:^|[=|])\s*([A-Z][\w']*)/g)) out.add(c[1])
+        for (const f of line.matchAll(/(?:^|[,{])\s*([a-z_][\w']*)\s*::/g)) out.add(f[1])
+    }
+    return out
+}
+
+/** Read every `.hs` under `root`, skipping the directories no surface pass reads. */
+function haskellSources(root: string): string[] {
+    const out: string[] = []
+    const walk = (dir: string): void => {
+        let entries: fs.Dirent[]
+        try {
+            entries = fs.readdirSync(dir, {withFileTypes: true})
+        } catch {
+            return
+        }
+        for (const e of entries) {
+            if (e.isDirectory()) {
+                if (!(HACKAGE_SKIP_DIRS as readonly string[]).includes(e.name))
+                    walk(path.join(dir, e.name))
+            } else if (isHaskellFile(e.name)) out.push(path.join(dir, e.name))
+        }
+    }
+    walk(root)
+    return out
+}
+
+export function hackageExportGap(root: string): HackageExportGap {
+    const declared = new Set<string>()
+    const exported = new Set<string>()
+    const ownModules = new Set<string>()
+    const reexportedModules = new Set<string>()
+    for (const file of haskellSources(root)) {
+        const src = safeRead(file)
+        if (src === null) continue
+        for (const n of declaredInSurface(haskellSurface(src))) declared.add(n)
+        const own = /^module\s+([\w.']+)/m.exec(src)
+        if (own) ownModules.add(own[1])
+        const list = exportListText(src)
+        for (const m of list.matchAll(REEXPORT_RE)) reexportedModules.add(m[1])
+        for (const raw of list.split('\n')) {
+            const line = raw.replace(/--.*$/, '').replace(REEXPORT_RE, '')
+            for (const token of line.split(/[,\s]+/)) {
+                const name = token
+                    .replace(/\(\.\.\)$/, '')
+                    .replace(/[(),]/g, '')
+                    .trim()
+                if (EXPORT_NAME_RE.test(name)) exported.add(name)
+            }
+        }
+    }
+    for (const m of ownModules) reexportedModules.delete(m)
+    reexportedModules.delete('Prelude')
+    return {
+        unresolved: new Set([...exported].filter(n => !declared.has(n))),
+        reexportedModules
+    }
+}
+
+/**
+ * Which declared dependencies may be opened to fill the gap.
+ *
+ * Hackage splits a facade from its implementation by name — `hspec`/`hspec-core`,
+ * `hspec`/`hspec-expectations` — and that convention is the whole bound. Without
+ * it the rule has to fetch every `build-depends` entry to find out whether it
+ * declares anything: aeson names 38 of them and would resolve none, because its
+ * nine unresolved exports are CPP macros and internal punctuation helpers.
+ *
+ * The cost of the bound is stated rather than hidden: `scotty` re-exports
+ * sixteen names from `cookie`, which shares no prefix, so that hole stays open.
+ */
+export function supplementCandidates(
+    pkgName: string,
+    declaredDeps: ReadonlySet<string>,
+    resolved: Readonly<Record<string, string>>
+): Array<{name: string; version: string}> {
+    const out: Array<{name: string; version: string}> = []
+    for (const dep of declaredDeps) {
+        if (!dep.startsWith(`${pkgName}-`)) continue
+        const version = resolved[dep]
+        if (version) out.push({name: dep, version})
+    }
+    return out.sort((a, b) => a.name.localeCompare(b.name))
+}
