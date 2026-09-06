@@ -1203,3 +1203,141 @@ abstention rate is again a fact about the questions, not the tool: 3 of 6 hs loo
 were `hspec` (defect 12) and 2 of the remaining 3 asked for `decodeFile`,
 `DecodeError` and `prettyShow`, none of which aeson 2 has. The one question that
 named a real symbol, `eitherDecode`, was answered.
+
+---
+
+# Third re-run, 2026-09-06, on 0.40.5
+
+Artifacts in `live-docs-rerun3-2026-09-06/`. The container ran `@mjasnikovs/pi-task@0.40.5`
+installed from npm, not a hand-copied `dist`, and all five fix markers were greppable in
+what npm put there before the run started.
+
+## The preflight, all five checks
+
+- **Published build.** `npm i @mjasnikovs/pi-task@0.40.5`, then `acceptedEnd`,
+  `chunkerFingerprint`, `retrievedText`, `IDENTIFIER_SHAPED` and `valueChunk` each found
+  in `dist/workers/`. Five hits.
+- **Cache left in place, nothing re-indexed.** serde 297/0, axum 381/0, serde_json 288/0,
+  zod 1078/0, aeson 1326/55 before and after the probe — identical. The freshness hash
+  held, which is what leaving the cache in place was for.
+- **Resolution.** All six packages `ok` at their pin.
+- **Scorer, all four directions.** Correct tree PASS; `/x/:id` HARD FAIL; a moved pin HARD
+  FAIL; and defect 10's fix holds — a denying sentence scores clean, an asserting one
+  flags.
+- **The hop fires.** After the first three ts answers: `retrievedText` 19,872 bytes and
+  every symbol the query named carried. The run measures the new build.
+
+## The result
+
+| | ts | rs | hs |
+|---|---|---|---|
+| verdict | **HARD FAIL** | PASS | PASS |
+| build/test | green | green | green |
+| answers | 18 | 9 | 13 |
+| abstained | 3 (17%) | 2 (22%) | 6 (46%) |
+| fidelity | 13/15 | 5/7 | 7/7 |
+| pins | 2/2 | 3/3 | 2/2 |
+
+Abstention fell on every ecosystem: npm 24% → 17%, cargo 29% → 22%, hackage 83% → 46%.
+Read the hackage number the right way round — see defect 15.
+
+## Defect 13 is closed
+
+`.gitignore` seeded. Tracked files under a build directory: **0, 0, 0**, against 1397 in
+ts last run. 25, 25 and 15 files tracked in total, all real source.
+
+## The cache is still clean
+
+Seventeen packages, every one a real dependency. `text 2.1.3` and `wai-test 3.0.0` are new
+this run and both are genuine transitive deps of the hs project. No filename was ever
+indexed as a package.
+
+## Defect 14. A correct docs answer, and the code shipped the deprecated form anyway
+
+The ts HARD FAIL is `adminEmail: z.string().email()` in `src/config.ts` — the zod 3 form,
+and a stale-major marker.
+
+The docs tool did not fail. It answered the question correctly, twice:
+
+> In v4 the standalone `z.email()` is the recommended API (email checks like `.email()` on
+> strings were a v3 pattern).
+
+> In zod 4, `ZodString` still exposes `.email()` and `.url()` as methods, but they are
+> **@deprecated** in favor of the top-level constructors `z.email()` and `z.url()`.
+
+The timestamps close it. TASK_0001's own `worker:apis` phase asked at **01:38:11**; the
+commit that shipped `z.string().email()` is **01:45**, the same task, seven minutes later.
+
+This is a delivery failure, one level further out than the one this document keeps
+recording. Defect 11's lesson was that a better index is not a better answer. This is that
+a *correct answer* is not correct code. `.email()` still exists in 4.5.4, so the build is
+green and only the marker sweep catches it — which is exactly why the marker table exists.
+
+## Defect 15. The child abstains with the answer in the corpus
+
+Abstention rate is not measuring what the tool could not answer. Of the run's **11
+abstentions, 4 carry a declaration of a symbol the query named**, and reading all eleven
+individually splits them:
+
+| | count | |
+|---|---|---|
+| correct — every part genuinely absent | 6 | `decodeFile`, `decodeFileEither`, `hspec` (defect 12), the project's cabal file |
+| **abstained with part of the answer in hand** | **5** | below |
+
+The five, and what the corpus held:
+
+- **`text`** — "The Text type: module, newtype definition, and how it is used in record
+  fields." 4,459 bytes retrieved, containing `data Text = Text …` from
+  `src/Data/Text/Internal.hs`. Answered `unclear from this package`. Unambiguous.
+- **`zod`** — the `.email()` question, 19,876 bytes. A sibling answer from the same corpus
+  size answered it correctly. This abstention is the one upstream of the HARD FAIL.
+- **`serde`** — "How to derive Deserialize (and Serialize) … and the `#[serde(rename)]`
+  attribute syntax." Corpus has `trait Deserialize` and `trait Serialize`; only the
+  attribute half is missing.
+- **`aeson`** — "Does Data.Aeson export decodeFile … Also, is there a blanket instance
+  `(Generic a, GFromJSON Zero (Rep a)) => FromJSON a`". Corpus has `class GFromJSON` and
+  `class FromJSON`. `decodeFile` is absent; the blanket-instance half is not.
+- **`zod`** — "ZodError.issues — type of each issue object … and what code values exist".
+  Corpus has `issues`, `ZodIssue` and `code`. The type is answerable; the enumeration is
+  not.
+
+All five are **compound questions where one part is unanswerable**, and the child discards
+the answerable parts with it. That is distinct from the standing open note — there the
+key symbol is absent, here several symbols are named and only some are.
+
+Not every compound question does this: the 1,081-byte aeson lookup asks two things and
+neither is in the corpus, and abstaining is right. The trigger is a *mixed* question.
+
+## The recall miss is the truth table, not the tool
+
+`scotty:ActionM` is reported missed. `type ActionM = ActionT IO` is in the index, in
+`Web/Scotty.hs`, and a query that names `ActionM` retrieves it — measured directly. No
+scotty query in this run ever named it. The metric scores a symbol the run did not ask
+about.
+
+## Two new benign fidelity flags
+
+ts flags `promises` and `stringify`; rs flags `error_value` and `router`. `stringify` is
+`JSON.stringify`, a language builtin inside a code span, and `promises` is a segment of
+the module path `fs/promises`. Two more false-positive families for the list — the scorer
+was deliberately not touched mid-run.
+
+## What the fixes shipped this session change
+
+Not measured by this run: the container ran 0.40.5 throughout, so none of the session's
+fixes are in these numbers. Measured separately, against this run's own corpus:
+
+- **hspec, defect 12.** Three questions the runs asked, signatures carried:
+  NONE/NONE/NONE on 0.40.5 → `it`+`describe`+`shouldBe`, `shouldBe`+`shouldReturn`,
+  `it`+`describe`. 14 chunks → 133.
+- **aeson duplicates.** 1326 chunks / 55 duplicate bodies → 1283 / 0.
+- **npm and cargo unchanged**, chunk for chunk: zod 1078, hono 708, axum 381,
+  serde_json 288, retrieval identical.
+
+## The remaining "8 of 35" was an instrument artefact
+
+Defect 11's residue does not exist. Re-measured on the previous run's queries at the live
+retrieval limit of 8, with a **whole-word** declaration test: **0 missed of 45**. The
+earlier 8 came from a substring test that counted `decodeFile` as declared because
+`decodeFileStrict` is — the exact confusion the fix was written to avoid, reproduced in
+the measurement of the fix.
