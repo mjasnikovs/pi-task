@@ -176,17 +176,41 @@ grep -c docs         matched `read: docs-live-hs.cabal`            -> "5 refusal
 None survived looking at the rows. Every one would have been a believable number.
 
 
+## The metric that finally moves: `scripts/docs-defines.ts`
+
+Every quality metric this file had was saturated. Recall reads 43/44 across four
+runs; "the ground-truth symbol is MENTIONED" reads **101/101** on every arm of
+every comparison, because a package's own doc comments name it constantly.
+Neither can decide anything.
+
+A chunk **DEFINES** a symbol when its own first declaration head names it — or,
+for a member, when a chunk declares it as a field or method. That one moves, and
+it needs no model: it is the index and the recorded queries.
+
+It chose defect 21 (16/62 -> 34/62 paired, p=1.2e-4), chose the retrieve limit
+against a sweep, and mechanised defect 22 below. It is a real harness now, with
+its own tests, and it re-retrieves — so it runs in the container against pinned
+deps with the cache's package set held fixed.
+
+```bash
+bun scripts/docs-defines.ts recorded/*.jsonl --project ts=… --project rs=… --out a.jsonl
+bun scripts/docs-defines.ts --compare a.jsonl b.jsonl      # paired, exact McNemar
+```
+
+The whole recorded corpus, on 0.40.12:
+
+```
+cargo   26/26 (100%)     npm 38/42 (90%)     hackage 26/33 (79%)
+                                   mentioned: 101/101 in all three
+
+  aeson:FromJSON      16/16     axum:Router     12/12     zod:issues     11/11
+  axum:Json             7/7     serde_json:from_str 6/6   zod:safeParse    7/7
+  scotty:ActionM        4/4     tokio:TcpListener   1/1
+  hono:Hono           12/14     hono:json           8/10
+  aeson:eitherDecode    4/6     scotty:scotty       2/7   <--
+```
+
 ## Defect 22. On hackage, the package's own name has no ranking power at all
-
-The "defines it" metric from defect 21, applied per ecosystem over every recorded
-query that names a ground-truth symbol:
-
-```
-cargo    axum:Router 12/12   axum:Json 7/7   serde_json:from_str 6/6   tokio:TcpListener 1/1
-npm      zod:safeParse 7/7   zod:issues 11/11   hono:json 9/10   hono:Hono 12/14
-hackage  aeson:FromJSON 16/16   scotty:ActionM 4/4
-         aeson:eitherDecode 4/6      scotty:scotty 2/7   <-- 
-```
 
 **Why `scotty` cannot find `scotty`.** The declaration exists, once:
 
