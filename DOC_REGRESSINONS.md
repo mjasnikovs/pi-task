@@ -1344,7 +1344,39 @@ contain the declaration by accident. Twenty gained against two lost.
 
 `bun run test` 4430 pass / 0 fail; `npm run lint:check` green.
 
-### `PACKAGE_RETRIEVE_LIMIT` — swept, and it STAYS at 8
+### `PACKAGE_RETRIEVE_LIMIT` — swept TWICE; the first sweep was too narrow
+
+The sweep below covers npm only (zod and hono), and on that corpus the metric
+plateaus at 16. **Re-swept over all 101 pairs across three ecosystems it does
+not**, and the earlier "plateau at 16" is wrong as a general statement:
+
+```
+limit   defines/101    retrieved bytes    calls at the 24,000 budget
+    8      91           992,119            6/74
+   16      91         1,244,766           10/74
+   24      93         1,381,753           16/74
+   32      93         1,473,829           24/74
+   50      97         1,562,283           29/74
+  100      97         1,645,710           38/74
+
+paired against 8:   16  only-8 1  only-16 1   p = 1.0000
+                    24  only-8 1  only-24 3   p = 0.6250
+                    50  only-8 1  only-50 7   p = 0.0703
+```
+
+**Monotone to 50 and flat after**, seven gains against one loss, and the mechanism
+is defect 23: a big class chunk ranks 9-16 and hackage's declarations sit deeper
+still. `PROJECT_RETRIEVE_LIMIT` is already 50, and this file records that nobody
+knows why the two differ.
+
+**Not changed, on p = 0.0703.** The retrieval evidence favours 50 and does not
+reach the bar, and the cost is +57% of text into the extraction child — which is
+the one thing this measurement cannot see. The deciding experiment is the ANSWER
+side: `docs-replay --retrieve`, two arms at 8 and 50, over the recorded records.
+That is the next round's first item, and it is the first time a limit change has
+had a reason rather than a preference.
+
+### The npm-only sweep, kept because its conclusion is still true of npm
 
 `docs-retrieve.ts` says in its own header that nothing records why a package gets
 8 chunks and project source gets 50. Defect 21 made it the binding budget, so it
