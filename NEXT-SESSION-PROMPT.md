@@ -158,8 +158,10 @@ measurement chose it; defect 14's marker window was swept 20 to 4,000, found fla
 and **deleted** in favour of a clause boundary.
 
 `bun run test` must stay green at 4430. `bun test` alone fails; the `--isolate` in
-`bun run test` is load-bearing. `npm run lint:check` must stay green — and do not
-discard its output, which is how an undefined identifier reached a test run once.
+`bun run test` is load-bearing. `npm run lint:check` must stay green — and read ALL of
+its output. Discarding it let an undefined identifier reach a test run; reading
+only its `tail` let a syntax error reach a commit, because the failure was above
+the cut.
 
 Publish a patch version when you ship a fix, and say plainly whether `dist`
 actually changed — a `scripts/`-only change ships a byte-identical build.
