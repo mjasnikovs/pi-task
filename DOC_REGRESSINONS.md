@@ -1430,6 +1430,38 @@ It also closes the divergence this file has carried unexplained since the start:
 `PROJECT_RETRIEVE_LIMIT` was already 50, and nothing recorded why a package got 8.
 Now both are 50, and the reason is a number.
 
+### `RETRIEVE_CONTENT_BUDGET` is the next unmeasured constant, and it now binds
+
+Raising the limit made the BYTE budget the binding one — re-run 6's ts records
+have a median retrieved size of 23,943 against a 24,000 budget, where re-run 5's
+was 16,493. And `RETRIEVE_CONTENT_BUDGET = 24_000` carries a one-line comment and
+no measurement, which is exactly what the limit did.
+
+Swept on the defines metric, all 101 pairs, limit held at 50:
+
+```
+budget    defines/101   chunks   retrieved bytes   calls near the budget
+ 12,000      86/101      1,173        765,983          30/74
+ 24,000      97/101      1,960      1,562,283          30/74     <- shipped
+ 36,000     100/101      2,576      2,182,525          26/74
+ 48,000     101/101      2,914      2,670,300          29/74
+ 96,000     101/101      3,752      3,965,064          17/74
+
+24,000 vs 12,000:  only-24k 13   only-12k 2   p = 0.0074   <- the current value is
+                                                             defensible downward
+24,000 vs 36,000:  only-24k  0   only-36k 3   p = 0.2500
+24,000 vs 48,000:  only-24k  0   only-48k 4   p = 0.1250
+24,000 vs 96,000:  only-24k  0   only-96k 4   p = 0.1250
+```
+
+**Monotone, and zero losses at every step up.** 48,000 takes the metric to 101/101
+— which then saturates it, so nothing above that is measurable this way.
+
+Not changed. Four gains against zero losses at p = 0.125 is the same shape the
+limit had before its answer-side test settled it, and the same test decides this:
+`docs-replay --retrieve`, arms at 24,000 and 48,000. It needs the model, and the
+model is running re-run 6.
+
 ### And it closed defects 22 and 23, which were filed as having no lever
 
 Re-measured on the shipped constant, per symbol:
