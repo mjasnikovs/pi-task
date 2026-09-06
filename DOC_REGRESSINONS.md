@@ -132,6 +132,7 @@ the record; the model is not.
 | — | aeson keeps 55 duplicate bodies | index | offline | **measured fixed** |
 | 16 | a facade package indexes to nothing, in **cargo** | index | retrieval | **SHIPPED** on retrieval; answer half replayed FLAT at n=4, no recorded stimulus |
 | 17 | retrieval depends on the cache's other packages | retrieval | retrieval | **real, and measured harmless** |
+| 20 | a Rust item inside a `name! { … }` block is not indexed | index | offline | found, tokio 441 of 2,919; fix needs its own STEP 0 |
 | 19 | a symbol declared only in a NON-prefixed dependency | both | recorded corpus | caused the rs HARD FAIL; obvious lever **REFUTED**, 4 of 20 and none that mattered |
 | 18 | one answer in five carries a false hallucination warning | extraction | recorded corpus | **SHIPPED**, 21/21 now report stitched |
 | 14 | correct answer, deprecated code shipped | neither | **full run** | lever BUILT, 3/3 on the corpus; live run pending |
@@ -979,6 +980,54 @@ a true one, and a loose scorer is as fatal as a strict one. Left flagged.
 The live number it distorts is worth knowing about: quoting a fidelity rate from
 a run whose project uses `port` and `adminEmail` as field names will read three
 flags low on quality it did not lose.
+
+## Defect 20. A Rust item inside a `name! { … }` block is invisible to the indexer
+
+Found by chasing one row of defect 19's table: `TcpListener` was reported as
+declared nowhere in **tokio**, which obviously declares it.
+
+```
+tokio 1.53.1 index:  1157 chunks, 1.3 MB
+                     "TcpListener" MENTIONED       (doc comments, use statements)
+                     "struct TcpListener" ABSENT
+```
+
+`tokio/src/net/tcp/listener.rs` wraps the declaration in `cfg_net! { … }`.
+`splitRustItems` treats a `name! { … }` invocation as one opaque item and never
+descends, so everything inside is dropped from the surface.
+
+**Causal, one file, one variable** — unwrap exactly that block and change nothing
+else:
+
+```
+as shipped        struct TcpListener in surface = false   surface 7,026 B
+cfg_net unwrapped struct TcpListener in surface = TRUE    surface 8,290 B
+```
+
+**Scale, counted by brace balance over 22 crates** — public item heads sitting
+inside such a block:
+
+| crate | pub items | inside a macro block | the macros |
+|---|---|---|---|
+| tokio | 2,919 | **441 (15.1%)** | `cfg_rt!` 68, `cfg_unstable_metrics!` 39, `cfg_io_util!` 34, `cfg_net!` |
+| tokio-stream | 146 | 28 (19.2%) | `pin_project!` 26 |
+| futures-util | 593 | 93 (15.7%) | `pin_project!` 93 |
+| axum-core | 70 | 9 (12.9%) | `composite_rejection!`, `define_rejection!` |
+| axum | 370 | 42 (11.4%) | `define_rejection!` 20, `composite_rejection!` 10 |
+| tower / tokio-util | ~390 | 31 (7.9%) | `pin_project!` |
+| hyper | 543 | 25 (4.6%) | `pin_project!`, `cfg_feature!` |
+| uuid, tracing-core, regex, http, itertools, … | — | 0 (0.0%) | — |
+
+It is an async-ecosystem pattern, not a universal one. `TcpListener` is in the
+15%, and it is one of this test's own **ground-truth symbols** — which the recall
+metric scored a HIT anyway, because the answer carried the name from a doc
+comment. One more reading of why that metric is saturated.
+
+**Unfixed, and the fix is not "descend into every macro block".** `quote!`
+(60 blocks in serde_derive), `test_parse!` and `ffi_fn!` bodies are templates and
+test code, not items — descending blindly would index `pub fn #ident` templates as
+API. The cost of descending has to be measured on the quote-heavy crates before
+any rule is written.
 
 ## Defect 19. The prefix bound's stated cost, caught causing a live HARD FAIL
 
