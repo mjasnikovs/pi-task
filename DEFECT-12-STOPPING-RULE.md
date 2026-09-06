@@ -113,6 +113,15 @@ dependency declares — so an unbounded rule would open 48 packages and resolve 
 The bound's cost is stated, not hidden: `scotty` re-exports sixteen names from `cookie`,
 which shares no prefix, so that hole stays open.
 
+**The principled successor, not built.** The prefix is standing in for a module-to-package
+map. Cabal already holds one — `01-index.tar` in its package cache carries every
+package's `.cabal`, `exposed-modules` included — so `Web.Cookie` could be resolved to
+`cookie` by lookup rather than by naming convention, and the prefix rule dropped entirely.
+What ruled it out here was scanning cost, not soundness. Whatever replaces the prefix must
+stay deterministic: making the index depend on which packages happen to be unpacked on
+this machine would put the same package at two different shapes on two machines, which is
+the failure this document's own scoring discipline exists to prevent.
+
 ## Why depth 1, measured
 
 Per package: unresolved names, how many a one-hop candidate actually declares, and how
