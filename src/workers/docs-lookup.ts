@@ -83,7 +83,7 @@ export async function docsLookup(input: DocsLookupInput): Promise<DocsLookup> {
     const excerptVerified = extraction.excerptVerified
     return {
         kind: 'answer',
-        body: formatResultText(input.corpus.header, extraction, excerptVerified),
+        body: formatResultText(input.corpus.header, extraction, extraction.excerptCheck),
         content,
         extraction,
         excerptVerified

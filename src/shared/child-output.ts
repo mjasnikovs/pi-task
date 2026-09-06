@@ -66,6 +66,57 @@ export interface ExcerptVerification {
     contentLength: number
     /** The whitespace-normalised excerpt that was searched for. */
     normalisedExcerpt: string
+    /**
+     * How many verbatim spans of the source the excerpt is made of — 1 when it
+     * verified, more when the child stitched it. Over every unverified excerpt in
+     * five live runs it ran 2 to 11, with nothing missing.
+     */
+    verbatimSpans: number
+    /** Words in no span of the source at all. This, not `verified`, is what a
+     *  fabrication looks like. */
+    absent: string[]
+}
+
+/** The child writes these to mark its own join, so they are not source text and
+ *  not evidence of invention either. */
+const ELISION = /^(?:\.{3}|\u2026|\/\/\s*\.{3})$/
+
+/**
+ * Cover the excerpt with the longest runs the source actually contains, greedily.
+ *
+ * `verified` asks whether the excerpt is ONE such run. This asks what it is made
+ * of, which is the difference between a quote assembled from four real places and
+ * a quote with a word nobody wrote. The warning needs the second question; it had
+ * only ever asked the first.
+ */
+function coverBySource(
+    normalisedExcerpt: string,
+    normalisedContent: string
+): {
+    verbatimSpans: number
+    absent: string[]
+} {
+    const words = normalisedExcerpt.length === 0 ? [] : normalisedExcerpt.split(' ')
+    const absent: string[] = []
+    let verbatimSpans = 0
+    let i = 0
+    while (i < words.length) {
+        let run = 0
+        while (
+            i + run < words.length
+            && normalisedContent.includes(words.slice(i, i + run + 1).join(' '))
+        ) {
+            run++
+        }
+        if (run === 0) {
+            if (!ELISION.test(words[i])) absent.push(words[i])
+            i++
+        } else {
+            verbatimSpans++
+            i += run
+        }
+    }
+    return {verbatimSpans, absent}
 }
 
 export function verifyExcerpt(excerpt: string, content: string): ExcerptVerification {
@@ -76,30 +127,41 @@ export function verifyExcerpt(excerpt: string, content: string): ExcerptVerifica
         verified: isExcerptInContent(excerpt, content),
         contentSha256: createHash('sha256').update(nc).digest('hex'),
         contentLength: nc.length,
-        normalisedExcerpt: ne
+        normalisedExcerpt: ne,
+        ...coverBySource(ne, nc)
     }
 }
 
 /**
  * Format the child's parsed output with a header and optional excerpt block.
  *
- * The warning is prepended only on the excerpt path, and only for an explicit
- * `false`. With no excerpt the function returns before the warning is built, and
- * an `undefined` verdict — nothing was checked — prints no warning either. So the
- * warning means "checked and not found", never "not checked".
+ * The note is prepended only on the excerpt path, and only when something was
+ * actually checked. With no excerpt the function returns before it is built, and
+ * an undefined verification — nothing was checked — prints nothing either. So a
+ * note means "checked", never "not checked".
+ *
+ * Two different findings, because they mean different things to the worker that
+ * reads this. An excerpt the source does not contain a word of is a possible
+ * fabrication. An excerpt assembled from several real spans is a stitched quote,
+ * which is what the extraction prompt produces — and calling that a possible
+ * hallucination was wrong on 21 of 21 measured cases, on a fifth of every run's
+ * answers. See "Defect 18" in DOC_REGRESSINONS.md.
  */
 export function formatResultText(
     header: string,
     parsed: {answer: string; excerpt?: string},
-    verified: boolean | undefined
+    check: ExcerptVerification | undefined
 ): string {
     if (!parsed.excerpt) {
         return header ? `${header}\n\n${parsed.answer}` : parsed.answer
     }
     const quote = parsed.excerpt.replace(/\n/g, '\n> ')
-    const warning =
-        verified === false ?
-            'WARNING: cited excerpt not found verbatim in source content — the child pi may have paraphrased or hallucinated.\n\n'
-        :   ''
-    return `${warning}${header}\n\n${parsed.answer}\n\nSource excerpt:\n> ${quote}`
+    let note = ''
+    if (check && !check.verified) {
+        note =
+            check.absent.length > 0 ?
+                'WARNING: cited excerpt not found verbatim in source content — the child pi may have paraphrased or hallucinated.\n\n'
+            :   `NOTE: cited excerpt is stitched from ${check.verbatimSpans} separate spans of the source; every span is verbatim.\n\n`
+    }
+    return `${note}${header}\n\n${parsed.answer}\n\nSource excerpt:\n> ${quote}`
 }

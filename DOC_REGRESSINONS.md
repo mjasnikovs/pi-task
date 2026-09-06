@@ -132,7 +132,7 @@ the record; the model is not.
 | — | aeson keeps 55 duplicate bodies | index | offline | **measured fixed** |
 | 16 | a facade package indexes to nothing, in **cargo** | index | retrieval | **SHIPPED**, 3 of 4 axum queries reach the trait |
 | 17 | retrieval depends on the cache's other packages | retrieval | retrieval | **real, and measured harmless** |
-| 18 | one answer in five carries a false hallucination warning | extraction | recorded corpus | found, 21/21 false, fix in progress |
+| 18 | one answer in five carries a false hallucination warning | extraction | recorded corpus | **SHIPPED**, 21/21 now report stitched |
 | 14 | correct answer, deprecated code shipped | neither | **full run** | lever BUILT, 3/3 on the corpus; live run pending |
 
 ## 4's residue. A query that names no type — REFUTED at STEP 0
@@ -903,12 +903,28 @@ That matters because it is not a scorer, it is **live text in the tool return**.
 One answer in five tells the calling worker its own correct answer may be made up,
 and research's measured discard base rate is 54%.
 
-**The fix keeps the verdict and fixes the claim.** `child-output.ts` says
-plainly that `ExcerptVerification` exists to add EVIDENCE and that "the verdict
-itself is not loosened", so `verified` stays exactly as it is. What changes is
-what the warning says: an excerpt every word of which is covered by verbatim spans
-is reported as stitched from N spans; only an excerpt carrying text the source does
-not have keeps the hallucination wording.
+**FIXED — the verdict is untouched and the claim about it is not.**
+`child-output.ts` says plainly that `ExcerptVerification` exists to add EVIDENCE
+and that "the verdict itself is not loosened", so `verified` still delegates to
+the one predicate. Two fields are added beside it — `verbatimSpans` and `absent`,
+from a greedy cover of the excerpt by the longest runs the source contains — and
+the message is chosen from `absent`, not from `verified`:
+
+```
+absent.length > 0  -> WARNING: … may have paraphrased or hallucinated.   (unchanged)
+otherwise          -> NOTE: cited excerpt is stitched from N separate spans
+                            of the source; every span is verbatim.
+```
+
+Re-run over the same 21 records through the shipped code:
+
+```
+21 of 21 now report stitched.   0 keep the hallucination warning.
+```
+
+The other direction is pinned too: an excerpt carrying one invented word still
+warns, and the two worker tests that assert the warning appear still pass — they
+now require a genuinely absent word to do so, so they got stricter, not looser.
 
 ---
 

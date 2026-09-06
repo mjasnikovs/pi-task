@@ -101,7 +101,7 @@ export function registerPiWorkerFetch(
                     formatResultText(
                         '', // a fetched page answer carries no package header
                         {answer: result.answer, excerpt: result.excerpt},
-                        result.excerptVerified
+                        result.excerptCheck
                     ) || '(no output)'
                 // The coverage miss is the one outcome that carries an instruction. It goes
                 // in the TEXT, not only in details: details are for the harness, and the

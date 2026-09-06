@@ -1,5 +1,5 @@
 import {describe, expect, test} from 'bun:test'
-import {isExcerptInContent, verifyExcerpt} from '../../src/shared/child-output.js'
+import {isExcerptInContent, verifyExcerpt, formatResultText} from '../../src/shared/child-output.js'
 
 describe('verifyExcerpt (PROMPT-3 item 4 diagnostics)', () => {
     test('verdict is identical to isExcerptInContent — the verifier is NOT loosened', () => {
@@ -51,5 +51,57 @@ describe('verifyExcerpt (PROMPT-3 item 4 diagnostics)', () => {
         expect(v.verified).toBe(false)
         expect(v.normalisedExcerpt).toBe('nowhere near this')
         expect(v.contentLength).toBeGreaterThan(0)
+    })
+})
+
+// Defect 18. `verified === false` prepends "may have paraphrased or hallucinated"
+// to the text the CALLING worker reads, on 20% of all docs answers — and over
+// every unverified excerpt with a replayable corpus, 21 of 21, not one word was
+// missing from the source. They are STITCHED, which is what the extraction prompt
+// produces. The verdict stays; the claim about it does not.
+describe('a stitched excerpt is not a fabricated one', () => {
+    const SOURCE =
+        'export interface Context { status: (s: StatusCode) => void; }\n'
+        + 'export interface JSONRespond { <T>(object: T): Response; }\n'
+        + 'export declare class Hono { get: HandlerInterface; }'
+
+    test('every word covered by verbatim spans reports the stitching, not a lie', () => {
+        const check = verifyExcerpt(
+            'status: (s: StatusCode) => void; ... get: HandlerInterface;',
+            SOURCE
+        )
+        expect(check.verified).toBe(false)
+        expect(check.verbatimSpans).toBe(2)
+        expect(check.absent).toEqual([])
+        const text = formatResultText('h', {answer: 'a', excerpt: 'e'}, check)
+        expect(text).not.toMatch(/hallucinated/)
+        expect(text).toMatch(/stitched from 2 separate spans/)
+    })
+
+    test('text the source does not have keeps the hallucination warning', () => {
+        const check = verifyExcerpt('status: (s: StatusCode) => Elephant;', SOURCE)
+        expect(check.verified).toBe(false)
+        expect(check.absent).toContain('Elephant;')
+        expect(formatResultText('h', {answer: 'a', excerpt: 'e'}, check)).toMatch(/hallucinated/)
+    })
+
+    test('a contiguous excerpt is one span and warns about nothing', () => {
+        const check = verifyExcerpt('export interface JSONRespond', SOURCE)
+        expect(check.verified).toBe(true)
+        expect(check.verbatimSpans).toBe(1)
+        const text = formatResultText('h', {answer: 'a', excerpt: 'e'}, check)
+        expect(text).not.toMatch(/hallucinated|stitched/)
+    })
+
+    test('an unchecked excerpt still warns about nothing', () => {
+        expect(formatResultText('h', {answer: 'a', excerpt: 'e'}, undefined)).not.toMatch(
+            /hallucinated|stitched/
+        )
+    })
+
+    test('the elision marker the child writes is not counted as absent', () => {
+        expect(verifyExcerpt('export interface Context { ... } ... Hono', SOURCE).absent).toEqual(
+            []
+        )
     })
 })
