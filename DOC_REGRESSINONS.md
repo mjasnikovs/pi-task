@@ -2236,6 +2236,21 @@ That is the same shape as defects 22 and 23 one turn later. The limit was raised
 because the budget was slack; now the budget is binding on two ecosystems and the
 limit is binding on the third. Neither constant is answered by measuring the other.
 
+**And then neither wall turns out to matter on hackage.** Once the defines numbers
+are split by ecosystem, hackage reads 35/35 at every limit and every budget tried,
+and cargo reads 42/42. Every gain either constant can still buy is npm:
+
+```
+                    npm      cargo    hackage
+limit 50/100/200   48/51     42/42     35/35
+budget 48,000      51/51     42/42     35/35
+```
+
+So the whole retrieval case for a bigger budget is three hono records, and the
+bytes hackage gains from either constant define nothing new. That is what the
+sweep is for: hackage looked like the ecosystem with a wall and is the one with
+nothing behind it.
+
 ### And the limit past 50 is worth nothing — swept, so hackage's cap is not a lever
 
 Eighteen of twenty-five hackage records sit at the 50-chunk cap, which reads like
@@ -2244,14 +2259,15 @@ the limit binding again one turn after it was raised. It is not. Three trees at
 24,000, on copies of one cache so the package set is identical:
 
 ```
-limit  50   npm 51/51   cargo 42/42   hackage 32/35    125/128
-limit 100   npm 51/51   cargo 42/42   hackage 32/35    125/128
-limit 200   npm 51/51   cargo 42/42   hackage 32/35    125/128
+limit  50   npm 48/51   cargo 42/42   hackage 35/35    125/128
+limit 100   npm 48/51   cargo 42/42   hackage 35/35    125/128
+limit 200   npm 48/51   cargo 42/42   hackage 35/35    125/128
 ```
 
 Byte-identical, all three, every per-symbol row. The extra chunks arrive — hackage
 goes 50 -> 133 chunks and its byte total rises to the budget wall — and **not one
-of them defines a symbol the 50 did not.**
+of them defines a symbol the 50 did not.** Hackage is already at 35/35; the three
+misses the sweep could have fixed are all npm, and the limit does not touch them.
 
 ```
 hspec    50c  9,891 B  ->  133c 20,649 B      defines: unchanged
