@@ -169,6 +169,37 @@ Cost, same run, same cache: aeson 533 ms, scotty 232 ms, hspec 546 ms, and the `
 table holds exactly the three packages that were asked about. A supplement is folded into
 the asking package's rows and is never registered as a package of its own.
 
+## Verified on the published builds
+
+Two npm installs, a project whose `.cabal` declares `hspec ==2.11.17`, a cold cache each
+time. Same three questions:
+
+| | 0.40.5 | 0.40.6 |
+|---|---|---|
+| `type signature of it, describe and shouldBe` | NONE | `it ::` `describe ::` `shouldBe ::` |
+| `signature of shouldBe and shouldReturn` | NONE | `shouldBe ::` `shouldReturn ::` |
+| `how do I write a spec with describe and it` | NONE | `it ::` `describe ::` |
+
+And the freshness hash moves across the two: a cache written by 0.40.5 re-indexes under
+0.40.6 — aeson 1326 chunks / 55 duplicate bodies becomes 1283 / 0 — and the call after
+that is a cache hit, so the gate was not widened into "always re-index".
+
+## The limitation, found the hard way
+
+A supplement's version comes from the resolved dependency set — `plan.json`, then a freeze
+file, then a stack lock. A package that is unpacked but no longer a *declared* dependency
+has no version there, and the pass does not run.
+
+This cost an hour to understand, because it looks exactly like the fix not working. The
+2026-09-06 run's own project is the case: its implementation replaced `hspec` with
+`wai-extra` in the test-suite, `cabal build` rewrote `plan.json` without any `hspec-*`
+entry, and from then on `hspec` resolved (still unpacked from an earlier run) while
+`supplementCandidates` returned nothing.
+
+Left as it is deliberately. The alternative — falling back to whatever is unpacked on this
+machine — would make the index's shape depend on the machine, which is the failure the
+scoring discipline in DOC_REGRESSINONS.md exists to prevent.
+
 ## What this does not claim
 
 The rule is derived from twenty hackage packages. It is an indexing change, and defect 11
