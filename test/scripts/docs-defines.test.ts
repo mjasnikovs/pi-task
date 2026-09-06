@@ -160,3 +160,35 @@ describe('compare', () => {
         ).toContain('pairs 1')
     })
 })
+
+// The chunk below is verbatim from the index and is exactly what the metric exists
+// to find. It scored FALSE: `body()` strips only the path line, so the head the
+// regex sees is `declare module "node:url" {` — and `module` is not one of its
+// keywords — while `memberDeclaration` wants a line that STARTS with the symbol,
+// and this one starts with `function`. Both halves miss a declaration that is
+// nested one level, which after the oversized-declaration split is most of npm.
+const NODE_URL_CHUNK = {
+    content:
+        '// url.d.ts\n'
+        + 'declare module "node:url" {\n'
+        + '    function fileURLToPath(url: string | URL, options?: FileUrlToPathOptions): string;\n'
+        + '    /**\n     * Like `url.fileURLToPath(...)` …\n     */\n'
+}
+
+test('a declaration nested in a `declare module` block defines its symbol', () => {
+    expect(definesSymbol([NODE_URL_CHUNK], 'npm', 'fileURLToPath')).toBe(true)
+})
+
+test('the enclosing module block does not lend its name to a neighbour', () => {
+    expect(definesSymbol([NODE_URL_CHUNK], 'npm', 'fileURLToPathBuffer')).toBe(false)
+})
+
+test('a top-level declaration still defines its symbol', () => {
+    expect(
+        definesSymbol(
+            [{content: '// hono.d.ts\nexport declare class Hono<E> extends HonoBase<E> {\n}\n'}],
+            'npm',
+            'Hono'
+        )
+    ).toBe(true)
+})

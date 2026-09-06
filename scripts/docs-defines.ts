@@ -32,9 +32,9 @@ import {TRUTH, PROJECTS, type EcosystemId} from './docs-live-truth.js'
  * The chunk's own `// path` / `-- path` comment line is skipped first.
  */
 const HEAD: Record<EcosystemId, RegExp> = {
-    npm: /^(?:export\s+)?(?:declare\s+)?(?:default\s+)?(?:abstract\s+)?(?:async\s+)?(?:function|class|interface|type|namespace|const|let|var|enum)\s+([A-Za-z_$][\w$]*)/,
-    cargo: /^(?:#\[[^\n]*\]\s*)*(?:pub(?:\s*\([^)]*\))?\s+)?(?:async\s+|unsafe\s+|const\s+|extern\s+)*(?:fn|struct|enum|union|trait|type|impl|mod|const|static)\s+([A-Za-z_][\w]*)/,
-    hackage: /^(?:([a-z_][\w']*)\s*::|(?:data|newtype|type|class)\s+([A-Z][\w']*))/
+    npm: /^[ \t]*(?:export\s+)?(?:declare\s+)?(?:default\s+)?(?:abstract\s+)?(?:async\s+)?(?:function|class|interface|type|namespace|const|let|var|enum)\s+([A-Za-z_$][\w$]*)/,
+    cargo: /^[ \t]*(?:#\[[^\n]*\]\s*)*(?:pub(?:\s*\([^)]*\))?\s+)?(?:async\s+|unsafe\s+|const\s+|extern\s+)*(?:fn|struct|enum|union|trait|type|impl|mod|const|static)\s+([A-Za-z_][\w]*)/,
+    hackage: /^[ \t]*(?:([a-z_][\w']*)\s*::|(?:data|newtype|type|class)\s+([A-Z][\w']*))/
 }
 
 /**
@@ -47,9 +47,25 @@ function memberDeclaration(symbol: string): RegExp {
     return new RegExp(`^\\s*(?:readonly\\s+)?${symbol.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*[?:(<]`, 'm')
 }
 
-/** Strip the leading `// path` or `-- path` line the indexer prepends. */
+/**
+ * Strip what the indexer prepended, so what is left starts at the declaration.
+ *
+ * Two lines, not one. The `// path` label has always been stripped. The second is
+ * the enclosing `declare module "node:url" {` that `splitOversized` repeats on every
+ * piece of an oversized declaration: it is CONTEXT, deliberately kept so a piece
+ * says what it is a member of, and reading it as the head made this scorer answer
+ * false for
+ *
+ *     // url.d.ts
+ *     declare module "node:url" {
+ *         function fileURLToPath(url: string | URL, …): string;
+ *
+ * which is exactly the chunk the metric exists to find.
+ */
 function body(chunk: string): string {
-    return chunk.replace(/^(?:\/\/|--)[^\n]*\n/, '')
+    return chunk
+        .replace(/^(?:\/\/|--)[^\n]*\n/, '')
+        .replace(/^(?:export\s+)?declare\s+(?:module|namespace)\s[^\n]*\{\s*\n/, '')
 }
 
 export function definesSymbol(

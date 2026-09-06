@@ -2529,6 +2529,62 @@ the A/A beat the treatment.
 
 Shipped. Net +6 on a deterministic metric, +9/0 where it is aimed, -3 elsewhere.
 
+### Then the scorer was wrong too, and it was hiding the split's own work
+
+The numbers above are the last ones this section reports before a scorer fix, and
+they understate the change. `node:url:fileURLToPath` read 0/1 in BOTH arms, so it
+looked like something the split could not reach. Opened, the chunk it retrieves is:
+
+```
+// url.d.ts
+declare module "node:url" {
+    function fileURLToPath(url: string | URL, options?: FileUrlToPathOptions): string;
+```
+
+That is precisely what the metric exists to find, and `definesSymbol` answered
+false. `body()` stripped the `// path` line and nothing else, so the head the regex
+saw was `declare module "node:url" {` — and `module` is not one of its keywords —
+while `memberDeclaration` wants a line that STARTS with the symbol, and this one
+starts with `function`. **Both halves miss a declaration nested one level**, which
+after `splitOversized` is most of npm.
+
+`body()` now strips the enclosing `declare module`/`declare namespace` line as well
+— it is context the splitter repeats deliberately, not a head — and the three HEAD
+regexes tolerate the indentation a nested declaration carries. They have no `m`
+flag, so they still match at position 0 only and nothing else widens.
+
+**It is not a loosening, and here is the number that proves it:**
+
+```
+scorer fix on the tree WITHOUT the split    140/157 -> 140/157   0 moved   p = 1.0000
+scorer fix on the tree WITH the split       146/157 -> 150/157   4 gained  p = 0.1250
+```
+
+Zero movement where there are no nested chunks to see. A scorer that had been made
+loose would have lifted both.
+
+### The member split, finally scored by a scorer that can read it
+
+```
+                                pairs    before    after    lost  gained       p
+Bun family + node builtins         29     14/29    26/29       0      12   0.0005
+pre-existing truth entries        128   126/128   124/128      2       0   0.5000
+all                               157   140/157   150/157      2      12   0.0129
+```
+
+Three readings of the same change, and only the last one is measured by instruments
+that can see both sides of it:
+
+```
+blind truth set, old scorer     125/128 -> 123/128    REJECTED
+wide truth set, old scorer      140/157 -> 146/157    p = 0.1460
+wide truth set, fixed scorer    140/157 -> 150/157    p = 0.0129
+```
+
+What is still failing needs neither constant nor chunker: `bun:test` `describe` and
+`expect` at 5/6, `hono:Hono` 13/16, `hono:json` 10/11, `node:fs/promises:readFile`
+1/2.
+
 ---
 
 ### The answer half — REFUTED by its own A/A, and the instrument is what broke
