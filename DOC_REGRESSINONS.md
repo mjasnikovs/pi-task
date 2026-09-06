@@ -795,6 +795,26 @@ immune, which is exactly why the field exists.
 **85 of 158 records cannot be replayed.** The baseline and re-run 1 predate
 `retrievedText`. They keep the sha and nothing to check it against.
 
+## Abstention does not track how much was retrieved — measured
+
+The obvious reading of a rising abstention rate is that retrieval starved the
+child. Over the 73 replayable records it is not so:
+
+```
+abstained  n=24   median 16,386 B retrieved
+answered   n=49   median 16,714 B
+Mann-Whitney U=480, z=-1.27, p=0.20
+```
+
+The two distributions sit on top of each other. Retrieval size is not what decides
+whether the child answers, which is the numeric form of the caution this file has
+carried since re-run 1 — hs abstention went 55/80/83/46 across four runs and the
+tool was not why. Do not spend a round tuning the retrieval budget on it.
+
+For the same reason the byte budget is not the binding constraint either: median
+16 KB against a 24 KB cap, p75 at 20.8 KB, and exactly one record in 73 under
+200 B. That one is the manifest case below.
+
 ## The project corpus cannot see a manifest — measured, and below the bar
 
 `projectGlobs` is source only: `*.ts`/`*.tsx`, `*.rs`, `*.hs`. A `.cabal`,
