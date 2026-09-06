@@ -983,6 +983,30 @@ The live number it distorts is worth knowing about: quoting a fidelity rate from
 a run whose project uses `port` and `adminEmail` as field names will read three
 flags low on quality it did not lose.
 
+## `dropDeadMajors` being top-level ONLY is load-bearing — measured
+
+Defect 20's mirror: is npm's DROP too eager, or too shallow? Scanned 1,095
+installed packages.
+
+```
+top-level `vN/` whose N mismatches the package major (DROPPED):  2
+    zod@4.4.3 -> v3          zod-validation-error@4.0.2 -> v3
+the same one directory deeper (NOT dropped):                     5
+    zod@4.4.3 -> src/v3                    .d.ts = 0
+    ip-address@10.0.1 -> dist/v4           .d.ts = 1
+    ip-address@10.0.1 -> dist/v6           .d.ts = 3
+```
+
+**Making it recursive would be a serious regression, not a fix.** `ip-address`
+is at version 10, so a recursive rule reads `dist/v4` and `dist/v6` as dead
+majors and deletes them — and they are **IPv4 and IPv6**, 4 of the package's 9
+declaration files. The `kept.length > 0` fallback does not save it, because
+`dist/*.d.ts` survives and the list is non-empty.
+
+The rule fires on 2 packages in 1,095, which is the right size for a rule whose
+false positive removes a package's API. Nothing to change; written down so the
+"obvious" widening is not attempted.
+
 ## Defect 20. A Rust item inside a `name! { … }` block is invisible to the indexer
 
 Found by chasing one row of defect 19's table: `TcpListener` was reported as
