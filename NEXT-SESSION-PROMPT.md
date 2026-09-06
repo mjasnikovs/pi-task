@@ -79,7 +79,34 @@ twice — re-run 4's three HARD FAILs produced defects 19 to 23, and re-run 5
 verified defect 18 live AND surfaced defect 24 and a scorer artifact that an
 earlier fix in the same session had created.
 
-1. **Nothing is open. Start with a full run.** `PACKAGE_RETRIEVE_LIMIT` was the
+0. **RE-RUN 6 IS ALREADY RUNNING IN THE CONTAINER — score it first.** It was
+   launched on 0.40.14 and left mid-flight when the previous session ended, so it
+   will have finished on its own. Artifacts are in `/home/agent/docs-live/`; the
+   previous run's are in `prev-5/`.
+
+   ```
+   docker exec mx5-n bash -lc 'cat /tmp/chain.log'      # SEQUENCE COMPLETE?
+   docker exec mx5-n bash -lc 'export PATH="$HOME/.bun/bin:$HOME/.cargo/bin:$PATH"; . ~/.ghcup/env
+     cd /home/agent/docs-live && bun scripts/docs-live-build.ts /home/agent/docs-live/run'
+   ```
+   then copy `run/{ts,rs,hs}`, `*.jsonl` and `*.build.json` out and
+   `bun scripts/docs-live-audit.ts <dir> --build`.
+
+   **ts had already settled when the session ended: 4 tasks of 4, 10 records,
+   10% abstention, median retrieved 22,781 bytes.** Re-run 5 on the same feature
+   managed 2 tasks of 4 at 43% abstention and 16,493 bytes. rs was on task 3 of 3.
+   That is the first live evidence for the retrieve-limit change and it agrees
+   with the replay (29% -> 16%); finish reading it before anything else.
+
+1. **Then: `RETRIEVE_CONTENT_BUDGET`, the same shape as the limit was.**
+   Raising the limit made the byte budget binding. It is 24,000, carries a
+   one-line comment, and has no measurement. Retrieval is swept and monotone with
+   ZERO losses at every step up — 12k 86/101, 24k 97, 36k 100, 48k 101, 96k 101;
+   24k vs 48k is only-24k 0, only-48k 4, p = 0.125. The deciding experiment is the
+   same one that settled the limit: `docs-replay --retrieve`, two arms at 24,000
+   and 48,000, over the recorded records. Two trees, two `XDG_CACHE_HOME`s.
+
+2. **Nothing else is open.** `PACKAGE_RETRIEVE_LIMIT` was the
    last question and it is answered: 8 -> 50, defines 91/101 -> 97/101 and
    ANSWERED 67/94 -> 79/94, McNemar p = 0.0075, abstention 29% -> 16%. Shipped in
    0.40.14 and **no live run has exercised it**. That is the first thing the next
