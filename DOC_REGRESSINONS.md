@@ -132,6 +132,7 @@ the record; the model is not.
 | — | aeson keeps 55 duplicate bodies | index | offline | **measured fixed** |
 | 16 | a facade package indexes to nothing, in **cargo** | index | retrieval | **SHIPPED** on retrieval; answer half replayed FLAT at n=4, no recorded stimulus |
 | 17 | retrieval depends on the cache's other packages | retrieval | retrieval | **real, and measured harmless** |
+| 22 | on hackage a package's own name has ~0 IDF | retrieval | retrieval | found and MECHANISED; no lever without an FTS schema change |
 | 21 | `export declare function` never started a chunk | index | offline + retrieval | **SHIPPED**, defining chunks 16/62 -> 34/62 paired, p=1.2e-4 |
 | 20 | a Rust item inside a `name! { … }` block is not indexed | index | offline + replay | **SHIPPED**, +393 public names; one causal answer, no aggregate at n=14 |
 | 19 | a symbol declared only in a NON-prefixed dependency | both | recorded corpus | caused the rs HARD FAIL; **BOTH bounds REFUTED** — `[dependencies]` 2 right of 20, lock 3 right of 18 |
@@ -174,6 +175,51 @@ grep -c docs         matched `read: docs-live-hs.cabal`            -> "5 refusal
 
 None survived looking at the rows. Every one would have been a believable number.
 
+
+## Defect 22. On hackage, the package's own name has no ranking power at all
+
+The "defines it" metric from defect 21, applied per ecosystem over every recorded
+query that names a ground-truth symbol:
+
+```
+cargo    axum:Router 12/12   axum:Json 7/7   serde_json:from_str 6/6   tokio:TcpListener 1/1
+npm      zod:safeParse 7/7   zod:issues 11/11   hono:json 9/10   hono:Hono 12/14
+hackage  aeson:FromJSON 16/16   scotty:ActionM 4/4
+         aeson:eitherDecode 4/6      scotty:scotty 2/7   <-- 
+```
+
+**Why `scotty` cannot find `scotty`.** The declaration exists, once:
+
+```
+1 chunk of 311 declares it:  "-- Web/Scotty.hs\nscotty :: Port -> ScottyM () -> IO ()"
+```
+
+And the token that should find it is worthless:
+
+```
+chunks of `scotty` containing the token "scotty":  309 / 311  (99%)
+    288 in the chunk HEADER only        6 in the body only      15 in both
+chunks of `aeson` containing "aeson":            1282 / 1283 (100%)
+    1244 header only
+```
+
+The indexer prepends `-- Web/Scotty.hs` to every chunk. Haskell paths carry the
+package name, so after indexing, the package's own name has a document frequency
+of ~100% *within that package* — and BM25 gives a term in every document
+essentially no IDF. The single most important token in the query ranks nothing.
+npm does not have this (zod: 1% of chunks) and cargo barely does (axum: 21%),
+because their paths are `dist/index.d.ts` and `src/response/mod.rs`.
+
+**No cheap lever, and the reason is on record.** Stripping the package name from
+the indexed header would restore its IDF — and would break the path matching that
+was measured as a WIN (the tokenizer fix took path matching 82% to 99%), including
+one of these six queries, which literally asks "From
+`Web/Scotty/Internal/Types.hs`". Separating header and body into weighted FTS
+columns would do it properly and is an FTS schema change, not a patch.
+
+Filed with the mechanism named, which is the improvement over where this sat
+before — "a query whose key symbol is absent from the corpus" was the nearest
+previous description and it is not the same thing. Here the symbol is present.
 
 ## A query whose key symbol is absent from the corpus
 
