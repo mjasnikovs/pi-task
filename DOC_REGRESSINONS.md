@@ -795,6 +795,27 @@ immune, which is exactly why the field exists.
 **85 of 158 records cannot be replayed.** The baseline and re-run 1 predate
 `retrievedText`. They keep the sha and nothing to check it against.
 
+## The project corpus cannot see a manifest — measured, and below the bar
+
+`projectGlobs` is source only: `*.ts`/`*.tsx`, `*.rs`, `*.hs`. A `.cabal`,
+`Cargo.toml` or `package.json` is never indexed, so a worker asking the project
+corpus what the manifest declares is asking about a file the tool does not hold.
+
+Found by reading the smallest retrieved corpus in the whole set — 89 bytes, two
+stub `main = pure ()` bodies, against a query asking what the cabal file declares.
+
+```
+25 project-corpus records
+ 2 ask about a manifest   <- 1 abstains, 1 correctly denies ("not in the provided content")
+                             2 of 2 unanswerable, 1.3% of all 158 records
+```
+
+**Not fixed, deliberately.** Two records in 158 is the same order as item 4r,
+which closed as refuted, and the fix is not the one-line glob it looks like: a
+manifest has no declaration syntax for `declSplitRe` or `surface` to cut, so
+adding it to the globs without a chunking story trades an honest abstention for
+garbage chunks. Reopen it if a run ever shows the question being asked often.
+
 ---
 
 # Two standing cautions about the instrument
