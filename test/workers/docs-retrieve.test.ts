@@ -330,3 +330,70 @@ test('retrieveChunks hops to more query-named definitions than the alias cap', (
         cache.close()
     }
 })
+
+/**
+ * Defect 24. `valueChunk` takes the SHORTEST chunk carrying the name, on the
+ * reasoning that a declaration is short and the chunks that merely mention a name
+ * are long. Two things break that, and axum's `serve` hit both.
+ *
+ * Every chunk from `src/serve/mod.rs` carries "serve" in the `// path` line the
+ * indexer prepends, so an unrelated 50-byte `pub struct TapIo` won on the header
+ * alone. And `pub mod serve;` is shorter than the function it declares, while
+ * being neither the value nor the type this hop exists to find.
+ */
+function seedServe(): ReturnType<typeof openCache> {
+    const cache = openCache(':memory:')
+    const insert = cache.db.prepare(
+        'INSERT INTO chunks (ecosystem, name, version, file_path, kind, content) VALUES (?,?,?,?,?,?)'
+    )
+    // Ordered as the real index orders them: the shortest chunks carrying the name
+    // carry it only in the PATH, the ones BM25 ranks repeat the query's English,
+    // and the declaration is neither.
+    for (const [file, body] of [
+        ['src/serve_http/listener.rs', 'pub struct TapIo<L, F> {}'],
+        ['src/serve_http/listener.rs', '/// Types that can listen for connections.'],
+        ['src/lib.rs', 'pub mod serve_http;'],
+        [
+            'src/routing/mod.rs',
+            'impl Router {\n    /// The exact signature of this function takes a listener parameter.\n    pub fn into_make_service(self) -> IntoMakeService<Self>;\n}'
+        ],
+        [
+            'src/handler/mod.rs',
+            'pub trait Handler {\n    /// A free function signature with a listener parameter and an exact signature.\n    fn call(self) -> Response;\n}'
+        ],
+        [
+            'src/extract/mod.rs',
+            'pub trait FromRequest {\n    /// The exact signature of a free function and its listener parameter.\n    fn from_request(self) -> Response;\n}'
+        ],
+        [
+            'src/serve_http/mod.rs',
+            'pub fn serve_http<L, M, S>(listener: L, make_service: M) -> Serve<L, M, S>;'
+        ]
+    ] as const) {
+        insert.run('cargo', 'axum', '0.8.9', file, 'dts', `// ${file}\n${body}`)
+    }
+    return cache
+}
+
+test('the value hop skips a chunk whose PATH carries the name, and a bare `mod`', () => {
+    const cache = seedServe()
+    try {
+        const chunks = retrieveChunks(cache, {
+            ecosystem: 'cargo',
+            name: 'axum',
+            version: '0.8.9',
+            query: 'exact signature of the serve_http free function and its listener parameter',
+            limit: 3,
+            contentBudget: RETRIEVE_CONTENT_BUDGET,
+            typeKeywords: ECOSYSTEMS.cargo.typeKeywords
+        })
+        const text = chunks.map(c => c.content).join('\n')
+        expect(text).toContain('pub fn serve_http<L, M, S>')
+        // The 25-byte TapIo and the 19-byte `pub mod` are both shorter, and both
+        // would have won smallest-first.
+        expect(text).not.toContain('pub struct TapIo')
+        expect(text).not.toContain('pub mod serve_http;')
+    } finally {
+        cache.close()
+    }
+})

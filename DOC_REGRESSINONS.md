@@ -140,6 +140,7 @@ one paid — re-run 4's three HARD FAILs produced defects 19, 20, 21, 22 and 23.
 | 20 | a Rust item inside a `name! { … }` block is not indexed | index | offline + replay | **SHIPPED**, +393 public names; one causal answer, no aggregate at n=14 |
 | 21 | `export declare function` never started a chunk | index | offline + retrieval | **SHIPPED**, defining chunks 16/62 -> 34/62 paired, p=1.2e-4 |
 | 22 | on hackage a package's own name has ~0 IDF | retrieval | retrieval | found and MECHANISED; no lever without an FTS schema change |
+| 24 | the value hop lands on the chunk whose PATH says the name | retrieval | retrieval | **FIXED**; the shape gate that refuses `serve` costs 7 of 11 misses, measured |
 | 23 | a class chunk is 50x the median and BM25 buries it | retrieval | retrieval | found and MECHANISED; the tempting lever orphans signatures |
 | — | a key symbol absent from the corpus | retrieval | — | **limit, not a defect** |
 | — | aeson keeps 55 duplicate bodies | index | offline | **measured fixed** |
@@ -258,6 +259,56 @@ defect 21 — cargo was already saturated at 26/26 and hackage's residue is defe
 22 and 23, neither of which has a lever. Defect 20's gain does not show here
 because the corpus holds exactly one `tokio` pair; its evidence is the causal
 answer instead.
+
+## Defect 24. The value hop lands on the chunk whose PATH says the name
+
+re-run 5's one rs abstention asked for `axum::serve`'s signature. `pub fn serve`
+is indexed — one 399-byte chunk of 437 — and `serve` is in only 33 of them, so
+the term discriminates. It was not retrieved.
+
+`valueChunk` takes the SHORTEST chunk carrying the name, on the reasoning that a
+declaration is short and the chunks that merely mention a name are long. Its
+smallest-first candidates for `serve`:
+
+```
+   50B  header=Y body=n   src/serve/listener.rs   pub struct TapIo<L, F> {}
+   67B  header=Y body=n   src/serve/listener.rs   /// Types that can listen…
+   91B  header=Y body=n   src/serve/mod.rs        #[derive(Debug)]
+  102B  header=n body=Y   src/lib.rs              pub mod serve;
+  ...
+  399B  header=Y body=Y   src/serve/mod.rs        pub fn serve<L, M, S>(…)
+```
+
+Eight of the twelve shortest match on the **`// path` line the indexer prepends** —
+defect 22's mechanism one level down, inside the hop rather than inside BM25. And
+the first that matches on its body is `pub mod serve;`, which is neither the value
+nor the type this hop exists to find.
+
+**FIXED, both halves.** The whole-word test runs on the body, and a chunk that
+only declares a module is skipped. The regression test fails on the old code.
+
+### The other half is REFUSED on purpose, and the file already said why
+
+Even fixed, the hop never fires for `serve`, because `hopNames` gates on
+`IDENTIFIER_SHAPED` — a capital, an underscore, or an internal capital — and
+`serve` has none. That rule's own comment states the trade: "Widening to every
+token instead would hop on `signature` and `return`, spending a slot on whichever
+prose chunk is shortest."
+
+It is worth knowing what it costs. Of the eleven misses the defines harness
+leaves:
+
+```
+bare lowercase, refused by IDENTIFIER_SHAPED   scotty:scotty (5)  hono:json (2)   = 7
+identifier-shaped, refused by nothing          aeson:eitherDecode (2)  hono:Hono (2) = 4
+```
+
+**Seven of eleven.** The principled replacement is not a wider shape rule but a
+different question: hop on a token the PACKAGE DECLARES somewhere, since
+`signature` and `return` are declared nowhere and `serve` is declared once. That
+turns a lexical guess into an index lookup, and it costs a `LIKE` scan per query
+token instead of per identifier-shaped token. Measured reach is above; the cost is
+not measured, and that is the next thing to weigh.
 
 ## Defect 23. A class chunk is 50x the median and BM25 buries it
 

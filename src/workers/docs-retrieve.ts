@@ -267,6 +267,19 @@ function definitionChunk(
  * declaration per chunk, so the short chunk carrying the name IS its declaration and
  * the long ones are the prose that merely mentions it.
  */
+/** The chunk without the `// path` / `-- path` line the indexer prepends. */
+function chunkBody(content: string): string {
+    return content.replace(/^(?:\/\/|--)[^\n]*\n/, '')
+}
+
+/**
+ * A chunk that only declares a MODULE. `pub mod serve;` is shorter than the
+ * function it contains and wins smallest-first, while being neither the value nor
+ * the type this hop exists to find.
+ */
+const MODULE_DECL_RE =
+    /^(?:#\[[^\n]*\]\s*)*(?:pub(?:\s*\([^)]*\))?\s+|export\s+|declare\s+)*(?:mod|module|namespace)\s+[A-Za-z_][\w']*\s*;?\s*$/
+
 function valueChunk(
     cache: CacheHandle,
     opts: RetrieveOptions,
@@ -288,7 +301,14 @@ function valueChunk(
     // LIKE has no word boundary, so `decodeFile` matches `decodeFileStrict` — the
     // wrong declaration, and the exact confusion these runs keep producing.
     const whole = new RegExp(`(?<![A-Za-z0-9_])${escapeRe(name)}(?![A-Za-z0-9_])`)
-    const row = rows.find(r => whole.test(r.content))
+    // Over the BODY, never the `// path` line the indexer prepends. Every chunk
+    // from `src/serve/mod.rs` carries "serve" in that line, so smallest-first
+    // handed axum's `serve` a 50-byte `pub struct TapIo` from a neighbouring file
+    // — the name was in the header and nowhere else.
+    const row = rows.find(r => {
+        const text = chunkBody(r.content)
+        return whole.test(text) && !MODULE_DECL_RE.test(text)
+    })
     if (!row) return null
     return {filePath: row.file_path, kind: row.kind, content: row.content, rank: row.rank}
 }
