@@ -123,6 +123,10 @@ export const TRUTH: readonly TruthEntry[] = [
     {pkg: 'bun:test', symbol: 'describe', topic: 'grouping tests'},
     {pkg: 'bun:test', symbol: 'expect', topic: 'asserting'},
     {pkg: 'bun:test', symbol: 'beforeEach', topic: 'per-test setup'},
+    // Two letters, deliberately. `MIN_TOKEN_LEN` drops tokens shorter than itself
+    // and no truth entry could hold one, so the constant had no way to be decided.
+    // Selection is whole-token since `queryAsks`, so this does not match "with".
+    {pkg: 'bun:test', symbol: 'it', topic: 'a single test'},
     {pkg: 'node:url', symbol: 'fileURLToPath', topic: 'import.meta.url to a path'},
     {pkg: 'node:fs/promises', symbol: 'readFile', topic: 'reading a file'}
 ]

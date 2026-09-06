@@ -62,20 +62,23 @@ export const RETRIEVE_CONTENT_BUDGET = 24_000
 const DEFAULT_LIMIT = PROJECT_RETRIEVE_LIMIT
 const DEFAULT_BUDGET = RETRIEVE_CONTENT_BUDGET
 /**
- * Shortest query token that reaches the FTS query. Swept, and 2 stays.
+ * Shortest query token that reaches the FTS query. Swept twice, and 2 stays.
  *
- *   2 (production)  150/157 defines      4  150/157, 4 lost 4 gained
- *   3               151/157, 1 gained    5  134/157, 20 lost, p = 0.0015
+ * The first sweep put the peak at 3 — one gain, no losses — because no truth entry
+ * named a two-letter symbol and the metric could not see what 3 throws away. Two-
+ * letter tokens across every recorded query are mostly English filler (`to` 97,
+ * `of` 64, `in` 57), and mixed in with them are `v4` 13, `it` 47, `IO`, `fn`, `u8`.
  *
- * Three looks free — one gain, no losses — and it is not. Two-letter tokens across
- * every recorded query are mostly English filler (`to` 97, `of` 64, `in` 57), and
- * mixed in with them are `v4` 13, `it` 47, `IO`, `fn`, `u8`. Dropping the filler
- * costs nothing and dropping `v4` from a zod query costs the thing that
- * distinguishes the major. No truth entry names a two-letter symbol, so the metric
- * cannot see that cost — which is the same blindness that nearly sank defect 25's
- * member split.
+ * One entry for `bun:test`'s `it` was enough to reverse it:
  *
- * Raise it only with a truth entry that a two-letter symbol answers.
+ *   min   without a 2-letter entry      with one
+ *    2       150/157                     151/159      <- peak
+ *    3       151/157   +1                150/159   -1
+ *    4       150/157                     146/159      p = 0.1797
+ *    5       134/157   p = 0.0015        131/159      p = 8.8e-5
+ *
+ * Raising it drops `v4` from a zod query, which is the token that distinguishes the
+ * major this whole test set exists to pin.
  */
 const MIN_TOKEN_LEN = 2
 /**

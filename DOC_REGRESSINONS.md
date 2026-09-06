@@ -2368,6 +2368,70 @@ being even a proxy.
 
 ---
 
+## The truth set's SELECTION was loose, and one two-letter entry settled a constant
+
+Three decisions in a row have been limited by what `TRUTH` could see, so the third
+time it was fixed rather than worked around.
+
+### `includes` was selecting queries that ask for nothing of the kind
+
+`docs-defines` chose which truth entries a record scores with
+`rec.query.includes(t.symbol)`. That is fine while every symbol is long and silently
+wrong otherwise. Replaced with `queryAsks`, a whole-token match on the tokenizer's
+own alphabet, it is a TIGHTENING — four pairs leave and no verdict moves:
+
+```
+same entries, substring -> whole-token
+pairs 153   only-A 0   only-B 0   148/153 both ways   p = 1.0000
+```
+
+The four it dropped were never asked:
+
+```
+hono:Hono     "HonoBase .get() route registration…"                  <- Hono inside HonoBase
+hono:Hono     "…the get() method on HonoBase…"                       <- same
+hono:Hono     "…the JSONRespond type definition for Context.json…"   <- same
+scotty:scotty "liftApp, scottyApp, scottyAppT: exact signatures…"    <- scotty inside scottyApp
+```
+
+Two of them were counted as MISSES, so `hono:Hono 13/16` was two records of a
+question nobody asked. It reads 12/13 now.
+
+### Which makes defect 25's member split stronger than it shipped
+
+Re-scored with both scorer fixes in place — nested declarations readable, selection
+whole-token:
+
+```
+                                    pairs   before    after   lost  gained       p
+as shipped in 0.40.17                 157   140/157  150/157     2      12   0.0129
+with whole-token selection            153   137/153  148/153     1      12   0.0034
+```
+
+### And a two-letter entry reverses the MIN_TOKEN_LEN sweep
+
+`MIN_TOKEN_LEN` drops tokens shorter than itself, so no truth entry could hold one,
+so the constant had no way to be decided. `it` is a real `bun:test` export and now
+selectable without matching "with". One entry:
+
+```
+min       without a 2-letter entry           with one
+ 2          150/157                          151/159   <- peak
+ 3          151/157   +1, no losses          150/159   -1
+ 4          150/157   4 lost 4 gained        146/159   7 lost 2 gained  p = 0.1797
+ 5          134/157   p = 0.0015             131/159   p = 8.8e-5
+```
+
+**The peak moves from 3 to 2 on one entry.** The docstring's argument for keeping 2
+— that 3 also throws away `v4`, `it`, `IO`, `fn`, `u8` — was written before this and
+is now measured rather than argued.
+
+Three for three: the member split, `MIN_TOKEN_LEN`, and `hono:Hono`'s own score were
+each decided wrongly by a truth set that could not see the case. **When a measurement
+disagrees with a mechanism you have opened and read, suspect the instrument.**
+
+---
+
 ## `MIN_TOKEN_LEN` — swept, and 2 stays
 
 A bare `= 2` with no docstring and no measurement, in the same function whose

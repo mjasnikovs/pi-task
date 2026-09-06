@@ -4,7 +4,7 @@
  * merely appears in a body is a use, not a definition.
  */
 import {test, expect, describe} from 'bun:test'
-import {definesSymbol, mcnemar, compare} from '../../scripts/docs-defines.js'
+import {definesSymbol, mcnemar, compare, queryAsks} from '../../scripts/docs-defines.js'
 
 const chunk = (content: string): {content: string} => ({content})
 
@@ -191,4 +191,28 @@ test('a top-level declaration still defines its symbol', () => {
             'Hono'
         )
     ).toBe(true)
+})
+
+// `includes` forbade short symbols without saying so: `it` is a real bun:test export
+// and a substring of "with", "its" and "signature". A metric that cannot hold a
+// two-letter symbol cannot decide MIN_TOKEN_LEN, which is the constant that drops them.
+test('a short symbol is not found inside a longer word', () => {
+    expect(queryAsks('signature for in-process dispatch, with its return type', 'it')).toBe(false)
+})
+
+test('a short symbol standing alone is found', () => {
+    expect(queryAsks('describe, it, expect — the bun:test API', 'it')).toBe(true)
+})
+
+test('a dotted name matches where it is written', () => {
+    expect(queryAsks('Bun.file(path) returns a BunFile', 'Bun.file')).toBe(true)
+})
+
+test('a dotted name does not match a longer identifier', () => {
+    expect(queryAsks('Bun.fileURLToPath is not a thing', 'Bun.file')).toBe(false)
+})
+
+test('the long symbols the set already had are unaffected', () => {
+    expect(queryAsks('what does safeParse return on failure', 'safeParse')).toBe(true)
+    expect(queryAsks('eitherDecode :: L.ByteString -> Either', 'eitherDecode')).toBe(true)
 })

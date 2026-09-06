@@ -81,6 +81,23 @@ export function definesSymbol(
     return false
 }
 
+/**
+ * Does this query ASK for `named`? Whole-token, not substring.
+ *
+ * `includes` was fine while every truth symbol was long — `safeParse`, `eitherDecode`,
+ * `TcpListener` — and it silently forbids short ones: `it` is a real `bun:test`
+ * export and a substring of "with", "its" and "signature". A metric that cannot
+ * hold a two-letter symbol cannot decide `MIN_TOKEN_LEN`, which is the constant
+ * that drops them.
+ *
+ * The boundary is the tokenizer's own alphabet — `[A-Za-z0-9_]` — so `Bun.file`
+ * matches inside `Bun.file(path)` and `it` does not match inside `with`.
+ */
+export function queryAsks(query: string, named: string): boolean {
+    const escaped = named.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    return new RegExp(`(?<![A-Za-z0-9_])${escaped}(?![A-Za-z0-9_])`).test(query)
+}
+
 export interface DefinesRow {
     source: string
     module: string
@@ -163,7 +180,7 @@ async function collect(opts: Options): Promise<DefinesRow[]> {
             }
             const truths = rec.module === undefined ? undefined : byModule.get(rec.module)
             if (!truths || rec.query === undefined) continue
-            const named = truths.filter(t => rec.query!.includes(t.named ?? t.symbol))
+            const named = truths.filter(t => queryAsks(rec.query!, t.named ?? t.symbol))
             if (named.length === 0) continue
             const res = await docsRaw({
                 pkg: rec.module!,
