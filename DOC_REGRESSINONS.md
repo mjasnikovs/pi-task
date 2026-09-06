@@ -1421,6 +1421,11 @@ The cost is +70% of retrieved text, and `RETRIEVE_CONTENT_BUDGET` still bounds
 it. At 8 only 6 of 74 calls reached that 24,000-character budget, so two thirds of
 what the tool was allowed to spend was never spent.
 
+The obvious worry — that more chunks means the budget cuts one in half and a
+signature is severed — does not exist: `enforceBudget` breaks at a chunk boundary
+and never truncates content, and it keeps the first chunk whole even when that
+chunk alone exceeds the budget.
+
 It also closes the divergence this file has carried unexplained since the start:
 `PROJECT_RETRIEVE_LIMIT` was already 50, and nothing recorded why a package got 8.
 Now both are 50, and the reason is a number.
