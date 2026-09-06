@@ -735,6 +735,21 @@ discovered again.
 
 `bun run test` 4388 pass / 0 fail; `npm run lint:check` green.
 
+**Live precision, ts, 2026-09-06 run.** Six tasks, **two** carrying a real
+deprecation claim in research, **zero** fires — and both non-fires are right:
+
+```
+TASK_0003  research: ".strict() exists but is deprecated in favor of z.strictObject({...})"
+           `.strict()` appears in KNOWN-UNKNOWNS, not CONSTRAINTS
+TASK_0005  research: "flatten() — deprecated in zod v4 (use z.flattenError)"
+           the constraint says "Do NOT use z.flattenError" — it requires nothing deprecated
+```
+
+Checked against a deliberately loosened token class (leading-dot expressions
+admitted, which turns `.strict()` into a candidate) and it still does not fire,
+because the section gate holds independently of the token class. Two guards, not
+one.
+
 **Still needs the full run.** This is the one item where the subagent harnesses
 cannot see the outcome.
 
