@@ -167,9 +167,11 @@ believed without opening what it selected:
 symbol classifier    called Bun.file and decodeFile "nameless"     -> a fake 68% gap
 excerptCheck.ok      the field is `verified`; `ok` is undefined    -> "0 failures" for 20%
 grep -c docs         matched `read: docs-live-hs.cabal`            -> "5 refusals" that were file reads
+#\s*[A-Za-z_(]       matched `# use` in a doctest                  -> real cfg_rt! items called templates
+\bGToJSON'\b         `\b` after `'` needs a word char next          -> 10 aeson classes "lost" that are present
 ```
 
-None survived looking at the rows. All three would have been believable numbers.
+None survived looking at the rows. Every one would have been a believable number.
 
 
 ## A query whose key symbol is absent from the corpus
@@ -1076,6 +1078,24 @@ Two axum/tower queries retrieve slightly FEWER bytes (1,080 -> 1,061 and
 678 -> 480). Nothing was removed from either crate; the ranking moved because both
 gained chunks. That is defect 17's mechanism inside a single package, and it is
 the reason a retrieval A/B must hold the cache fixed.
+
+### Haskell does NOT have this shape — checked, not assumed
+
+The obvious next question is whether `haskellSurface` has its own opaque-block
+class. It does not.
+
+```
+                 top-level signatures   data/newtype/class   CPP directives
+text 2.1.3            757 / 757              57 / 57              291
+aeson 2.2.5.1         538 / 539             112 / 112              76
+scotty 0.30           262 / 268              36 / 36                7
+hspec 2.11.17           6 / 6                 1 / 1                 0
+```
+
+CPP is not opaque to it: text carries 291 `#if`/`#endif` directives and loses
+nothing inside them. Template Haskell is a real limit — aeson has 5 `$(…)`
+splices, and no source reader can see what they generate — but at that size it is
+a limit, not a defect.
 
 ### And it exposed the same hash hole a THIRD time
 
