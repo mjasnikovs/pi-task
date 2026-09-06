@@ -1,0 +1,3 @@
+[package]
+name = "tiny-axum-core"
+version = "0.1.0"

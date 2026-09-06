@@ -5,7 +5,6 @@ import type {CacheHandle} from './docs-cache.js'
 import {type ResolvedPackage} from './docs-resolve.js'
 import {chunkDeclarations, chunkReadme, splitAtMatches} from './docs-chunk.js'
 import {ECOSYSTEMS, type EcosystemProfile} from './docs-ecosystems.js'
-import {hackageExportGap, declaredInSurface} from './eco-hackage.js'
 
 const ZERO_SEP = Buffer.from([0])
 
@@ -260,10 +259,9 @@ function ingestBody(
     // A facade package indexes to a table of contents: `hspec` is 14 chunks of
     // export lists and every signature is in `hspec-core`. Fill only the holes —
     // see DEFECT-12-STOPPING-RULE.md for the boundary and why it stops here.
-    const gap = supplements.length > 0 ? hackageExportGap(pkg.root) : null
-    for (const sup of gap && (gap.unresolved.size > 0 || gap.reexportedModules.size > 0) ?
-        supplements
-    :   []) {
+    const found = supplements.length > 0 ? (profile.exportGap?.(pkg.root) ?? null) : null
+    const gap = found !== null && !found.empty ? found : null
+    for (const sup of gap === null ? [] : supplements) {
         for (const abs of collectFiles(sup, profile).surface) {
             let raw: string
             try {
@@ -271,21 +269,19 @@ function ingestBody(
             } catch {
                 continue
             }
-            const module = /^module\s+([\w.']+)/m.exec(raw)?.[1]
-            const whole = module !== undefined && gap!.reexportedModules.has(module)
             // The path names the package the declaration really came from: the
             // chunk header is model-facing, and a signature attributed to the
             // wrong package is the bug this whole table exists for.
             const rel =
                 `${sup.name}-${sup.version}/` + path.relative(sup.root, abs).replace(/\\/g, '/')
+            const whole = gap!.wholesale(rel, raw)
             for (const c of chunkDeclarations(
                 profile.surface(raw),
                 rel,
                 profile.declSplitRe,
                 profile.commentPrefix
             )) {
-                const declares = declaredInSurface(c.replace(/^\S.*\n/, ''))
-                if (!whole && ![...declares].some(n => gap!.unresolved.has(n))) continue
+                if (!whole && !gap!.fillsHole(c.replace(/^\S.*\n/, ''))) continue
                 if (seen.has(c)) continue
                 seen.add(c)
                 insertChunk.run(ecosystem, pkg.name, pkg.version, rel, 'dts', c)

@@ -1,0 +1,9 @@
+[package]
+name = "tiny-axum"
+version = "0.1.0"
+
+[dependencies.tiny-axum-core]
+version = "0.1.0"
+
+[dev-dependencies.tiny-axum-test]
+version = "0.1.0"

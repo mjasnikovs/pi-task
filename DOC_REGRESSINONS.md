@@ -387,9 +387,113 @@ is exactly the `hspec`/`hspec-core` shape. What does not fit is the **trigger**.
 and declares nowhere; Rust has no export list, it has `pub use`. And `supplements`
 is a hackage-only hook on the ecosystem profile.
 
-Unfixed. The trigger for cargo has to be measured before it is written — the
-hackage rule was chosen over two rejected candidates on a twenty-package sweep,
-and cargo deserves the same rather than an analogy.
+### STEP 0 — the cargo sweep, measured, not ported
+
+Twenty-two crates, sources pulled from `static.crates.io`, no indexer involved.
+Rust has no export list, so the trigger reads `pub use <dep>::…` where the leading
+path segment is a declared dependency: those are the names the crate publishes and
+may not declare.
+
+**The ratio does not transfer, and that is the same answer hackage gave.** Hackage
+put facades at 87.7% and ordinary packages under 3%. Cargo will not draw that line:
+`axum-core`, `clap`, `rand`, `itertools` and `tokio-util` all read 100% on one to
+seven re-exports, and most crates re-export nothing at all. So no threshold — which
+is exactly what `DEFECT-12-STOPPING-RULE.md` already concluded for hackage. **The
+trigger is the hole**, and in cargo the hole is directly readable rather than
+inferred.
+
+The depth-1 table, the number that actually decides the rule:
+
+| crate | unresolved | resolved in 1 hop | fetched |
+|---|---|---|---|
+| **axum** | **22** | **20 (91%)** | **axum-core axum-macros** |
+| futures | 55 | 53 (96%) | futures-{channel,core,executor,io,sink,task,util} |
+| tracing | 15 | 14 | tracing-attributes tracing-core |
+| tokio | 6 | 6 | tokio-macros |
+| rand | 7 | 5 | rand_chacha rand_core |
+| tower | 5 | 4 | tower-layer tower-service |
+| clap | 5 | 4 | clap_builder clap_derive |
+| hyper | 12 | 0 | — (suppliers are http, bytes, http-body) |
+| reqwest | 3 | 0 | — (http, url) |
+| axum-core, itertools, tokio-util | 1 | 0 | — (tracing, either, bytes) |
+| serde, serde_json, regex, chrono, uuid, anyhow, thiserror, bytes, http, tower-http | 0 | — | never fires |
+
+`IntoResponse` is named in axum's 20:
+
+```
+supplied by axum-core:  AppendHeaders ErrorResponse IntoResponse IntoResponseParts
+                        ResponseParts Result BoxError RequestExt RequestPartsExt
+                        DefaultBodyLimit FromRef FromRequest FromRequestParts
+                        OptionalFromRequest OptionalFromRequestParts Request Body
+                        BodyDataStream
+supplied by axum-macros: debug_handler debug_middleware
+still open:              http  Bytes
+```
+
+**Self-limiting, same as hackage.** Ten of the twenty-two have no hole, so the pass
+never fires for them however many prefix-named dependencies they declare — `serde`
+has two, `regex` two, `uuid` one, and all four resolve nothing because there is
+nothing to resolve.
+
+**`[dependencies]` only, measured against the wider set.** Scanning dev- and
+build-dependencies too fetches `tokio-test`, `clap-cargo`, `regex-test` and
+`tower-test` and resolves **not one extra name**: 20/6/53/4/4/14/5 either way.
+Runtime-only is the same answer for fewer fetches, so it is the rule.
+
+**The bound's cost, stated rather than hidden** — the same shape as scotty/cookie
+on hackage. `hyper` re-exports twelve names from `http`/`bytes`/`http-body`,
+`reqwest` three from `http`/`url`, and axum's own `pub use http;` and `Bytes` stay
+open. A prefix rule cannot see any of them.
+
+### IMPLEMENTED — and the indexer stopped knowing Haskell
+
+The gap was hardcoded to hackage in `docs-index.ts`: it called
+`hackageExportGap`, read a `module X` header out of the source, and intersected
+with `declaredInSurface`, all of which are Haskell. Rust names its module by file
+location and states its gap in `pub use`, so none of it ports.
+
+The fix is one hook. `EcosystemProfile.exportGap` returns three answers —
+`empty`, `wholesale(relPath, source)`, `fillsHole(chunk)` — and the indexer asks
+those three questions without knowing either language.
+
+```
+src/workers/export-gap.ts   the type, and why it is shared
+eco-hackage.ts              hackageExportGap  — export list  + `module X`
+eco-cargo.ts                cargoExportGap    — `pub use`    + `pub use x::y::*`
+```
+
+**End to end through the real `docsRaw`, in the container, on the seeded `rs`
+project, one cold cache per arm.** Published 0.40.9 against this tree:
+
+| query | 0.40.9 | this tree |
+|---|---|---|
+| `IntoResponse` | no declaration | **`trait IntoResponse`** |
+| `trait IntoResponse signature` | no declaration | **`trait IntoResponse`** |
+| `FromRequestParts extractor trait` | no declaration | **`trait FromRequestParts`** |
+| `how do I return a custom response from a handler` | no declaration | no declaration |
+
+The fourth is the standing open item, not a new one: the query names no type, so
+there is nothing to hop to.
+
+**Cost.** axum goes 381 chunks to 403 — twenty-two, because rule 3 keeps only the
+hole. The `packages` table still holds exactly `axum`: a supplement is folded into
+the asking crate's rows and never registered as a package of its own.
+
+Five tests mirror the hackage ones on a `tiny-axum`/`tiny-axum-core` fixture, and
+three of the five were confirmed to FAIL with the hook commented out. The two that
+survive are the negative guards ("the trait is absent alone", "the unrelated
+helper is never indexed"), which is what a negative guard is supposed to do.
+
+**One thing fixed in passing, in both ecosystems.** `supplementCandidates` sorted
+with `localeCompare`, which orders `-` and `_` differently under a different
+`LANG` — and that sort decides the order supplement chunks enter the index. Both
+call sites now compare code units. A machine-dependent index is the exact failure
+`DEFECT-12-STOPPING-RULE.md` refuses elsewhere.
+
+**What this does not claim** — the same caveat the hackage half carries. This is a
+retrieval-side result. Defect 11 is the standing proof that a better index is not
+a better answer, and no recorded cargo record has been replayed against the new
+corpus yet.
 
 ## Defect 17. Retrieval depends on which OTHER packages share the cache
 

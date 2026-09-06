@@ -21,6 +21,7 @@ import * as path from 'node:path'
 import {ResolveError, type ResolvedPackage} from './docs-resolve.js'
 import {findAtOrAbove} from './eco-cargo.js'
 import type {NpmVersionInfo} from './npm-version.js'
+import type {ExportGap} from './export-gap.js'
 
 const HACKAGE = 'https://hackage.haskell.org/package'
 /** Where cabal files a downloaded tarball, under any of its package directories. */
@@ -634,12 +635,6 @@ export function manifestPackages(cwd: string): Set<string> | undefined {
  * See DEFECT-12-STOPPING-RULE.md for why this triggers on the hole itself
  * rather than on a fraction of the export list.
  */
-export interface HackageExportGap {
-    /** Exported names with no declaration anywhere in the package. */
-    unresolved: Set<string>
-    /** `module X` re-exports of modules this package does not own. */
-    reexportedModules: Set<string>
-}
 
 const EXPORT_NAME_RE = /^[A-Za-z_][\w']*$/
 /** `module X` inside an export list is a re-export; `Prelude` is base, and base is not fetched. */
@@ -705,7 +700,7 @@ function haskellSources(root: string): string[] {
     return out
 }
 
-export function hackageExportGap(root: string): HackageExportGap {
+export function hackageExportGap(root: string): ExportGap {
     const declared = new Set<string>()
     const exported = new Set<string>()
     const ownModules = new Set<string>()
@@ -731,9 +726,14 @@ export function hackageExportGap(root: string): HackageExportGap {
     }
     for (const m of ownModules) reexportedModules.delete(m)
     reexportedModules.delete('Prelude')
+    const unresolved = new Set([...exported].filter(n => !declared.has(n)))
     return {
-        unresolved: new Set([...exported].filter(n => !declared.has(n))),
-        reexportedModules
+        empty: unresolved.size === 0 && reexportedModules.size === 0,
+        wholesale: (_relPath, raw) => {
+            const module = /^module\s+([\w.']+)/m.exec(raw)?.[1]
+            return module !== undefined && reexportedModules.has(module)
+        },
+        fillsHole: chunk => [...declaredInSurface(chunk)].some(n => unresolved.has(n))
     }
 }
 
@@ -760,5 +760,11 @@ export function supplementCandidates(
         const version = resolved[dep]
         if (version) out.push({name: dep, version})
     }
-    return out.sort((a, b) => a.name.localeCompare(b.name))
+    // Code-unit order, not `localeCompare`: this sort decides index order and a
+    // locale-aware compare is a machine-dependent index.
+    return out.sort((a, b) =>
+        a.name < b.name ? -1
+        : a.name > b.name ? 1
+        : 0
+    )
 }

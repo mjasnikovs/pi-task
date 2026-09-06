@@ -42,6 +42,8 @@ import {
     childDirs,
     lockedDeps,
     manifestCrates,
+    cargoExportGap,
+    cargoSupplementCandidates,
     CARGO_DECL_SPLIT_RE
 } from './eco-cargo.js'
 import {
@@ -52,6 +54,7 @@ import {
     hackageExtractDir,
     hackageProjectName,
     supplementCandidates,
+    hackageExportGap,
     findCabalTarball,
     cachedVersions,
     resolvedVersions,
@@ -63,6 +66,7 @@ import {
     HACKAGE_SKIP_DIRS
 } from './eco-hackage.js'
 import {runChild, type SpawnFn} from '../shared/child-process.js'
+import type {ExportGap} from './export-gap.js'
 
 export type EcosystemId = 'npm' | 'cargo' | 'hackage'
 
@@ -192,10 +196,16 @@ export interface EcosystemProfile {
     ) => Promise<{pkg: ResolvedPackage; installed: boolean; pin?: AutoInstallPin}>
     /**
      * Packages whose declarations belong in THIS package's index, because this
-     * package exports names it does not declare. Only hackage has facades of the
-     * `hspec`/`hspec-core` shape; see DEFECT-12-STOPPING-RULE.md.
+     * package exports names it does not declare — `hspec`/`hspec-core`,
+     * `axum`/`axum-core`; see DEFECT-12-STOPPING-RULE.md.
      */
     supplements?: (pkg: ResolvedPackage, cwd: string, io: EcosystemIo) => Promise<ResolvedPackage[]>
+    /**
+     * What this package publishes and declares nowhere, in this ecosystem's own
+     * syntax. Read only when `supplements` returned something, and it decides
+     * which of a supplement's chunks are kept.
+     */
+    exportGap?: (root: string) => ExportGap
     /** The registry's own newest version, for grounding an answer in the present. */
     latest: (name: string, io: EcosystemIo) => Promise<NpmVersionInfo | null>
 
@@ -455,6 +465,34 @@ const cargoProfile: EcosystemProfile = {
         }
         return acquireCrate(info?.pkg ?? name, version, io)
     },
+    supplements: async (pkg, cwd, io) => {
+        const deps = manifestCrates(pkg.root)
+        if (!deps) return []
+        const candidates = cargoSupplementCandidates(pkg.name, deps, lockedDeps(pkg.root) ?? {})
+        const out: ResolvedPackage[] = []
+        for (const c of candidates) {
+            try {
+                out.push(
+                    resolveCrate(c.name, cwd, {cargoHome: io.cargoHome, modulesDir: io.modulesDir})
+                )
+                continue
+            } catch {
+                // Not unpacked here. `acquire` reads crates.io for the published
+                // spelling, so `tokio-util` and `tokio_util` both land.
+            }
+            const got = await cargoProfile.acquire(c.name, c.version, io)
+            if (!got.success) continue
+            try {
+                out.push(
+                    resolveCrate(c.name, cwd, {cargoHome: io.cargoHome, modulesDir: io.modulesDir})
+                )
+            } catch {
+                // A supplement that will not resolve leaves the facade as it was.
+            }
+        }
+        return out
+    },
+    exportGap: cargoExportGap,
     latest: (name, io) => cratesLatest(name, io.fetch, io.signal),
 
     isSurfaceFile: isRustFile,
@@ -584,6 +622,7 @@ const hackageProfile: EcosystemProfile = {
         }
         return out
     },
+    exportGap: hackageExportGap,
     latest: (name, io) => hackageLatest(name, io.fetch, io.signal),
 
     isSurfaceFile: isHaskellFile,
