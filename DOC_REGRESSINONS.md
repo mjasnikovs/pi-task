@@ -2328,6 +2328,46 @@ material as the first 15,000.
 
 ---
 
+### Splitting CLASS members too — measured, and it buys nothing
+
+`MEMBER_SPLIT_RE` reaches a `declare module` block because its members are
+declarations. It never reaches a class or an interface, whose members start with a
+name: `json<T>(): Promise<T>`, `readonly raw: Request`. Sixty-nine chunks were still
+at the cap, and hono's misses were two of them — `HonoRequest` and the types module
+delivered 8,192 characters each and ate two thirds of a 24,000 budget between them.
+
+Extending the regex to a bare member head, with `[(:]` at the end so a union
+continuation like `| "utf8"` stays out, does exactly what it should to the table:
+
+```
+                       chunks    at-cap    their share of bytes
+before any split       12,815      492            51.1%
+module members         17,644      164            16.6%
++ class members        27,740       69             5.9%
+```
+
+`@types/node` leaves the at-cap list entirely.
+
+**And defines does not move.**
+
+```
+module split -> + class split    pairs 157   lost 5   gained 4   150/157 -> 149/157   p = 1.0000
+```
+
+Nine records churn and the net is minus one. The index grew 17,644 -> 27,740 chunks,
+`bm25()` scores over all of it, and the ranking moves under every package — the same
+dilution that cost the module split two hono records, now cancelling its own gains.
+
+Not shipped. Patch discarded; the regex extension is four lines and the tests for it
+are in this commit's message, but nothing about it needs keeping.
+
+**The pair of results is the point.** Cutting the at-cap share from 51.1% to 16.6%
+bought p = 0.0129. Cutting it again from 16.6% to 5.9% bought nothing at all. The
+chunk table's shape is not the answer's quality, and past the first cut it stops
+being even a proxy.
+
+---
+
 ## Under-retrieval predicts the miss, and the obvious cause is REFUTED
 
 Seven records still miss on defines after 0.40.17. Six of the seven leave both walls
