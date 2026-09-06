@@ -2264,6 +2264,90 @@ bytes hackage gains from either constant define nothing new. That is what the
 sweep is for: hackage looked like the ecosystem with a wall and is the one with
 nothing behind it.
 
+### The answer half — REFUTED by its own A/A, and the instrument is what broke
+
+Two trees, 103 paired package records each, production's arm in both, scored on
+abstention:
+
+```
+24,000 -> 48,000     pairs 103   only-24k  5   only-48k 14
+                     answered 76/103 -> 85/103        McNemar p = 0.0636
+```
+
+Ninety-nine sessions out of a hundred that is a ship. It is not, and the tell was
+in the ledger before the test was run: **four of the nineteen discordant pairs saw
+byte-identical content.** The budget could not have moved those, so something else
+moves this child.
+
+Split the pairs by whether the budget changed anything at all:
+
+```
+bytes CHANGED     84 pairs   only-24k 4   only-48k 11   p = 0.1185
+bytes IDENTICAL   19 pairs   only-24k 1   only-48k  3   p = 0.6250
+```
+
+Same discordance rate on both sides, 18% and 21%, and the same direction on the
+side where no treatment was applied. So the A/A was run: **the same tree, the same
+cache, the same records, a second time.**
+
+```
+A/A     24k pass 1 -> 24k pass 2    only-A  4   only-B 16   76/103 -> 88/103   p = 0.0118
+A/B     24k pass 1 -> 48k pass 1    only-A  5   only-B 14   76/103 -> 85/103   p = 0.0636
+        24k pass 2 -> 48k pass 1    only-A  9   only-B  6   88/103 -> 85/103   p = 0.6072
+```
+
+**The control moved further than the treatment, and it is the one that reaches
+significance.** Mean bytes shown in the A/A are identical to the character —
+20,882 both passes — so retrieval is not what changed. Read by position instead of
+by arm, the whole thing is one monotone line:
+
+```
+slot 1   24k    76/103 answered
+slot 2   48k    85/103
+slot 3   24k    88/103
+```
+
+A fourth slot was run to see whether the rise saturates. It does:
+
+```
+slot 1   24k    76/103 answered
+slot 2   48k    85/103
+slot 3   24k    88/103
+slot 4   48k    89/103
+```
+
+Slot 1 is twelve points below everything after it and the arm alternates, so the
+line is position and not constant. **The one arm measured twice at 24,000 spans
+76 and 88 — a wider gap than anything between the arms.**
+
+Scored the only way this data can be scored honestly, each arm pooled over one
+early slot and one late one so position is balanced:
+
+```
+n 103    24k better 10    48k better 19    tied 74    McNemar p = 0.1360
+```
+
+`RETRIEVE_CONTENT_BUDGET` stays at **24,000**. The direction has favoured 48,000 in
+every cut, and it has not once cleared its own noise: p = 0.0636 uncontrolled,
+p = 0.1360 balanced, p = 0.2500 on the retrieval side, against an A/A at p = 0.0118.
+Not shippable. Whether it is worth re-testing on a design that can see a
+four-point effect is a question for the next round; nothing about 48,000 is
+refuted, only unproven.
+
+### And this is an instrument defect, not a result
+
+The two-tree design runs arm A's 103 records to completion and then arm B's. That
+makes ARM and POSITION the same variable, and the A/A says position is worth more
+than the constant under test. Anything decided this way is contaminated, including
+`PACKAGE_RETRIEVE_LIMIT` 8 -> 50 — shipped in 0.40.14 at McNemar p = 0.0075, on
+exactly this design. Its retrieval half stands on its own (defines 91/101 -> 97/101
+needs no model), but its answer half now needs re-running balanced before it can
+be quoted.
+
+`--arm` does not have this problem: both arms of one record run back to back inside
+one process, so position is shared. Only the two-tree form, which is the only form
+a build-time constant can take, orders the arms in blocks.
+
 ### And the limit past 50 is worth nothing — swept, so hackage's cap is not a lever
 
 Eighteen of twenty-five hackage records sit at the 50-chunk cap, which reads like
