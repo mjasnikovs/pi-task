@@ -143,9 +143,9 @@ one paid — re-run 4's three HARD FAILs produced defects 19, 20, 21, 22 and 23.
 | 19 | a symbol declared only in a NON-prefixed dependency | both | recorded corpus | caused the rs HARD FAIL; **BOTH bounds REFUTED** — `[dependencies]` 2 right of 20, lock 3 right of 18 |
 | 20 | a Rust item inside a `name! { … }` block is not indexed | index | offline + replay | **SHIPPED**, +393 public names; one causal answer, no aggregate at n=14 |
 | 21 | `export declare function` never started a chunk | index | offline + retrieval | **SHIPPED**, defining chunks 16/62 -> 34/62 paired, p=1.2e-4 |
-| 22 | on hackage a package's own name has ~0 IDF | retrieval | retrieval | found and MECHANISED; no lever without an FTS schema change |
+| 22 | on hackage a package's own name has ~0 IDF | retrieval | retrieval | mechanism stands; **cost is now ZERO** — `scotty:scotty` 2/7 -> 7/7 at limit 50 |
 | 24 | the value hop lands on the chunk whose PATH says the name | retrieval | retrieval | **FIXED**; dropping the shape gate REFUTED, 90/101 -> 88/101 |
-| 23 | a class chunk is 50x the median and BM25 buries it | retrieval | retrieval | found and MECHANISED; the tempting lever orphans signatures |
+| 23 | a class chunk is 50x the median and BM25 buries it | retrieval | retrieval | mechanism stands; it ranks 10th and **10 is inside the new limit of 50** |
 | — | a key symbol absent from the corpus | retrieval | — | **limit, not a defect** |
 | — | aeson keeps 55 duplicate bodies | index | offline | **measured fixed** |
 | — | `PACKAGE_RETRIEVE_LIMIT` was 8 for no recorded reason | both | defines + replay | **CHANGED to 50**, answered 67/94 -> 79/94, p=0.0075 |
@@ -1429,6 +1429,29 @@ chunk alone exceeds the budget.
 It also closes the divergence this file has carried unexplained since the start:
 `PROJECT_RETRIEVE_LIMIT` was already 50, and nothing recorded why a package got 8.
 Now both are 50, and the reason is a number.
+
+### And it closed defects 22 and 23, which were filed as having no lever
+
+Re-measured on the shipped constant, per symbol:
+
+```
+scotty:scotty        2/7  ->  7/7    <-- defect 22
+aeson:eitherDecode   4/6  ->  6/6    <-- one 97-byte chunk of 1,283
+hono:json            8/10 ->  9/10
+hono:Hono           12/14 -> 11/14   one loss
+
+hackage  26/33 -> 33/33 (100%)   cargo 26/26   npm 38/42
+overall  90/101 -> 97/101,  only-8 1, only-50 8,  McNemar p = 0.0391
+```
+
+**Both mechanisms are still true and both are now free.** Defect 22 — a package's
+own name matching 99.4% of its own chunks — still means the query's best token
+ranks nothing; the declaration simply no longer has to be ranked into the top 8.
+Defect 23's class chunk still lands at rank 10; 10 is inside 50.
+
+Filing them as "no lever without an FTS schema change" and "the tempting lever
+orphans signatures" was right about those levers and wrong about the conclusion.
+The lever was a constant nobody had measured, sitting two functions away.
 
 ### The npm-only sweep, kept because its conclusion is still true of npm
 
