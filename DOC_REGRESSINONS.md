@@ -1884,6 +1884,69 @@ So a worker that asks `tower` gets the answer today. Nothing needs to be built f
 that path. Whether one that asks `axum` can be routed to `tower` is the open
 question, and the two bounds already refuted above still bound it.
 
+### And it is not a retrieval defect at all — the import was in the prompt
+
+The probe above asked whether the raised limit reaches the missing symbol. It does,
+in `tower`. Then the same probe was pointed at `axum` — the crate the worker
+actually asks — and printed the lines rather than a Y/N, which is the step the two
+earlier filings skipped.
+
+At production's own constants, limit 50 and budget 24,000, `docsRaw(axum, <run 6's
+verbatim query>)` returns chunks containing:
+
+```
+///     let response = app.oneshot(request).await.unwrap();
+/// use tower::ServiceExt;
+/// use tower::{Service, ServiceExt};
+/// In some cases when calling methods from [`tower::ServiceExt`] on a [`Router`] …
+```
+
+And it is not only a fresh retrieval. Run 6's own recorded `retrievedText` for the
+record whose code did not compile carries it:
+
+```
+record 10, module=axum, 23,688 B      "use tower::ServiceExt"  x1
+                                      "ServiceExt"             x1
+                                      "oneshot("               x1
+```
+
+The child was shown `/// use tower::ServiceExt;`. Its answer quoted the line
+immediately below it — `let response = app.oneshot(request).await.unwrap();` — and
+said the content "does not provide its type signature". It never mentioned the
+import, and the import is what the caller needed.
+
+**So defect 19 is an EXTRACTION defect, and it has been filed twice as a retrieval
+one.** Both filings measured whether the symbol could be reached and neither
+opened the chunks that came back. The prefix-bound analysis is still correct about
+what it analysed; it was analysing the wrong half.
+
+The narrowed shape: the query asked for a *signature*, the child answered about
+signatures, and the thing a caller cannot compile without is a `use` line the query
+did not ask for.
+
+### STEP 0 on the lever, and the first cut is too loose to use
+
+Over all 35 rs records carrying `retrievedText`:
+
+```
+cross-crate `use` lines present in the bytes    27 of 35
+answer names at least one of those crates       14 of 27
+```
+
+That number does not mean anything yet — "the answer says the word serde" is not
+"the answer told the caller what to import". Tightened to the case that matters,
+a `use <foreign>::Sym;` where `Sym` is named in the query:
+
+```
+12 such pairs      answer names the import      5
+```
+
+And **the record that caused the HARD FAIL is not among the twelve**, because its
+query names `oneshot` and the import names `ServiceExt`. The symbol needing the
+import and the symbol in the query are different names linked by Rust's trait
+rules, which no lexical filter reaches. Recorded so the next attempt does not build
+the tight filter again and conclude n=12.
+
 ## Defect 18. One docs answer in five carries a false hallucination warning
 
 Nothing in this file had ever looked at `excerptVerified`. It is checked on every
