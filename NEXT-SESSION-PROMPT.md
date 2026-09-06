@@ -79,15 +79,11 @@ twice — re-run 4's three HARD FAILs produced defects 19 to 23, and re-run 5
 verified defect 18 live AND surfaced defect 24 and a scorer artifact that an
 earlier fix in the same session had created.
 
-1. **Defect 24's other half: hop on what the package DECLARES, not on a token's
-   SHAPE.** `hopNames` gates on `IDENTIFIER_SHAPED` — a capital, an underscore, or
-   an internal capital — so it refuses `serve`, `scotty` and `json`. That gate
-   costs **7 of the 11 misses** the defines harness leaves, measured. The rule's
-   own comment says why it exists: widening to every token would hop on
-   `signature` and `return`. The replacement is not a wider shape but a different
-   question — `signature` is declared nowhere and `serve` is declared once, and
-   `valueChunk` already answers that. Cost is a `LIKE` scan per query token
-   instead of per identifier-shaped token, and it is NOT measured. Measure it.
+1. **Nothing is open.** Defect 24's other half — dropping `IDENTIFIER_SHAPED` so
+   the hop can reach `serve`, `scotty` and `json` — was measured and REFUTED:
+   90/101 to 88/101, cargo 26/26 to 23/26, same wall clock. Hops sit at the FRONT
+   of the content budget, so an extra hop displaces a better chunk rather than
+   adding one. Start at the top of the loop instead.
 2. **Run the defines harness before and after anything you change.** It is real
    now, with tests. `bun scripts/docs-defines.ts … --out a.jsonl` then
    `--compare a.jsonl b.jsonl` for an exact paired McNemar. Two arms means two

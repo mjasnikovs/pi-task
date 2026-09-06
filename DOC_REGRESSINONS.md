@@ -140,7 +140,7 @@ one paid — re-run 4's three HARD FAILs produced defects 19, 20, 21, 22 and 23.
 | 20 | a Rust item inside a `name! { … }` block is not indexed | index | offline + replay | **SHIPPED**, +393 public names; one causal answer, no aggregate at n=14 |
 | 21 | `export declare function` never started a chunk | index | offline + retrieval | **SHIPPED**, defining chunks 16/62 -> 34/62 paired, p=1.2e-4 |
 | 22 | on hackage a package's own name has ~0 IDF | retrieval | retrieval | found and MECHANISED; no lever without an FTS schema change |
-| 24 | the value hop lands on the chunk whose PATH says the name | retrieval | retrieval | **FIXED**; the shape gate that refuses `serve` costs 7 of 11 misses, measured |
+| 24 | the value hop lands on the chunk whose PATH says the name | retrieval | retrieval | **FIXED**; dropping the shape gate REFUTED, 90/101 -> 88/101 |
 | 23 | a class chunk is 50x the median and BM25 buries it | retrieval | retrieval | found and MECHANISED; the tempting lever orphans signatures |
 | — | a key symbol absent from the corpus | retrieval | — | **limit, not a defect** |
 | — | aeson keeps 55 duplicate bodies | index | offline | **measured fixed** |
@@ -316,20 +316,36 @@ Even fixed, the hop never fires for `serve`, because `hopNames` gates on
 token instead would hop on `signature` and `return`, spending a slot on whichever
 prose chunk is shortest."
 
-It is worth knowing what it costs. Of the eleven misses the defines harness
-leaves:
+It looked expensive. Of the eleven misses the defines harness leaves:
 
 ```
 bare lowercase, refused by IDENTIFIER_SHAPED   scotty:scotty (5)  hono:json (2)   = 7
 identifier-shaped, refused by nothing          aeson:eitherDecode (2)  hono:Hono (2) = 4
 ```
 
-**Seven of eleven.** The principled replacement is not a wider shape rule but a
-different question: hop on a token the PACKAGE DECLARES somewhere, since
-`signature` and `return` are declared nowhere and `serve` is declared once. That
-turns a lexical guess into an index lookup, and it costs a `LIKE` scan per query
-token instead of per identifier-shaped token. Measured reach is above; the cost is
-not measured, and that is the next thing to weigh.
+Seven of eleven — an upper bound on what dropping the gate could recover.
+
+**MEASURED, and it goes the other way.** Two arms of the same tree, the gate the
+only difference, the defines harness over all 101 pairs:
+
+```
+                       cargo    hackage    npm     total
+shape gate (shipped)   26/26     26/33    38/42    90/101
+no gate                23/26     26/33    39/42    88/101
+
+paired:  both 87   only-gate 3   only-no-gate 1   neither 10
+         McNemar exact, two-sided:  p = 0.6250
+wall clock:  18.1s vs 19.0s
+```
+
+Dropping it **loses three and gains one**, and cargo falls from 26/26 to 23/26.
+The hops sit at the FRONT of the content budget, so an extra hop does not add a
+chunk — it displaces a better one. And cost was never the objection: the two arms
+run in the same time.
+
+`hopNames`' own comment was right, for a reason it did not state: the harm is not
+that a hop on `signature` is slow, it is that it spends a slot. Refuted, and the
+gate stays.
 
 ## Defect 23. A class chunk is 50x the median and BM25 buries it
 
