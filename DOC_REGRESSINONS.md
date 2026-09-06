@@ -1180,6 +1180,19 @@ For the same reason the byte budget is not the binding constraint either: median
 16 KB against a 24 KB cap, p75 at 20.8 KB, and exactly one record in 73 under
 200 B. That one is the manifest case below.
 
+**Both halves of this section predate `PACKAGE_RETRIEVE_LIMIT` 8 -> 50, and the
+second half is now false.** At 50 the median retrieved is 21,900 and 90 of 103
+records retrieve more the moment the budget is doubled — the cap it was measured
+against was slack and is not any more. Re-measured in item 1.
+
+The first half is not superseded by that, and the distinction matters. It is a
+BETWEEN-record correlation: across different queries and different packages, size
+does not predict abstention. Item 1 asks a WITHIN-record question — the same query,
+the same package, more bytes — and a null between-record correlation does not
+answer it in either direction. So "do not spend a round tuning the retrieval budget
+on it" was sound advice about the correlation and is not a verdict on the
+intervention.
+
 ## The project corpus cannot see a manifest — measured, and below the bar
 
 `projectGlobs` is source only: `*.ts`/`*.tsx`, `*.rs`, `*.hs`. A `.cabal`,
