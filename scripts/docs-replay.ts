@@ -38,6 +38,7 @@ import {projectCorpus} from '../src/workers/docs-project.js'
 import {isAbstention} from '../src/workers/abstention.js'
 import {normaliseWhitespace} from '../src/shared/child-output.js'
 import {groupChildArgs} from '../src/config/group-args.js'
+import {mcnemar} from './docs-defines.js'
 import type {DocsCorpus} from '../src/workers/docs-lookup.js'
 import type {ResolvedPackage} from '../src/workers/docs-resolve.js'
 import type {EcosystemId} from '../src/workers/docs-ecosystems.js'
@@ -262,6 +263,50 @@ export async function retrieveLive(rec: ReplayRecord, cwd: string): Promise<Mate
     }
 }
 
+/**
+ * Compare two ledgers written by two TREES, on the constant each was built with.
+ *
+ * `--arm` is the defect 15 clause lever and cannot express a build-time constant,
+ * so a budget or limit A/B runs production's arm twice, once per tree, and pairs
+ * the ledgers here. Pairing is what the design is: the same recorded query in both
+ * arms. An unpaired test on it has already read p = 0.34 where the paired one said
+ * 0.0019.
+ *
+ * ABSTENTION is the scored outcome. It is the one thing a child does that is not a
+ * matter of degree, and it is what the retrieve limit moved.
+ */
+export function comparePaired(a: readonly ReplayRow[], b: readonly ReplayRow[]): string {
+    const key = (r: ReplayRow): string => `${r.source}|${r.module}|${r.query}|${r.trial}`
+    const mb = new Map(b.map(r => [key(r), r]))
+    let both = 0
+    let onlyA = 0
+    let onlyB = 0
+    let neither = 0
+    let bytesA = 0
+    let bytesB = 0
+    for (const ra of a) {
+        const rb = mb.get(key(ra))
+        if (rb === undefined) continue
+        // Answered, not abstained: the direction a reader expects "only-B" to mean.
+        const ansA = !ra.unclear
+        const ansB = !rb.unclear
+        if (ansA && ansB) both++
+        else if (ansA) onlyA++
+        else if (ansB) onlyB++
+        else neither++
+        bytesA += ra.bytes
+        bytesB += rb.bytes
+    }
+    const pairs = both + onlyA + onlyB + neither
+    if (pairs === 0) return 'no paired rows: the two ledgers share no (source, module, query, trial)'
+    return [
+        `pairs ${pairs}   both ${both}   only-A ${onlyA}   only-B ${onlyB}   neither ${neither}`,
+        `answered  A ${both + onlyA}/${pairs}   B ${both + onlyB}/${pairs}`,
+        `mean bytes shown  A ${Math.round(bytesA / pairs)}   B ${Math.round(bytesB / pairs)}`,
+        `McNemar exact, two-sided: p = ${mcnemar(onlyA, onlyB).toExponential(3)}`
+    ].join('\n')
+}
+
 /** One trial. Written to the ledger before anything is tallied. */
 export interface ReplayRow {
     source: string
@@ -408,6 +453,8 @@ interface Options {
     cwd: string
     /** A project root to re-retrieve against, or null for the recorded bytes. */
     retrieve: string | null
+    /** Two ledgers to pair and score, instead of running anything. */
+    compare: [string, string] | null
 }
 
 export function parseArgs(argv: readonly string[]): Options {
@@ -421,7 +468,8 @@ export function parseArgs(argv: readonly string[]): Options {
         dryRun: false,
         out: null,
         cwd: process.cwd(),
-        retrieve: null
+        retrieve: null,
+        compare: null
     }
     for (let i = 0; i < argv.length; i++) {
         const a = argv[i]
@@ -430,6 +478,7 @@ export function parseArgs(argv: readonly string[]): Options {
         else if (a === '--only') opts.only = argv[++i] as Options['only']
         else if (a === '--module') opts.module = argv[++i]
         else if (a === '--retrieve') opts.retrieve = argv[++i]
+        else if (a === '--compare') opts.compare = [argv[++i], argv[++i]]
         else if (a === '--limit') opts.limit = Number(argv[++i])
         else if (a === '--out') opts.out = argv[++i]
         else if (a === '--cwd') opts.cwd = argv[++i]
@@ -437,12 +486,26 @@ export function parseArgs(argv: readonly string[]): Options {
         else if (a.startsWith('--')) throw new Error(`docs-replay: unknown flag ${a}`)
         else opts.files.push(a)
     }
-    if (opts.files.length === 0) throw new Error('docs-replay: give at least one recorded .jsonl')
+    if (opts.compare === null && opts.files.length === 0) {
+        throw new Error('docs-replay: give at least one recorded .jsonl')
+    }
     return opts
+}
+
+function readLedger(p: string): ReplayRow[] {
+    return fs
+        .readFileSync(p, 'utf8')
+        .split('\n')
+        .filter(l => l.trim().length > 0)
+        .map(l => JSON.parse(l) as ReplayRow)
 }
 
 async function main(): Promise<void> {
     const opts = parseArgs(process.argv.slice(2))
+    if (opts.compare) {
+        console.log(comparePaired(readLedger(opts.compare[0]), readLedger(opts.compare[1])))
+        return
+    }
     const {records, skipped} = loadCorpusFiles(opts.files)
     const matching = records.filter(
         r =>
