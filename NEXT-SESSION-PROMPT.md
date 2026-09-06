@@ -64,28 +64,34 @@ It does not pin the model, and a host model is not the container's.
 
 ## The work, in order — and when it runs out, go back to the top of the loop
 
-Defects 14, 16, 18, the recall gate and three self-review bugs all closed in the
-2026-09-06 session and shipped as **0.40.10**. Their numbers are in
-`DOC_REGRESSINONS.md`; none needs re-deriving.
+Defects 14, 16, 18 and 20, the recall gate and four self-review bugs all closed in
+the 2026-09-06 session and shipped as **0.40.10** and **0.40.11**. Their numbers
+are in `DOC_REGRESSINONS.md`; none needs re-deriving. Defect 16's answer half was
+replayed and is FLAT — the recorded corpus has no stimulus for it.
 
-1. **Defect 16's ANSWER half.** The index fix is proven — `trait IntoResponse`
-   goes from absent to retrieved on 3 of 4 axum queries. What is NOT proven is
-   whether the child's answer improves, and defect 11 is the standing proof that
-   it need not. This is a `--retrieve` replay of the recorded `axum` records
-   against the new corpus, in the container, two arms over the same records.
-   Minutes, not hours. **Hold the cache's package set fixed across arms** —
-   defect 17 names the mechanism.
-2. **Defect 14 has no live evidence and may never get it cheaply.** The lever is
+1. **Defect 20's ANSWER half, and its hackage twin.** +393 public names is a
+   retrieval result. Whether an answer improves is unmeasured, and there is now a
+   real stimulus for it: `tokio:TcpListener` is one of this test's own ground-truth
+   symbols. Replay the recorded `tokio` records with `--retrieve`, two arms over
+   the same records, cache package set held fixed. **Then ask whether Haskell has
+   the same shape** — `haskellSurface` may have its own opaque-block class (CPP
+   `#ifdef`, `$(…)` Template Haskell). Measure before assuming.
+2. **Defect 19 needs a NEW lever, not the obvious one.** The obvious one is
+   measured and refuted (4 of 20, none that mattered). What is NOT measured: the
+   same rule bounded by the LOCK rather than `[dependencies]`. It would reach
+   `oneshot`, and it re-opens a failure this codebase has paid for once — the
+   2026-09-05 run answered about `tower`, in the lock via axum and absent from
+   `[dependencies]`, and the crate did not compile. Measure both halves.
+3. **Defect 14 has no live evidence and may never get it cheaply.** The lever is
    measured on 12,568 task files (3 fires, 3 true, 0 false) and is precise live
    (two correct non-fires in the 2026-09-06 ts run, both robust to a deliberately
-   loosened token class). But the failing CONDITION did not recur: that run's
-   research made no deprecation claim about anything CONSTRAINTS required, and the
-   tree shipped `z.email()` and `.issues` without the pass ever firing. Do not
-   burn four hours hoping it recurs. If you want live evidence, build a stimulus
-   that forces it rather than waiting for one.
-3. **Defect 17 — determinism only.** Measured real (55 of 61 records differ) and
-   measured harmless (recall 46/46 both ways). Nothing to ship; the rule it earns
-   is in the file. Reopen only if a quality metric ever moves on it.
+   loosened token class). But the failing CONDITION did not recur. Do not burn
+   four hours hoping it recurs. If you want live evidence, build a stimulus that
+   forces it rather than waiting for one.
+4. **Defect 17 — determinism only.** Measured real (55 of 61 records differ) and
+   measured harmless (recall 46/46 both ways). Nothing to ship. Note that defect
+   20 showed the same crosstalk INSIDE one package: two axum/tower queries
+   retrieved fewer bytes after axum gained chunks, with nothing removed.
 
 ## Building a new instrument
 
@@ -132,17 +138,24 @@ fix. If a test cannot fail before the fix — because the fix adds the seam it t
 that in the 2026-09-06 session and all three produced clean, plausible, false
 findings. They are listed under item 4r in `DOC_REGRESSINONS.md`.
 
-**Self-review your own fix before you ship it.** Four real bugs in that session's
+**Self-review your own fix before you ship it.** Five real bugs in that session's
 own new code were found this way and none by the test suite: a whitespace collapse
 that ate a nested bullet's indent, a rename split that turned `Hasher` into `H`, a
 lock read from the crate's root instead of the project's (a machine-dependent
-index), and a content hash that did not cover the rule it was hashing for.
+index), an undefined identifier that reached a test run because lint output was
+discarded, and a content hash that did not cover the rule it was hashing for.
+
+**A fix to how a chunk is SHAPED must move `contentFingerprint()`.** Three
+separate fixes have now hidden one level below a `String(fn)` — the chunker,
+the export-gap helpers, and `surface`, which cargo declares as a wrapper. Each
+would have shipped inert. If you add a function that changes chunk content, add
+it to that ecosystem's fingerprint in the same commit.
 
 Never guess a constant. Defect 11's hop cap was swept (3, 5, 8, uncapped) and the
 measurement chose it; defect 14's marker window was swept 20 to 4,000, found flat,
 and **deleted** in favour of a clause boundary.
 
-`bun run test` must stay green at 4417. `bun test` alone fails; the `--isolate` in
+`bun run test` must stay green at 4425. `bun test` alone fails; the `--isolate` in
 `bun run test` is load-bearing. `npm run lint:check` must stay green — and do not
 discard its output, which is how an undefined identifier reached a test run once.
 
