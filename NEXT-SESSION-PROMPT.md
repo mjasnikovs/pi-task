@@ -12,6 +12,10 @@ Every 10 minutes it re-enters the loop, so a session that would have halted betw
 items carries on instead. The rule below says never stop; this is what enforces it.
 Without it the rule is a wish.
 
+**The `/loop` is a tool call, not a preamble.** The 2026-09-06 session read this
+line, started the work, and never armed the timer — the text reads like context, so
+schedule it FIRST and only then read anything.
+
 It is session-only and expires after 7 days. Arm it again in the next session.
 
 ---
@@ -61,37 +65,53 @@ It does not pin the model, and a host model is not the container's.
 
 ## The work, in order — and when it runs out, go back to the top of the loop
 
-1. **Defect 15 — the child abstains with the answer in hand.** The lever is rule
-   4's mixed-question clause in `src/workers/abstention.ts`. It is written, the
-   harness is built and green, and it is UNMEASURED. Run both arms over the 24
-   recorded abstentions. The first screen needs no hand-labelling: how many does
-   each arm still abstain on. The guard beside it is the 49 records the run
-   answered, because a lever that turns a correct abstention into a guess is
-   worse than the defect. A smoke run of 2 showed the mechanism firing. Two
-   records decide nothing.
-2. **Defect 12 — a facade package indexes to nothing.** The stopping rule is
-   measured and written in `DEFECT-12-STOPPING-RULE.md`; `hspec` goes 14 chunks
-   to 133 offline. Index the new corpus, then replay the four recorded `hspec`
-   records against it. That closes the answer half without a run.
-3. **Defect 11 — did the better index reach the ANSWERS?** Index-side is done, 0
-   missed of 45 at the live retrieval limit. The answer half was filed as needing
-   a live run. It does not: re-retrieve in the container, then replay. This is the
-   negative result the loop has produced twice, so read the `from_str`,
-   `safeParse` and `IntoResponse` answers themselves.
-4. **aeson's 55 duplicate bodies.** Fixed and measured, 1326/55 to 1283/0. That is
-   an index count and a live run adds nothing to it. Ship it.
-5. **Defect 14 — a correct answer, and the code shipped the deprecated form.**
-   The only open item no subagent can see, and the only reason to open
-   `DOCS-LIVE-RUNBOOK.md`. The chain is inspectable first without a new run:
-   `live-docs-rerun3-2026-09-06/trees/` holds each tree's `.pi-tasks/` with the
-   specs and per-task debug logs. Understand it there before spending four hours.
+Defects 15, 12, 11 and the aeson duplicates all closed in the 2026-09-06 session
+and shipped as **0.40.8**. Their numbers are in `DOC_REGRESSINONS.md`; none of
+them needs re-deriving and none needs a live run.
+
+1. **Defect 14 — refine's constraint beats research's refutation.** The chain is
+   read and written down, STEP 0 is measured, and the lever is chosen. Build it.
+   - The base rate is **3 fires in 13,428 task files, 3 of 3 true, 0 false**. The
+     detector and the one pattern the measurement *removed* are both recorded in
+     `DOC_REGRESSINONS.md`. Do not re-derive it; `/home/edgars/hub` and
+     `/home/edgars/tmp` hold the 14,171 files if you want to re-run it.
+   - The fix is a **sibling pass** to `src/task/refuted-constraint.ts`, not a
+     widening of it. That file's own header says why its token class is narrow,
+     and one of the two real cases is an un-backticked API expression it refuses
+     on purpose. Read the header before touching it.
+   - Two real strings to write the failing test against, both quoted in
+     `DOC_REGRESSINONS.md`: ts/TASK_0001's `z.string().email()` inside an
+     `(e.g. …)`, and hs/TASK_0001's backticked `` `wai-test` ``. The first drops
+     to `` `adminEmail` — an email.``; the second is a plain package drop the
+     existing `dropToken` already handles.
+   - Keep it **subtractive**. An appended correction loses to the text it
+     contradicts — that is the whole reason `refuted-constraint.ts` exists.
+   - **Then, and only then, the full run.** This is the one item where no subagent
+     harness can see the outcome, and the only reason to open
+     `DOCS-LIVE-RUNBOOK.md`.
+2. **Defect 16 — a facade package indexes to nothing, in cargo.** `trait
+   IntoResponse` is declared in `axum-core`, which `axum` only re-exports, so both
+   recorded `IntoResponse` records miss and no ranking fix can reach them.
+   `DEFECT-12-STOPPING-RULE.md`'s candidate bound already fits; its **trigger**
+   reads Haskell export lists and does not. Measure a cargo trigger on a package
+   sweep the way the hackage one was measured — do not port it by analogy.
+3. **Defect 17 — retrieval depends on the cache's other packages.** Measured real
+   (55 of 61 records differ) and measured harmless (recall 46/46 both ways). It is
+   a determinism defect. Nothing to ship; the rule it earns is in the file. Reopen
+   it only if a quality metric ever moves on it.
 
 ## Building a new instrument
 
 Two things a retrieval-side harness must do, and neither is optional.
 
 **Run in the container.** Container and host returned different chunks for one
-query, and that alone moved a decided A/B cell from rung 1 to rung 2.
+query, and that alone moved a decided A/B cell from rung 1 to rung 2. Defect 17
+names the mechanism: `bm25()` scores over the whole FTS index, so **hold the
+cache's package set fixed across arms** or you are measuring cache history.
+
+The container is provisioned for this. `/home/agent/pi-task-replay` holds the
+tree with `bun install` already done, and `/home/agent/docs-live/run/{ts,rs,hs}`
+are the seeded projects `--retrieve` points at. Re-copy the repo when src moves.
 
 **Set `PI_BIN`.** `getPiInvocation` re-invokes `process.argv[1]` when it exists,
 so a script under `scripts/` that spawns a child spawns *itself*, once per record.

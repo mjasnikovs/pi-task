@@ -459,9 +459,87 @@ subagent harness can see**. Defect 11's lesson was that a better index is not a
 better answer. This is that a correct answer is not correct code. `.email()` still
 exists in 4.5.4, so the build is green and only the marker sweep catches it.
 
-The chain is inspectable without a new run — `live-docs-rerun3-2026-09-06/trees/`
-holds each tree's `.pi-tasks/` with the task specs and per-task debug logs. Proving
-a *fix* still needs a full run.
+### The chain, read out of the artifact — no run needed
+
+`ts/.pi-tasks/TASK_0001.md` holds the whole thing in one file, in phase order
+(`refine 17.5s → research 128.8s → grill → compose → critique`).
+
+```
+refine    CONSTRAINTS
+          "`adminEmail` — an email (e.g. z.string().email())"      <- written from memory
+research  APIS
+          "z.email()  top-level v4 email string schema … (z.string().email() still
+           exists in 4.5.4 but is @deprecated; z.email() is canonical)"   <- CORRECT
+research  CONTEXT
+          "Open question (unverified): … the constraint text says to use
+           `z.string().email()`, but I cannot confirm v4 semantics"       <- lost it
+compose   spec
+          "`adminEmail` as an email string (e.g. `z.string().email()`)"   <- constraint won
+```
+
+So the defect is not "the answer did not arrive". It arrived, in the same file,
+one section above. **Refine writes an API example into CONSTRAINTS before research
+runs, and compose prefers the constraint over the research finding that refutes
+it.** Downstream, TASK_0002/0003/0004 then freeze it — "must not change",
+"preserve `src/config.ts` as-is" — so one refine line propagates through four
+tasks.
+
+Base rate for the *shape*: **9 of 9 tasks in this run put an API call inside a
+refined-prompt CONSTRAINTS bullet.** That is normal and mostly harmless. What is
+not harmless is a constraint the run's own research contradicts.
+
+### STEP 0 — how often does research refute the constraint's API?
+
+A detector, run over every task file on this machine: a research line carrying a
+deprecation claim (`deprecated`, `superseded`, `merged into`, `no longer
+recommended/supported/maintained`) in which a code-shaped token also appears
+verbatim in that task's CONSTRAINTS section.
+
+```
+14,171 task files scanned
+13,428 with a non-empty CONSTRAINTS and a research section
+     3 fires        <- 3 of 3 TRUE, 0 false positives
+```
+
+Two are defect 14 itself; the third is the same defect in Haskell, and it is worse
+because the run's own research spelled out the consequence:
+
+```
+ts/TASK_0001  z.email()  … (z.string().email() … is @deprecated)
+ts/TASK_0002  Open question: … `z.string().email()` may be superseded by `z.email()`
+hs/TASK_0001  wai-test  test-suite dep REQUIRED by constraints BUT deprecated on
+              hackage: "Since WAI 3.0, this code has been merged into wai-extra";
+              last real release … will NOT resolve
+```
+
+`\breplaced by\b` was in the first pattern set and was **removed by the
+measurement**: it fired on `src/shared/index.ts  Empty file to be replaced by
+schema.ts exports`, a claim about a file, and it was the only false positive in
+the corpus. Dropping it loses none of the three.
+
+Rare — 3 in 13,428 — because it needs a pinned major the model predates, which is
+the exact condition this whole live test was built to create. Inside that
+condition it is 3 of the run's 9 tasks, and it caused the ts HARD FAIL.
+
+### The lever, and why it is a second pass and not a wider first one
+
+`src/task/refuted-constraint.ts` already deletes a refine-invented constraint that
+research refutes, subtractively, before compose. Its mechanics fit — `dropToken`
+even collapses an emptied `(e.g., )`. Three things it does not do:
+
+- it reads research **CONTEXT** only, and two of the three fires are in **APIS**;
+- its negation set is about **need** ("no `X` dependency is needed"), not about
+  **deprecation**;
+- `isPackageToken` rejects an API expression on purpose, and the zod constraint's
+  `z.string().email()` is an un-backticked API expression, not a package.
+
+The hs case is the easy half: `` `wai-test` `` is backticked and is a package, so
+only the source section and the negation family are missing. The ts case needs a
+token class the existing pass deliberately refuses, so widening that pass would
+loosen the dependency channel it was built to keep narrow. A sibling pass.
+
+Unbuilt. **Proving a fix still needs a full run** — this is the one item where the
+subagent harnesses cannot see the outcome.
 
 ---
 
