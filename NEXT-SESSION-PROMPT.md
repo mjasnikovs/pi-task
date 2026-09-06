@@ -66,7 +66,7 @@ It does not pin the model, and a host model is not the container's.
 
 Defects 14, 16, 18, 20, 21 and 24, the recall gate and seven self-review or
 scorer bugs all closed in the 2026-09-06 session, shipped as **0.40.10** through
-**0.40.13**. Defects 19, 22 and 23 are mechanised and have no lever. Their numbers
+**0.40.14**. Defects 19, 22 and 23 are mechanised and have no lever. Their numbers
 are in `DOC_REGRESSINONS.md`; none needs re-deriving.
 
 One number for the whole session, 0.40.8 against HEAD on the defines harness:
@@ -79,21 +79,17 @@ twice — re-run 4's three HARD FAILs produced defects 19 to 23, and re-run 5
 verified defect 18 live AND surfaced defect 24 and a scorer artifact that an
 earlier fix in the same session had created.
 
-1. **`PACKAGE_RETRIEVE_LIMIT` 8 against 50, on the ANSWER side.** The retrieval
-   side is measured over all 101 pairs and favours 50: defines 91 -> 97, monotone
-   through 24 and 32, flat at 100, seven gains against one loss, **p = 0.0703**.
-   It was not changed on that, because the cost is +57% of text into the
-   extraction child and this metric cannot see the child. Run `docs-replay
-   --retrieve` with two arms, limit 8 and limit 50, over the recorded records.
-   `PROJECT_RETRIEVE_LIMIT` is already 50 and this file records that nobody knows
-   why the two differ, so a decision here also closes that.
+1. **Nothing is open. Start with a full run.** `PACKAGE_RETRIEVE_LIMIT` was the
+   last question and it is answered: 8 -> 50, defines 91/101 -> 97/101 and
+   ANSWERED 67/94 -> 79/94, McNemar p = 0.0075, abstention 29% -> 16%. Shipped in
+   0.40.14 and **no live run has exercised it**. That is the first thing the next
+   run measures — the replay corpus says the child answers more; a live run says
+   whether the extra text helps or distracts the workers that read the answers.
 
-   Do NOT re-sweep the retrieval side, and do not trust the older npm-only sweep
-   that said the plateau is 16 — it covered zod and hono only.
-
-   Defect 24's other half is already REFUTED: dropping `IDENTIFIER_SHAPED` reads
-   90/101 to 88/101, cargo 26/26 to 23/26, at the same wall clock. Hops sit at the
-   FRONT of the content budget, so an extra hop displaces a better chunk.
+   Do not re-open these: dropping `IDENTIFIER_SHAPED` (90/101 -> 88/101), the
+   older npm-only limit sweep that said the plateau is 16 (it covered zod and hono
+   only), and deriving the defines truth set from the index (124 pairs against
+   101, for a circularity risk).
 2. **Run the defines harness before and after anything you change.** It is real
    now, with tests. `bun scripts/docs-defines.ts … --out a.jsonl` then
    `--compare a.jsonl b.jsonl` for an exact paired McNemar. Two arms means two

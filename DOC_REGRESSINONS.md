@@ -148,6 +148,7 @@ one paid — re-run 4's three HARD FAILs produced defects 19, 20, 21, 22 and 23.
 | 23 | a class chunk is 50x the median and BM25 buries it | retrieval | retrieval | found and MECHANISED; the tempting lever orphans signatures |
 | — | a key symbol absent from the corpus | retrieval | — | **limit, not a defect** |
 | — | aeson keeps 55 duplicate bodies | index | offline | **measured fixed** |
+| — | `PACKAGE_RETRIEVE_LIMIT` was 8 for no recorded reason | both | defines + replay | **CHANGED to 50**, answered 67/94 -> 79/94, p=0.0075 |
 
 ## 4's residue. A query that names no type — REFUTED at STEP 0
 
