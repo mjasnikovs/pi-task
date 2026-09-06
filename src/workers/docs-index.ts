@@ -79,6 +79,12 @@ function computeContentHash(pkg: ResolvedPackage, profile: EcosystemProfile): st
         )
     )
     hash.update(ZERO_SEP)
+    // The extractor and the writer, by source. Surfacing only `pkg.entry` below
+    // leaves a package cached whenever a fix moves some OTHER module — the
+    // wrapped `instance` head is in aeson's `Types/FromJSON.hs`, never its entry
+    // — and nothing surfaced the duplicate drop in `ingestBody` at all.
+    hash.update(Buffer.from(`${String(profile.surface)}\u0000${String(ingestBody)}`, 'utf8'))
+    hash.update(ZERO_SEP)
     if (pkg.entry && fs.existsSync(pkg.entry)) {
         try {
             hash.update(Buffer.from(profile.surface(fs.readFileSync(pkg.entry, 'utf8')), 'utf8'))
@@ -209,6 +215,12 @@ function ingestBody(
     const insertChunk = cache.db.prepare(
         'INSERT INTO chunks (ecosystem, name, version, file_path, kind, content) VALUES (?, ?, ?, ?, ?, ?)'
     )
+    // The content carries its own `<comment> <path>` header, so two rows that
+    // match on it are the same declaration from the same file, written twice.
+    // aeson's `Data.Aeson.KeyMap` declares its whole API once per `#ifdef`
+    // branch and nothing here preprocesses CPP: 43 of aeson's 55 duplicate
+    // bodies. A second copy carries no second fact and still spends a slot.
+    const seen = new Set<string>()
     for (const abs of files.surface) {
         // Normalise the separator before storing, so the same package indexes to
         // the same rows whatever built the path. The value is a MODEL-FACING
@@ -230,6 +242,8 @@ function ingestBody(
         if (!chunks.length) continue
         filesIngested++
         for (const c of chunks) {
+            if (seen.has(c)) continue
+            seen.add(c)
             insertChunk.run(ecosystem, pkg.name, pkg.version, rel, 'dts', c)
             chunksWritten++
         }

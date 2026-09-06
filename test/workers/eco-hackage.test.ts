@@ -270,6 +270,45 @@ describe('the surface', () => {
         expect(out).not.toContain('show g =')
         expect(out.length).toBeLessThan(src.length)
     })
+
+    // aeson ships seven identical `instance {-# OVERLAPPING #-}` chunks: the head
+    // continues on the next line, and keeping only the first line leaves a chunk
+    // that names nothing. A content-free chunk still costs a retrieval slot.
+    test('an instance head that wraps onto the next line survives whole', () => {
+        const wrapped = haskellSurface(
+            'module M where\n'
+                + 'instance {-# OVERLAPPING #-}\n'
+                + '    ToJSON [Char] where\n'
+                + '  toJSON = stringEncode\n'
+        )
+        expect(wrapped).toContain('ToJSON [Char]')
+        expect(wrapped).not.toContain('toJSON = stringEncode')
+    })
+
+    test('a bare `instance` keyword with the head underneath survives whole', () => {
+        const wrapped = haskellSurface(
+            'module M where\n'
+                + 'instance\n'
+                + '    ( FromUntaggedValue arity a\n'
+                + '    ) => FromUntaggedValue arity (a :+: b)\n'
+                + '  where\n'
+                + '    parseUntaggedValue p value = go\n'
+        )
+        expect(wrapped).toContain('FromUntaggedValue arity (a :+: b)')
+        expect(wrapped).not.toContain('parseUntaggedValue p value = go')
+    })
+
+    test('a multi-constraint instance head survives whole', () => {
+        const wrapped = haskellSurface(
+            'module M where\n'
+                + 'instance ( Selector s\n'
+                + '         , GToJSON a\n'
+                + '         ) => GToJSON (S1 s a) where\n'
+                + '  gToJSON = go\n'
+        )
+        expect(wrapped).toContain('GToJSON (S1 s a)')
+        expect(wrapped).not.toContain('gToJSON = go')
+    })
 })
 
 describe('the Hackage version lookup', () => {

@@ -8,8 +8,10 @@ import {ensureIndexed, chunkerFingerprint} from '../../src/workers/docs-index.js
 import {ECOSYSTEMS} from '../../src/workers/docs-ecosystems.js'
 import {retrieveChunks} from '../../src/workers/docs-retrieve.js'
 import {resolvePackage, type ResolvedPackage} from '../../src/workers/docs-resolve.js'
+import {resolveHackage} from '../../src/workers/eco-hackage.js'
 
 const FIXTURES = path.resolve(__dirname, '__fixtures__')
+const HS_MODULES = path.join(FIXTURES, 'hs-modules')
 
 test('ensureIndexed walks tiny-pkg and writes chunks for .d.ts + README', () => {
     const cache = openCache(':memory:')
@@ -193,6 +195,32 @@ test('a changed surface extractor re-indexes a package that has not moved', () =
     }
 })
 
+test('a surface change that misses the ENTRY file still re-indexes', () => {
+    // The hash surfaces `pkg.entry` and nothing else, so an extractor fix that
+    // only moves another module leaves every cached package on the old chunks.
+    // That is defect 8 one level down: the fix to the wrapped `instance` head
+    // touches aeson's `Types/FromJSON.hs`, never its entry module.
+    const cache = openCache(':memory:')
+    try {
+        const pkg = resolveHackage('tiny-hs', HS_MODULES, {modulesDir: HS_MODULES})
+        const older = {
+            ...ECOSYSTEMS.hackage,
+            surface: (t: string) =>
+                ECOSYSTEMS.hackage.surface(t.includes('decodeValue') ? `-- OLDER BUILD\n${t}` : t)
+        }
+
+        expect(ensureIndexed(cache, pkg, older).hitCache).toBe(false)
+        expect(ensureIndexed(cache, pkg, ECOSYSTEMS.hackage).hitCache).toBe(false)
+        const rows = cache.db
+            .prepare("SELECT content FROM chunks WHERE ecosystem = 'hackage' AND name = ?")
+            .all(pkg.name) as {content: string}[]
+        expect(rows.some(r => r.content.includes('OLDER BUILD'))).toBe(false)
+        expect(ensureIndexed(cache, pkg, ECOSYSTEMS.hackage).hitCache).toBe(true)
+    } finally {
+        cache.close()
+    }
+})
+
 test('a changed CHUNKER re-indexes too — the cache holds chunks, not surface', () => {
     // The hash surfaced the entry file but stopped there, so a fix to the split
     // regex left every already-indexed package with the chunks the broken one cut.
@@ -340,6 +368,28 @@ describe('parallel ESM/CJS declarations index once', () => {
             const bodies = bodiesOf(cache, pkg)
             expect(bodies.length).toBe(new Set(bodies).size)
             expect(bodies.join('\n')).toContain('parseUnique')
+        } finally {
+            cache.close()
+        }
+    })
+
+    // aeson: 55 duplicate bodies, 43 of them from `Data.Aeson.KeyMap`, which
+    // declares its whole API once per `#ifdef USE_ORDEREDMAP` branch. Identical
+    // content from the same file carries no second fact and still spends a
+    // retrieval slot — the same cost as the `.d.cts` twins above.
+    test('a file declaring the same API twice writes each declaration once', () => {
+        const cache = openCache(':memory:')
+        try {
+            const pkg = resolveHackage('tiny-hs', HS_MODULES, {modulesDir: HS_MODULES})
+            ensureIndexed(cache, pkg, ECOSYSTEMS.hackage)
+            const rows = cache.db
+                .prepare(
+                    'SELECT content FROM chunks WHERE ecosystem = ? AND name = ? AND version = ?'
+                )
+                .all('hackage', pkg.name, pkg.version) as Array<{content: string}>
+            const bodies = rows.map(r => r.content)
+            expect(bodies.length).toBe(new Set(bodies).size)
+            expect(bodies.join('\n')).toContain('lookupKey')
         } finally {
             cache.close()
         }

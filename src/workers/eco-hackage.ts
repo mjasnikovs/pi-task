@@ -419,6 +419,39 @@ function haddockBlockAt(lines: string[], start: number): {text: string[]; next: 
     return {text: text.filter(l => l.trim() !== '--'), next: lines.length}
 }
 
+/**
+ * A head line that has not finished: an open bracket, an arrow, a pragma, or the
+ * bare keyword — aeson writes the constraint block on the lines underneath.
+ */
+const INSTANCE_HEAD_CONTINUES_RE = /(?:=>|->|,|\(|\[|#-\})\s*$|^\s*instance\s*$/
+
+/**
+ * The head of an `instance`, which may wrap.
+ *
+ * `instance {-# OVERLAPPING #-}` and `instance ( Selector s` are both a first
+ * line that names nothing, and aeson ships twelve chunks that are exactly that —
+ * each one still costing a retrieval slot. The head runs to `where`, or to the
+ * first line that closes its brackets without ending mid-declaration.
+ */
+function instanceHead(block: readonly string[]): string[] {
+    const head: string[] = []
+    let depth = 0
+    for (const line of block) {
+        const w = /\bwhere\b/.exec(line)
+        if (w) {
+            head.push(line.slice(0, w.index + 'where'.length).trimEnd())
+            return head
+        }
+        head.push(line)
+        for (const c of line) {
+            if (c === '(' || c === '[') depth++
+            else if (c === ')' || c === ']') depth--
+        }
+        if (depth <= 0 && !INSTANCE_HEAD_CONTINUES_RE.test(line)) return head
+    }
+    return head
+}
+
 export function haskellSurface(rawSrc: string): string {
     // Haddock blocks survive; ordinary `{- … -}` commentary does not.
     const src = stripBlockComments(rawSrc)
@@ -515,7 +548,7 @@ export function haskellSurface(rawSrc: string): string {
         } else if (TYPE_HEAD_RE.test(line)) {
             const head = TYPE_HEAD_RE.exec(line)![1]
             // An instance's indented lines are definitions, not fields.
-            out.push(...pending, ...(head === 'instance' ? [line] : block), '')
+            out.push(...pending, ...(head === 'instance' ? instanceHead(block) : block), '')
         }
         pending = []
         i = j
