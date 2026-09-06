@@ -132,7 +132,7 @@ the record; the model is not.
 | — | aeson keeps 55 duplicate bodies | index | offline | **measured fixed** |
 | 16 | a facade package indexes to nothing, in **cargo** | index | retrieval | **SHIPPED** on retrieval; answer half replayed FLAT at n=4, no recorded stimulus |
 | 17 | retrieval depends on the cache's other packages | retrieval | retrieval | **real, and measured harmless** |
-| 21 | `export declare function` never started a chunk | index | offline + retrieval | fixed and COMMITTED, **not published**: retrieved bytes -38%, answer side unmeasured |
+| 21 | `export declare function` never started a chunk | index | offline + retrieval | **SHIPPED**, defining chunks 16/62 -> 34/62 paired, p=1.2e-4 |
 | 20 | a Rust item inside a `name! { … }` block is not indexed | index | offline + replay | **SHIPPED**, +393 public names; one causal answer, no aggregate at n=14 |
 | 19 | a symbol declared only in a NON-prefixed dependency | both | recorded corpus | caused the rs HARD FAIL; **BOTH bounds REFUTED** — `[dependencies]` 2 right of 20, lock 3 right of 18 |
 | 18 | one answer in five carries a false hallucination warning | extraction | recorded corpus | **SHIPPED**, 21/21 now report stitched |
@@ -1055,18 +1055,42 @@ constant.** `docs-retrieve.ts` says so in its own header: "Nothing in this repo
 records WHY they differ" (8 for a package, 50 for project source). The byte budget
 is 24,000 and retrieval now uses 7% of it.
 
-So defect 21 is **committed and deliberately NOT published**. Two questions have
-to be answered first, and both need the extraction child, not the index:
+### And it IS paid for — measured on a metric that needs no model
 
-1. Does an answer improve on 1,749 bytes of actual declarations where it had
-   11,324 bytes of arbitrary 8 KB slab? Precision may beat volume; defect 11 is
-   the standing proof that an index change need not reach the answer at all.
-2. If it does not, the fix is not to revert the chunker — it is to measure the
-   limit. Sweep it the way defect 11's hop cap was swept, and let the number
-   choose. Do not pick one that restores the old byte total; that is fitting to a
-   number rather than measuring.
+The question the byte drop raises is not "how many bytes" but "does retrieval
+still return the chunk that DEFINES what was asked about". That is answerable
+from the index alone.
+
+Every recorded `zod` and `hono` record — 37 of them, four runs — re-retrieved in
+both arms, in the container, with the cache holding only those two packages so
+defect 17 is controlled. A chunk **defines** a symbol when its own first
+declaration head names it.
+
+```
+                                  before      after
+retrieved chunks                     365         373
+retrieved bytes                  614,143     451,716    -26%
+ground-truth symbol MENTIONED      62/62       62/62    saturated, as always
+a retrieved chunk DEFINES it       16/62       34/62
+```
+
+Paired over the same 62 (record, symbol) pairs:
+
+```
+both 14    only BEFORE 2    only AFTER 20    neither 26
+McNemar exact, two-sided:  p = 1.2e-4
+```
+
+**The 26% of bytes buys more than double the definitions.** The two losses are
+real and stated: a smaller chunk can be outranked where a large slab happened to
+contain the declaration by accident. Twenty gained against two lost.
 
 `bun run test` 4430 pass / 0 fail; `npm run lint:check` green.
+
+`PACKAGE_RETRIEVE_LIMIT = 8` is still an unmeasured constant, and it is now the
+binding one — retrieval uses 7% of the 24,000-character budget. Sweeping it is
+the obvious next measurement, and it is a SEPARATE change: this one stands on its
+own number.
 
 ### The other two split regexes were audited and are clean
 
