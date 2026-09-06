@@ -53,8 +53,19 @@ function memberOfLanguageGlobal(span: string): Set<string> {
 
 /** `admin_email` and `adminEmail` are the same symbol under `#[serde(rename_all)]`. */
 function caseFold(token: string): string {
-    return token.replace(/_/g, '').toLowerCase()
+    return token.replace(/[_-]/g, '').toLowerCase()
 }
+
+/**
+ * A hyphenated identifier run, which `IDENTIFIER_RE` splits in two.
+ *
+ * The cargo facade fix files a supplement's chunks under the crate's PUBLISHED
+ * name — `axum-core-0.5.6/src/…` — while Rust code writes `axum_core`, and
+ * `eco-cargo.ts` treats the two as one crate. Without this the corpus offers
+ * `axum` and `core`, never `axumcore`, and the scorer calls the code spelling an
+ * invention.
+ */
+const HYPHENATED_RE = /[A-Za-z_$][\w$]*(?:-[A-Za-z_$][\w$]*)+/g
 
 /**
  * Identifiers the answer ASSERTS as code that occur nowhere in what the tool
@@ -110,13 +121,22 @@ export function scoreRecall(
 export function inventedSymbols(answer: string, corpus: string): string[] {
     const known = new Set(corpus.match(IDENTIFIER_RE) ?? [])
     const folded = new Set([...known].map(caseFold))
+    for (const run of corpus.match(HYPHENATED_RE) ?? []) folded.add(caseFold(run))
     const out = new Set<string>()
     for (const sentence of answer.split(SENTENCE_SPLIT_RE)) {
         if (DENIAL_RE.test(sentence)) continue
         for (const span of sentence.matchAll(CODE_SPAN_RE)) {
             if (STDLIB_PATH_RE.test(span[1].trim())) continue
             const languageMembers = memberOfLanguageGlobal(span[1])
+            // Both directions: the answer may write the hyphenated spelling where
+            // the corpus holds the underscored one. `IDENTIFIER_RE` splits
+            // `tokio-util` into two words the corpus knows separately as neither.
+            const excused = new Set<string>()
+            for (const run of span[1].match(HYPHENATED_RE) ?? []) {
+                if (folded.has(caseFold(run))) for (const part of run.split('-')) excused.add(part)
+            }
             for (const token of span[1].match(IDENTIFIER_RE) ?? []) {
+                if (excused.has(token)) continue
                 // IDENTIFIER_RE admits a trailing `'` so Haskell primes survive whole,
                 // and it swallows the closing quote of a string literal too: `'POST'`
                 // arrives as `POST'`. A prime over a stem the corpus knows is that.

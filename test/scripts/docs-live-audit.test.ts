@@ -135,3 +135,23 @@ test('a package the run never asked about is not scored', () => {
     )
     expect(r).toEqual({hit: 0, of: 0, missed: []})
 })
+
+// The cargo facade fix (defect 16) files a supplement's chunks under the crate's
+// PUBLISHED name — `axum-core-0.5.6/src/…` — while Rust code writes `axum_core`.
+// re-run 5 flagged an answer for `axum_core::body::Body` whose corpus carried
+// `axum-core` throughout. `eco-cargo.ts` already treats the two spellings as one
+// crate; the scorer did not.
+test('a crate named with the other separator is not invented', () => {
+    const corpus = '-- axum-core-0.5.6/src/body.rs\npub struct Body(BoxBody);'
+    expect(inventedSymbols('The type is `axum_core::body::Body`.', corpus)).toEqual([])
+})
+
+test('the reverse spelling is covered too', () => {
+    expect(inventedSymbols('See `tokio-util` here.', 'pub mod tokio_util;')).toEqual([])
+})
+
+test('a name that differs by more than a separator is still invented', () => {
+    expect(inventedSymbols('The type is `axum_kore`.', 'axum-core-0.5.6/src/body.rs')).toContain(
+        'axum_kore'
+    )
+})

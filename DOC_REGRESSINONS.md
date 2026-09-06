@@ -260,6 +260,27 @@ defect 21 — cargo was already saturated at 26/26 and hackage's residue is defe
 because the corpus holds exactly one `tokio` pair; its evidence is the causal
 answer instead.
 
+## The cargo facade fix created a scorer false positive — found and closed
+
+re-run 5 flagged an rs answer for inventing `axum_core`. It had not. Defect 16
+files a supplement's chunks under the crate's **published** name —
+`axum-core-0.5.6/src/…` — while Rust code writes `axum_core`, and `eco-cargo.ts`
+already treats the two spellings as one crate. The fidelity scorer did not.
+
+`caseFold` stripped `_` and lowercased; it now strips `-` as well, and both the
+corpus and the answer are scanned for hyphenated runs, which `IDENTIFIER_RE`
+otherwise splits into two words the corpus knows as neither.
+
+```
+101 scored records across runs 2, 3 and 5
+flags  8 -> 7      only `axum_core` cleared
+remaining: fields, are, assert, rename, error_value, router, config — all false,
+           all the query-echo and English-in-a-code-span families already on file
+```
+
+Worth stating plainly: this was a false number **my own fix produced**, and it
+would have been read as the docs tool fabricating a crate name.
+
 ## Defect 24. The value hop lands on the chunk whose PATH says the name
 
 re-run 5's one rs abstention asked for `axum::serve`'s signature. `pub fn serve`
