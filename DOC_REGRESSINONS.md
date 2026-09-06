@@ -132,6 +132,7 @@ the record; the model is not.
 | — | aeson keeps 55 duplicate bodies | index | offline | **measured fixed** |
 | 16 | a facade package indexes to nothing, in **cargo** | index | retrieval | **SHIPPED**, 3 of 4 axum queries reach the trait |
 | 17 | retrieval depends on the cache's other packages | retrieval | retrieval | **real, and measured harmless** |
+| 18 | one answer in five carries a false hallucination warning | extraction | recorded corpus | found, 21/21 false, fix in progress |
 | 14 | correct answer, deprecated code shipped | neither | **full run** | lever BUILT, 3/3 on the corpus; live run pending |
 
 ## 4's residue. A query that names no type — REFUTED at STEP 0
@@ -861,6 +862,53 @@ a true one, and a loose scorer is as fatal as a strict one. Left flagged.
 The live number it distorts is worth knowing about: quoting a fidelity rate from
 a run whose project uses `port` and `adminEmail` as field names will read three
 flags low on quality it did not lose.
+
+## Defect 18. One docs answer in five carries a false hallucination warning
+
+Nothing in this file had ever looked at `excerptVerified`. It is checked on every
+answer, and a `false` verdict makes `formatResultText` prepend this to the text
+the CALLING worker reads:
+
+```
+WARNING: cited excerpt not found verbatim in source content
+         — the child pi may have paraphrased or hallucinated.
+```
+
+**Base rate, four recorded runs plus the 2026-09-06 one:**
+
+```
+run 1   hs 6/22  rs 4/17  ts 3/17
+run 2   hs 1/10  rs 2/5   ts 3/14
+run 3   hs 1/6   rs 0/10  ts 4/17
+run 4   hs 1/13  rs 4/9   ts 3/18
+run 5   —        rs 2/7   ts 6/19
+                                     32 of 158 recorded = 20%, per-project 0–44%
+```
+
+**And it is wrong every time it can be checked.** Every unverified excerpt with a
+replayable corpus, greedily covered by the longest runs the corpus does contain:
+
+```
+21 of 21 excerpts:  0 words absent from the corpus.   0 fabrications.
+                    2 to 11 verbatim spans each.
+the only "absent" tokens in the whole set are the child's own `...` elisions
+```
+
+So the excerpt is **stitched**, never invented — which is the documented
+behaviour of the extraction prompt (`medium` stitches quotes; see the extraction
+cell in the reasoning ladder). `excerptVerified` measures "is this ONE contiguous
+quote". The warning reports it as "may have hallucinated".
+
+That matters because it is not a scorer, it is **live text in the tool return**.
+One answer in five tells the calling worker its own correct answer may be made up,
+and research's measured discard base rate is 54%.
+
+**The fix keeps the verdict and fixes the claim.** `child-output.ts` says
+plainly that `ExcerptVerification` exists to add EVIDENCE and that "the verdict
+itself is not loosened", so `verified` stays exactly as it is. What changes is
+what the warning says: an excerpt every word of which is covered by verbatim spans
+is reported as stitched from N spans; only an excerpt carrying text the source does
+not have keeps the hallucination wording.
 
 ---
 
