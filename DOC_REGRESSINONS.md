@@ -120,25 +120,29 @@ the record; the model is not.
 
 ---
 
-# Still open
+# Still open — and nothing is
+
+Every row below is shipped, refuted, or filed with its mechanism named. The
+loop's rule for that state is at the top of this file: the full run in
+`DOCS-LIVE-RUNBOOK.md` is the only remaining DISCOVERY instrument, and the last
+one paid — re-run 4's three HARD FAILs produced defects 19, 20, 21, 22 and 23.
 
 | # | item | half | instrument | state |
-|---|---|---|---|---|
 | 4r | a query naming no type has nothing to hop to | retrieval | recorded corpus | **REFUTED**, 1 of 158 and it is junk input |
-| — | a key symbol absent from the corpus | retrieval | — | **limit, not a defect** |
 | 11 | English question loses the declaration | both | retrieval + replay | **closed**: `from_str` fixed, `IntoResponse` is defect 16 |
 | 12 | a facade package indexes to nothing | both | retrieval + replay | **closed on hackage**, 3 of 4 answered |
+| 14 | correct answer, deprecated code shipped | neither | **full run** | lever SHIPPED, 3/3 on 12,568 files; the condition did NOT recur in re-run 4 |
 | 15 | child abstains with the answer in hand | extraction | **replay** | **SHIPPED**, p=0.0386 paired over 73 |
-| — | aeson keeps 55 duplicate bodies | index | offline | **measured fixed** |
 | 16 | a facade package indexes to nothing, in **cargo** | index | retrieval | **SHIPPED** on retrieval; answer half replayed FLAT at n=4, no recorded stimulus |
 | 17 | retrieval depends on the cache's other packages | retrieval | retrieval | **real, and measured harmless** |
-| 23 | a class chunk is 50x the median and BM25 buries it | retrieval | retrieval | found and MECHANISED; the tempting lever orphans signatures |
-| 22 | on hackage a package's own name has ~0 IDF | retrieval | retrieval | found and MECHANISED; no lever without an FTS schema change |
-| 21 | `export declare function` never started a chunk | index | offline + retrieval | **SHIPPED**, defining chunks 16/62 -> 34/62 paired, p=1.2e-4 |
-| 20 | a Rust item inside a `name! { … }` block is not indexed | index | offline + replay | **SHIPPED**, +393 public names; one causal answer, no aggregate at n=14 |
-| 19 | a symbol declared only in a NON-prefixed dependency | both | recorded corpus | caused the rs HARD FAIL; **BOTH bounds REFUTED** — `[dependencies]` 2 right of 20, lock 3 right of 18 |
 | 18 | one answer in five carries a false hallucination warning | extraction | recorded corpus | **SHIPPED**, 21/21 now report stitched |
-| 14 | correct answer, deprecated code shipped | neither | **full run** | lever SHIPPED, 3/3 on 12,568 files; the condition did NOT recur in re-run 4 |
+| 19 | a symbol declared only in a NON-prefixed dependency | both | recorded corpus | caused the rs HARD FAIL; **BOTH bounds REFUTED** — `[dependencies]` 2 right of 20, lock 3 right of 18 |
+| 20 | a Rust item inside a `name! { … }` block is not indexed | index | offline + replay | **SHIPPED**, +393 public names; one causal answer, no aggregate at n=14 |
+| 21 | `export declare function` never started a chunk | index | offline + retrieval | **SHIPPED**, defining chunks 16/62 -> 34/62 paired, p=1.2e-4 |
+| 22 | on hackage a package's own name has ~0 IDF | retrieval | retrieval | found and MECHANISED; no lever without an FTS schema change |
+| 23 | a class chunk is 50x the median and BM25 buries it | retrieval | retrieval | found and MECHANISED; the tempting lever orphans signatures |
+| — | a key symbol absent from the corpus | retrieval | — | **limit, not a defect** |
+| — | aeson keeps 55 duplicate bodies | index | offline | **measured fixed** |
 
 ## 4's residue. A query that names no type — REFUTED at STEP 0
 
