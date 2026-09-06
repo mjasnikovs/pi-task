@@ -1057,6 +1057,26 @@ hyper          132 ->  140  (+8)
 Thirty-two of the fifty-two trees are byte-identical — the ones with no macro
 block. Nothing is taken from any of them.
 
+### Verified through the real `docsRaw`, defect 20 isolated
+
+HEAD~1 against HEAD, so defect 16 is in both arms and only the macro descent
+differs. Container, cold cache per arm, same project.
+
+```
+                                      HEAD~1        HEAD
+tokio  "TcpListener bind signature"   8 chunks      9 chunks
+                                      16,325 B      20,516 B
+                                      struct TcpListener  false -> TRUE
+tokio  "tokio::net::TcpListener accept"           false -> TRUE
+
+indexed chunks   tokio 1,157 -> 1,410   axum 401 -> 437   tower 553 -> 587
+```
+
+Two axum/tower queries retrieve slightly FEWER bytes (1,080 -> 1,061 and
+678 -> 480). Nothing was removed from either crate; the ranking moved because both
+gained chunks. That is defect 17's mechanism inside a single package, and it is
+the reason a retrieval A/B must hold the cache fixed.
+
 ### And it exposed the same hash hole a THIRD time
 
 `computeContentHash` hashed `String(profile.surface)`. Cargo's `surface` is
