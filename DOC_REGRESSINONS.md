@@ -998,6 +998,10 @@ The other direction is pinned too: an excerpt carrying one invented word still
 warns, and the two worker tests that assert the warning appear still pass — they
 now require a genuinely absent word to do so, so they got stricter, not looser.
 
+The cover is greedy and runs on every answer; measured over the 73 records it
+costs 0.25 ms mean, 0.7 ms worst, and 1.5 ms on a synthetic 400-word excerpt
+against a full 24 KB corpus.
+
 And the verdict really is untouched, replayed rather than asserted:
 
 ```
