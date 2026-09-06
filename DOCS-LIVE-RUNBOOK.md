@@ -175,6 +175,24 @@ for (const r of db.prepare(\"select ecosystem,name,version,indexed_at from packa
 | the 8-minute settle | can cut the final gate; tasks and tree are still fully scoreable |
 | task count | has no cap. `granularityFloor` only pushes up, and renumbering a spec does not shrink it — ask for fewer deliverables |
 
+## Score the RETRIEVAL, without a model
+
+`scripts/docs-defines.ts` asks the one question about retrieval that is not
+saturated: does a returned chunk DEFINE the symbol the query names? "Mentioned"
+reads 101/101 on every arm of every comparison; "defines" reads cargo 26/26, npm
+38/42, hackage 26/33, and it moved on defect 21 at p=1.2e-4.
+
+It re-retrieves, so it runs HERE, against pinned deps, with the cache's package
+set held fixed across arms.
+
+```bash
+bun scripts/docs-defines.ts /home/agent/allrec/*.jsonl   --project ts=<ts project> --project rs=<rs project> --project hs=<hs project>   --out /tmp/a.jsonl
+bun scripts/docs-defines.ts --compare /tmp/a.jsonl /tmp/b.jsonl   # paired, exact McNemar
+```
+
+Two arms means two trees and two `XDG_CACHE_HOME`s, never one cache re-indexed —
+defect 17 is why.
+
 ## Instrumentation
 
 - `PI_TASK_TYPEONLY_LOG=<file>.jsonl` — one JSON line per docs **answer**: `module`,
