@@ -2054,6 +2054,19 @@ the same lesson as defect 13's missing `.gitignore`.
 `tower = { version = "0.5", features = ["util"] }`, split out of `seedRs` so it is
 testable without running `cargo fetch`.
 
+**Re-run 7 is the live evidence, and it is unambiguous.** rs wrote
+`tests/config.rs` with:
+
+```rust
+use tower::ServiceExt;
+…
+    .oneshot(
+```
+
+No hand-rolled `poll_ready`/`call`, no `RawWaker`, no `use tower_service::Service`
+to be missing. Two of the previous six runs died on that wall and the seventh walked
+straight through it, on a one-line manifest change.
+
 This also closes the docs half properly. `tower` becomes a declared dependency, so
 `manifestCrates` admits it, the `[DEPENDENCY]` banner stops firing on it, and the
 one recorded record that asks `tower` about `oneshot` — the one that answers with
