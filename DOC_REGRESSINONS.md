@@ -2395,6 +2395,44 @@ being even a proxy.
 
 ---
 
+### Defect 26. The audit cannot see a requirement that was DROPPED
+
+`STALE` catches code written against the wrong major. It has no way to catch code
+that does not write the thing at all, and re-run 7's ts is the case:
+
+```
+feature   "…requiring a string name, a port between 1 and 65535, and an admin email"
+tool      "an email field as z.email() — z.string().email() is deprecated in v4"
+shipped   adminEmail: z.string(),
+```
+
+No validation, a green `bun test`, and no stale marker to match — because the marker
+looks for `z.string().email(`, the v3 spelling, and there is nothing to spell. That
+run would have read **PASS**.
+
+`OBLIGATIONS` is one entry per clause the FEATURES text states in so many words, and
+nothing that needs judgement to score. Four to start: ts validates an email and
+bounds the port, rs and hs map the `adminEmail` wire key. An unmet clause is a
+`HARD FAIL` reason, listed beside the stale ones.
+
+**Proven on the two real trees rather than a fixture:**
+
+```
+run 6 ts   validates an admin email      met       (z.string().email() — deprecated, but it validates)
+run 6 ts   bounds the port to 1..65535   met
+run 7 ts   validates an admin email      NOT MET
+run 7 ts   bounds the port to 1..65535   met
+```
+
+The deprecated form MEETS this check and trips the stale one, which is the right
+split: writing v3's spelling is a different failure from not writing it.
+
+It runs after the `INCOMPLETE` short-circuit, so a project killed mid-run reports
+"did not finish" and not a list of clauses it never reached — re-run 6's hs would
+otherwise have added a spurious one.
+
+---
+
 ## `it` is a rename, and the scorer now reads one — correct, narrow, and inert
 
 `bun:test:it` is the largest hole left, 3/6. `bun-types` declares `it` nowhere:

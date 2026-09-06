@@ -163,3 +163,46 @@ export const STALE: readonly StaleMarker[] = [
         instead: 'scotty 0.30 uses pathParam / queryParam, not param'
     }
 ]
+
+/**
+ * A clause of the feature text that the shipped source has to satisfy.
+ *
+ * STALE catches code written against the WRONG major. It cannot catch code that
+ * does not write the thing at all, and re-run 7 is why that matters: asked for a
+ * schema "requiring a string name, a port between 1 and 65535, and an admin email",
+ * with the tool answering `z.email()` in the same run, it shipped
+ * `adminEmail: z.string()`. No email validation, a green build, no stale marker to
+ * match — a PASS on a run that did not do what it was asked.
+ *
+ * Deliberately thin. One entry per clause the FEATURES text states in so many
+ * words, and no entry that needs judgement to score.
+ */
+export interface Obligation {
+    project: ProjectSpec['id']
+    /** The clause, quoted closely enough to find it in FEATURES. */
+    clause: string
+    /** What the shipped source must contain to have done it. */
+    pattern: RegExp
+}
+
+export const OBLIGATIONS: readonly Obligation[] = [
+    // ts: "requiring a string name, a port between 1 and 65535, and an admin email"
+    {project: 'ts', clause: 'validates an admin email', pattern: /z\s*\.\s*email\(|\.\s*email\(/},
+    {
+        project: 'ts',
+        clause: 'bounds the port to 1..65535',
+        pattern: /\b65535\b/
+    },
+    // rs: the same three obligations, in serde's vocabulary.
+    {
+        project: 'rs',
+        clause: 'maps the adminEmail wire key',
+        pattern: /adminEmail/
+    },
+    // hs: aeson's.
+    {
+        project: 'hs',
+        clause: 'maps the adminEmail wire key',
+        pattern: /adminEmail/
+    }
+]

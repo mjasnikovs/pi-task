@@ -1,4 +1,5 @@
 import {test, expect} from 'bun:test'
+import {OBLIGATIONS} from '../../scripts/docs-live-truth.js'
 import {mkdirSync, mkdtempSync, writeFileSync} from 'node:fs'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
@@ -184,4 +185,26 @@ test('no .pi-tasks is zero tasks, not a finished run', () => {
         tasks: 0,
         done: 0
     })
+})
+
+// STALE catches code written against the wrong major. It cannot catch code that does
+// not write the thing at all: re-run 7's ts shipped `adminEmail: z.string()` against
+// a feature requiring an admin email, built green, matched no stale marker, and would
+// have read PASS. Verified on the two real trees — run 6 meets it, run 7 does not.
+const tsEmail = OBLIGATIONS.find(o => o.project === 'ts' && o.clause.includes('email'))!
+
+test('the v4 form meets the email obligation', () => {
+    expect(tsEmail.pattern.test('adminEmail: z.email(),')).toBe(true)
+})
+
+test('the deprecated v3 form still meets it — it validates', () => {
+    expect(tsEmail.pattern.test('adminEmail: z.string().email(),')).toBe(true)
+})
+
+test('a bare string does not meet it', () => {
+    expect(tsEmail.pattern.test('adminEmail: z.string(),')).toBe(false)
+})
+
+test('the field NAME alone does not meet it', () => {
+    expect(tsEmail.pattern.test('const adminEmail = raw.adminEmail')).toBe(false)
 })

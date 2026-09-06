@@ -15,12 +15,20 @@ import {execFileSync} from 'node:child_process'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 import {readTypeOnlyLog, type TypeOnlyLogRecord} from '../src/workers/typeonly-log.js'
-import {PROJECTS, TRUTH, STALE, type ProjectSpec, type TruthEntry} from './docs-live-truth.js'
+import {
+    PROJECTS,
+    TRUTH,
+    STALE,
+    type ProjectSpec,
+    type TruthEntry,
+    OBLIGATIONS
+} from './docs-live-truth.js'
 
 const IDENTIFIER_RE = /[A-Za-z_][A-Za-z0-9_']{2,}/g
 const CODE_SPAN_RE = /`([^`]+)`/g
 const SENTENCE_SPLIT_RE = /(?<=[.;])\s+/
-const DENIAL_RE = /\b(not|no|neither|nor|never|cannot|absent|missing|unconfirmed|contradicts)\b|n't/i
+const DENIAL_RE =
+    /\b(not|no|neither|nor|never|cannot|absent|missing|unconfirmed|contradicts)\b|n't/i
 
 /**
  * Words the LANGUAGE provides, not the package. A literal or a stdlib global says
@@ -29,12 +37,62 @@ const DENIAL_RE = /\b(not|no|neither|nor|never|cannot|absent|missing|unconfirmed
  * in that package's corpus anyway, so the union costs nothing.
  */
 const LANGUAGE_WORDS = new Set([
-    'true', 'false', 'null', 'undefined', 'void', 'await', 'async', 'return', 'const', 'let',
-    'JSON', 'Promise', 'Array', 'Object', 'String', 'Number', 'Boolean', 'Date', 'Map', 'Set',
-    'Math', 'console', 'RegExp', 'Symbol', 'BigInt', 'Error', 'TypeError',
-    'Ok', 'Err', 'Some', 'None', 'Vec', 'Option', 'Result', 'bool', 'str', 'u16', 'u32', 'i32',
-    'usize', 'pub', 'struct', 'impl', 'enum', 'trait', 'derive',
-    'Just', 'Nothing', 'Maybe', 'Either', 'Left', 'Right', 'Int', 'Bool', 'True', 'False',
+    'true',
+    'false',
+    'null',
+    'undefined',
+    'void',
+    'await',
+    'async',
+    'return',
+    'const',
+    'let',
+    'JSON',
+    'Promise',
+    'Array',
+    'Object',
+    'String',
+    'Number',
+    'Boolean',
+    'Date',
+    'Map',
+    'Set',
+    'Math',
+    'console',
+    'RegExp',
+    'Symbol',
+    'BigInt',
+    'Error',
+    'TypeError',
+    'Ok',
+    'Err',
+    'Some',
+    'None',
+    'Vec',
+    'Option',
+    'Result',
+    'bool',
+    'str',
+    'u16',
+    'u32',
+    'i32',
+    'usize',
+    'pub',
+    'struct',
+    'impl',
+    'enum',
+    'trait',
+    'derive',
+    'Just',
+    'Nothing',
+    'Maybe',
+    'Either',
+    'Left',
+    'Right',
+    'Int',
+    'Bool',
+    'True',
+    'False'
 ])
 
 /** Node's own module namespace. `node:fs/promises` is a claim about Node, not about zod. */
@@ -46,7 +104,9 @@ const STDLIB_PATH_RE = /^node:/
  */
 function memberOfLanguageGlobal(span: string): Set<string> {
     const out = new Set<string>()
-    for (const m of span.matchAll(/([A-Za-z_][A-Za-z0-9_]*)\s*(?:\.|::)\s*([A-Za-z_][A-Za-z0-9_]*)/g))
+    for (const m of span.matchAll(
+        /([A-Za-z_][A-Za-z0-9_]*)\s*(?:\.|::)\s*([A-Za-z_][A-Za-z0-9_]*)/g
+    ))
         if (LANGUAGE_WORDS.has(m[1])) out.add(m[2])
     return out
 }
@@ -208,14 +268,7 @@ export function taskProgress(root: string): {tasks: number; done: number} {
 /** Source files the run produced, for the stale-API sweep. */
 function sourceFiles(root: string): string[] {
     const out: string[] = []
-    const skip = new Set([
-        'node_modules',
-        '.git',
-        'target',
-        'dist',
-        'dist-newstyle',
-        '.pi-tasks'
-    ])
+    const skip = new Set(['node_modules', '.git', 'target', 'dist', 'dist-newstyle', '.pi-tasks'])
     const walk = (dir: string): void => {
         for (const e of fs.readdirSync(dir, {withFileTypes: true})) {
             if (skip.has(e.name)) continue
@@ -246,10 +299,7 @@ function resolvedPins(root: string, spec: ProjectSpec): Record<string, string | 
         if (fs.existsSync(lock)) {
             const text = fs.readFileSync(lock, 'utf8')
             for (const pkg of Object.keys(out)) {
-                const m = new RegExp(
-                    `name = "${pkg}"\\s*\\nversion = "([^"]+)"`,
-                    'm'
-                ).exec(text)
+                const m = new RegExp(`name = "${pkg}"\\s*\\nversion = "([^"]+)"`, 'm').exec(text)
                 out[pkg] = m?.[1] ?? null
             }
         }
@@ -285,6 +335,7 @@ interface ProjectReport {
     webAfterDocs: string[]
     pins: Record<string, {want: string; got: string | null; ok: boolean}>
     stale: {pkg: string; file: string; instead: string}[]
+    unmet: string[]
     build: {ok: boolean; output: string} | null
     tasks: number
     tasksDone: number
@@ -308,6 +359,7 @@ function auditProject(runRoot: string, spec: ProjectSpec, build: boolean): Proje
         webAfterDocs: [],
         pins: {},
         stale: [],
+        unmet: [],
         build: null,
         tasks: 0,
         tasksDone: 0,
@@ -320,9 +372,8 @@ function auditProject(runRoot: string, spec: ProjectSpec, build: boolean): Proje
     rep.tasks = progress.tasks
     rep.tasksDone = progress.done
 
-    const records: TypeOnlyLogRecord[] = fs.existsSync(jsonl)
-        ? readTypeOnlyLog(fs.readFileSync(jsonl, 'utf8'))
-        : []
+    const records: TypeOnlyLogRecord[] =
+        fs.existsSync(jsonl) ? readTypeOnlyLog(fs.readFileSync(jsonl, 'utf8')) : []
     const trail = readTrail(root)
     rep.docsCalls = trail.docs.length
     rep.docsAnswers = records.length
@@ -387,6 +438,14 @@ function auditProject(runRoot: string, spec: ProjectSpec, build: boolean): Proje
         }
     }
 
+    // A clause the feature states and the source never wrote. STALE cannot see this:
+    // a requirement DROPPED leaves nothing to match against.
+    const sources = files.map(f => fs.readFileSync(f, 'utf8'))
+    for (const o of OBLIGATIONS) {
+        if (o.project !== spec.id) continue
+        if (!sources.some(text => o.pattern.test(text))) rep.unmet.push(o.clause)
+    }
+
     // READ, never re-run. The toolchains live in the container the runs happened
     // in; a build here would be a different machine's answer. `docs-live-build.ts`
     // records the verdict next to the run, and this scores what it recorded — the
@@ -415,6 +474,7 @@ function auditProject(runRoot: string, spec: ProjectSpec, build: boolean): Proje
     }
     if (rep.build && !rep.build.ok) rep.reasons.push(`\`${spec.testCommand}\` failed`)
     for (const s of rep.stale) rep.reasons.push(`stale API in ${s.file}: ${s.instead}`)
+    for (const u of rep.unmet) rep.reasons.push(`feature clause not met: ${u}`)
     for (const [pkg, p] of Object.entries(rep.pins)) {
         if (!p.ok) rep.reasons.push(`pin moved: ${pkg} ${p.want} -> ${p.got ?? 'absent'}`)
     }
@@ -467,7 +527,10 @@ function render(reps: ProjectReport[]): string {
             L.push('')
         }
         if (r.webAfterDocs.length) {
-            L.push(`Went to the web after asking docs: ${[...new Set(r.webAfterDocs)].join(', ')}`, '')
+            L.push(
+                `Went to the web after asking docs: ${[...new Set(r.webAfterDocs)].join(', ')}`,
+                ''
+            )
         }
         if (r.build && !r.build.ok) {
             L.push('```', r.build.output.trim(), '```', '')
@@ -487,11 +550,10 @@ function checkTruth(runRoot: string): void {
             const root = path.join(runRoot, spec.id)
             let found: boolean
             try {
-                execFileSync(
-                    'grep',
-                    ['-rqF', '--', t.symbol, root],
-                    {stdio: 'ignore', timeout: 60_000}
-                )
+                execFileSync('grep', ['-rqF', '--', t.symbol, root], {
+                    stdio: 'ignore',
+                    timeout: 60_000
+                })
                 found = true
             } catch {
                 found = false
