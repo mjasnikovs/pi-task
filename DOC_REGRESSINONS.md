@@ -2368,6 +2368,43 @@ being even a proxy.
 
 ---
 
+## `MIN_TOKEN_LEN` — swept, and 2 stays
+
+A bare `= 2` with no docstring and no measurement, in the same function whose
+tokenizer bug once moved retrieval 82% -> 99%. Swept on the shipped tree, sharing one
+cache because token length changes no chunk:
+
+```
+min  defines    paired against min=2
+ 2   150/157    —
+ 3   151/157    1 gained, 0 lost      p = 1.0000
+ 4   150/157    4 gained, 4 lost      p = 1.0000
+ 5   134/157    4 gained, 20 lost     p = 0.0015
+```
+
+Five is a collapse and four is a wash. Three is one clean gain with no losses, which
+is the shape this project ships on — and it is not shipped, because of what the
+tokens are. Every two-letter token in every recorded query, most common first:
+
+```
+to 97   of 64   in 57   is 54   it 47   or 42   on 33   an 30   as 16
+v4 13   do 11   re 10   hs 7    so 6    vs 6    ts 4    IO 3    fn 3   u8 2
+```
+
+Mostly English filler, and then `v4`, `it`, `IO`, `fn`, `u8`. Dropping `of` costs
+nothing; dropping `v4` from a zod query drops the token that distinguishes the major
+this whole test set exists to pin, and `it` is a real `bun:test` export.
+
+**No truth entry names a two-letter symbol, so defines cannot see that cost.** It
+reports +1 and is blind to the risk — the same blindness that rejected the member
+split at 125/128 before the truth set was widened. Caught before shipping this time
+rather than after.
+
+The constant now carries its sweep, and says what would decide it: a truth entry a
+two-letter symbol answers.
+
+---
+
 ## Under-retrieval predicts the miss, and the obvious cause is REFUTED
 
 Seven records still miss on defines after 0.40.17. Six of the seven leave both walls

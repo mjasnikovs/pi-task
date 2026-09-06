@@ -61,6 +61,22 @@ export const RETRIEVE_CONTENT_BUDGET = 24_000
 // backstop for a third caller that does not.
 const DEFAULT_LIMIT = PROJECT_RETRIEVE_LIMIT
 const DEFAULT_BUDGET = RETRIEVE_CONTENT_BUDGET
+/**
+ * Shortest query token that reaches the FTS query. Swept, and 2 stays.
+ *
+ *   2 (production)  150/157 defines      4  150/157, 4 lost 4 gained
+ *   3               151/157, 1 gained    5  134/157, 20 lost, p = 0.0015
+ *
+ * Three looks free — one gain, no losses — and it is not. Two-letter tokens across
+ * every recorded query are mostly English filler (`to` 97, `of` 64, `in` 57), and
+ * mixed in with them are `v4` 13, `it` 47, `IO`, `fn`, `u8`. Dropping the filler
+ * costs nothing and dropping `v4` from a zod query costs the thing that
+ * distinguishes the major. No truth entry names a two-letter symbol, so the metric
+ * cannot see that cost — which is the same blindness that nearly sank defect 25's
+ * member split.
+ *
+ * Raise it only with a truth entry that a two-letter symbol answers.
+ */
 const MIN_TOKEN_LEN = 2
 /**
  * How many alias definitions one retrieval will chase. Three covers the observed
