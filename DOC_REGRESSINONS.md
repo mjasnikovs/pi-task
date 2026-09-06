@@ -130,7 +130,7 @@ the record; the model is not.
 | 12 | a facade package indexes to nothing | both | retrieval + replay | **closed on hackage**, 3 of 4 answered |
 | 15 | child abstains with the answer in hand | extraction | **replay** | **SHIPPED**, p=0.0386 paired over 73 |
 | — | aeson keeps 55 duplicate bodies | index | offline | **measured fixed** |
-| 16 | a facade package indexes to nothing, in **cargo** | index | retrieval | **SHIPPED**, 3 of 4 axum queries reach the trait |
+| 16 | a facade package indexes to nothing, in **cargo** | index | retrieval | **SHIPPED** on retrieval; answer half replayed FLAT at n=4, no recorded stimulus |
 | 17 | retrieval depends on the cache's other packages | retrieval | retrieval | **real, and measured harmless** |
 | 19 | a symbol declared only in a NON-prefixed dependency | both | retrieval + full run | found in re-run 4, caused the rs HARD FAIL |
 | 18 | one answer in five carries a false hallucination warning | extraction | recorded corpus | **SHIPPED**, 21/21 now report stitched |
@@ -534,10 +534,37 @@ with `localeCompare`, which orders `-` and `_` differently under a different
 call sites now compare code units. A machine-dependent index is the exact failure
 `DEFECT-12-STOPPING-RULE.md` refuses elsewhere.
 
+### The ANSWER half — replayed, and it does NOT move
+
+Two arms of the same tree, differing only in whether the cargo `exportGap` hook is
+wired. Same chunker, same prompt, same model, one cold cache each holding only
+`axum`, so defect 17 is controlled. Every recorded `axum` record carrying
+`retrievedText` — 4 of 10 — through `docs-replay.ts --retrieve`.
+
+```
+                       chunks        bytes            names IntoResponse   names oneshot
+query 1  Router::new    13 -> 13   20,694 -> 20,694        1/2 -> 0/2         2/2 -> 2/2
+query 2  tower::Service 19 -> 19   22,421 -> 22,987        2/2 -> 1/2         2/2 -> 1/2
+query 3  body::to_bytes  9 ->  9   10,081 -> 15,178        0/2 -> 0/2         0/2 -> 0/2
+query 4  http::Request  14 -> 14   15,892 -> 16,381        1/2 -> 1/2         1/2 -> 1/2
+                                                    abstentions 3/8 -> 4/8
+```
+
+**The chunk count never changes and the byte count does**, on 3 of 4 — the
+supplement's declarations compete for the same slots, and one query's corpus grows
+50%. So the retrieval change does reach these records. The answers do not follow:
+flat or slightly worse on every axis, at n=4.
+
+**And the reason is the stimulus, not the fix.** None of the four recorded queries
+asks what the fix answers. They ask how to build a Router, how to read a body, what
+`http::Request` is. The queries that go from no-declaration to `trait IntoResponse`
+are the ones written by hand for the probe. **There is no recorded stimulus for
+this fix**, so the honest state is retrieval-proven, answer-unproven, and not
+provable from this corpus.
+
 **What this does not claim** — the same caveat the hackage half carries. This is a
 retrieval-side result. Defect 11 is the standing proof that a better index is not
-a better answer, and no recorded cargo record has been replayed against the new
-corpus yet.
+a better answer.
 
 ## Defect 17. Retrieval depends on which OTHER packages share the cache
 
