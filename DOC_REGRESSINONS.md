@@ -132,6 +132,7 @@ the record; the model is not.
 | — | aeson keeps 55 duplicate bodies | index | offline | **measured fixed** |
 | 16 | a facade package indexes to nothing, in **cargo** | index | retrieval | **SHIPPED**, 3 of 4 axum queries reach the trait |
 | 17 | retrieval depends on the cache's other packages | retrieval | retrieval | **real, and measured harmless** |
+| 19 | a symbol declared only in a NON-prefixed dependency | both | retrieval + full run | found in re-run 4, caused the rs HARD FAIL |
 | 18 | one answer in five carries a false hallucination warning | extraction | recorded corpus | **SHIPPED**, 21/21 now report stitched |
 | 14 | correct answer, deprecated code shipped | neither | **full run** | lever BUILT, 3/3 on the corpus; live run pending |
 
@@ -951,6 +952,51 @@ a true one, and a loose scorer is as fatal as a strict one. Left flagged.
 The live number it distorts is worth knowing about: quoting a fidelity rate from
 a run whose project uses `port` and `adminEmail` as field names will read three
 flags low on quality it did not lose.
+
+## Defect 19. The prefix bound's stated cost, caught causing a live HARD FAIL
+
+`DEFECT-12-STOPPING-RULE.md` bounds the supplement candidates to dependencies
+sharing the asking package's name prefix, and states the cost plainly: a
+re-export from a crate with a different name stays open. Re-run 4 shows what that
+costs, end to end.
+
+**The chain.** rs's single abstention is the question whose answer was missing:
+
+```
+query (worker:apis)  "How to drive a Router in-process without binding a port:
+                      Router::oneshot signature, what type the request argument
+                      must be (http::…"                          -> ABSTAINED
+code shipped         a hand-rolled RawWaker, service.poll_ready(), service.call()
+cargo test           error[E0599]: trait `Service` … is implemented but not in
+                     scope; perhaps you want to import it: use tower_service::Service
+```
+
+**Why the tool could not answer.** Probed against the new index:
+
+```
+docsRaw(axum, "Router oneshot drive a router in-process")
+    9 chunks   oneshot=MENTIONED   ServiceExt=MENTIONED   trait Service=ABSENT
+docsRaw(tower, "ServiceExt oneshot signature")
+    9 chunks   oneshot=MENTIONED   ServiceExt=MENTIONED   trait Service=ABSENT
+```
+
+`oneshot` is an inherent method of `tower::ServiceExt`; `call` and `poll_ready`
+belong to `trait Service` in **`tower-service`**. axum's corpus carries the NAMES
+in doc comments and declares neither. That is defect 12's exact shape — a bare
+name with the signature in a dependency — and the prefix bound cannot cross from
+`axum` to `tower` or `tower-service`, which share no prefix with it.
+
+Worse for the trigger: axum does not `pub use ServiceExt` at all, so there is no
+hole for rule 1 to see either. **Both halves of the stopping rule miss it.**
+
+**Candidate lever, UNMEASURED — do not build it before STEP 0.** Extend "resolve,
+do not traverse" from re-exports to QUERIES: when a query names a symbol the asked
+package declares nowhere, and a declared dependency does declare it, answer from
+there. `tower` retrieves for the same query, so the material exists. What is
+unknown is the base rate and the false-positive cost, and both must be measured on
+the 158 recorded queries before a line is written. Widening the doc-comment
+mention into a trigger is NOT the lever — half of crates.io is mentioned in axum's
+doc comments.
 
 ## Defect 18. One docs answer in five carries a false hallucination warning
 
