@@ -1087,10 +1087,40 @@ contain the declaration by accident. Twenty gained against two lost.
 
 `bun run test` 4430 pass / 0 fail; `npm run lint:check` green.
 
-`PACKAGE_RETRIEVE_LIMIT = 8` is still an unmeasured constant, and it is now the
-binding one — retrieval uses 7% of the 24,000-character budget. Sweeping it is
-the obvious next measurement, and it is a SEPARATE change: this one stands on its
-own number.
+### `PACKAGE_RETRIEVE_LIMIT` — swept, and it STAYS at 8
+
+`docs-retrieve.ts` says in its own header that nothing records why a package gets
+8 chunks and project source gets 50. Defect 21 made it the binding budget, so it
+was swept on the same metric, over the same 37 records:
+
+```
+limit   chunks    bytes     defines/62   records at the 24,000 budget
+    4      236   318,433      33            0/37
+    8      373   451,716      34            0/37
+   12      493   562,015      35            5/37
+   16      594   647,921      37            7/37
+   24      755   752,822      37           10/37
+   32      854   809,322      37           18/37
+   50      891   824,736      37           20/37
+  100      891   824,736      37           20/37
+```
+
+The metric plateaus at **16** and never moves again. But 8 against 16, paired:
+
+```
+both 34    only-8 0    only-16 3    neither 25
+McNemar exact, two-sided:  p = 0.2500
+```
+
+Three of sixty-two, none lost, and not significant. **Doubling the retrieved
+payload for that is not justified**, so the constant does not move — it is simply
+no longer a guess.
+
+One fact worth keeping: **at 8, the byte budget never binds** — 0 of 37 records
+reach 24,000 characters. The tool has always spent about a third of what it is
+allowed. Raising the limit is therefore free of any truncation risk and costs only
+the child's reading; if a future measurement on the ANSWER (not the index) shows
+more text helps, 16 is where this metric says to stop.
 
 ### The other two split regexes were audited and are clean
 
