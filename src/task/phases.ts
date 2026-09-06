@@ -57,6 +57,7 @@ import {
     setTaskSection,
     updateTaskFrontMatter
 } from './task-io.js'
+import {applyDeprecations} from './deprecated-constraint.js'
 import {applyRefutations} from './refuted-constraint.js'
 import {spawnSync} from 'node:child_process'
 import {type PhaseName} from './task-types.js'
@@ -1189,10 +1190,12 @@ export async function phaseGrill(
 }
 
 /**
- * A refutation is a DELETION. Where the run's own research explicitly says a
- * dependency refine invented is not needed, drop that token from CONSTRAINTS —
- * compose cannot forbid the design's own API "because the refined task
- * explicitly requires `argon2`" if the refined task no longer requires it.
+ * A correction is a DELETION. Where the run's own research explicitly says a
+ * dependency refine invented is not needed, or names the API refine wrote as
+ * deprecated, drop that token from CONSTRAINTS — compose cannot forbid the
+ * design's own API "because the refined task explicitly requires `argon2`" if the
+ * refined task no longer requires it, and cannot ship `z.string().email()` under
+ * a constraint that no longer names it.
  *
  * Applied to the REFINED TASK ITSELF, not to compose's copy of it, and that is
  * load-bearing: critique receives the refined task as GROUND TRUTH and is told
@@ -1200,7 +1203,8 @@ export async function phaseGrill(
  * them", so a deletion visible only to compose is restored one phase later. Both
  * spec-producing phases have to see the same text.
  *
- * Purely subtractive and never touches an owned line (task/refuted-constraint.ts).
+ * Purely subtractive and never touches an owned line (task/refuted-constraint.ts,
+ * task/deprecated-constraint.ts).
  * Idempotent, so a resumed run re-deriving `refined` from the task file lands in
  * the same place. The task file's `## refined prompt` is deliberately left as
  * refine wrote it; the drop is recorded on the `## gates` trail with both source
@@ -1211,14 +1215,14 @@ export async function dropRefutedConstraints(
     refined: string,
     research: string
 ): Promise<string> {
-    const refuted = applyRefutations(refined, research)
-    if (refuted.trail.length === 0) return refined
-    await recordPhaseTrail(deps, 'compose', refuted.trail)
-    return refuted.refined
+    const dropped = dropRefutedAndDeprecated(refined, research)
+    if (dropped.trail.length === 0) return refined
+    await recordPhaseTrail(deps, 'compose', dropped.trail)
+    return dropped.refined
 }
 
 /**
- * COMPOSE's carry: the refutation drop, as a `PhaseConfig.carry`.
+ * COMPOSE's carry: both subtractive drops, as a `PhaseConfig.carry`.
  *
  * Same transform as `dropRefutedConstraints` over the same pure core, minus the
  * recording — the caller decides whether this application is the live one or a
@@ -1228,10 +1232,24 @@ export async function dropRefutedConstraints(
 export function composeCarry(_deps: PhaseDeps, pc: PhaseContext): Promise<string[]> {
     // Not `async`, and that is the shape rather than an oversight: this carry
     // performs no I/O at all, which is what lets the resume path replay it.
-    const refuted = applyRefutations(pc.refined, pc.research)
-    if (refuted.trail.length === 0) return Promise.resolve([])
-    pc.refined = refuted.refined
-    return Promise.resolve(refuted.trail)
+    const dropped = dropRefutedAndDeprecated(pc.refined, pc.research)
+    if (dropped.trail.length === 0) return Promise.resolve([])
+    pc.refined = dropped.refined
+    return Promise.resolve(dropped.trail)
+}
+
+/**
+ * The two subtractive passes, in one place so the live path and the resume replay
+ * cannot drift apart. Chained rather than run side by side: the second reads the
+ * first's output, so a line the first deleted outright is never scanned again.
+ */
+function dropRefutedAndDeprecated(
+    refined: string,
+    research: string
+): {refined: string; trail: string[]} {
+    const refuted = applyRefutations(refined, research)
+    const deprecated = applyDeprecations(refuted.refined, research)
+    return {refined: deprecated.refined, trail: [...refuted.trail, ...deprecated.trail]}
 }
 
 /** Write a carry's trail to the debug log and the task file's `## gates` section. */

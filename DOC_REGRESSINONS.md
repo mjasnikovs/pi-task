@@ -538,8 +538,65 @@ only the source section and the negation family are missing. The ts case needs a
 token class the existing pass deliberately refuses, so widening that pass would
 loosen the dependency channel it was built to keep narrow. A sibling pass.
 
-Unbuilt. **Proving a fix still needs a full run** — this is the one item where the
-subagent harnesses cannot see the outcome.
+### BUILT — `src/task/deprecated-constraint.ts`, chained after the sibling
+
+Same shape, same invariant (`inv-no-line-invention`: the output is a character
+subsequence of the input). Three rules, and each one was forced by a real string
+rather than chosen:
+
+- **Sources.** research `APIS` *and* `CONTEXT`. Two of the three fires are in APIS.
+- **`marker-adjacent`.** A call expression (`z.string().email()` — at least one `.`
+  and one `()`) whose deprecation marker sits **ahead of it in the same clause**.
+  Forward-only, so "X is deprecated, use Y" never indicts Y.
+- **`apis-symbol`.** An APIS row is `symbol␣␣description`, so the row's leading
+  symbol is what the row is about — used **only** when no expression sits next to
+  the marker. On `z.email()  … (z.string().email() … is @deprecated)` the leading
+  symbol is the replacement, and the adjacent expression is the casualty.
+
+Re-measured on the same corpus, with the shipped code rather than the probe:
+
+```
+13,997 task files scanned  (the 9 recorded run tasks folded in)
+12,568 with a non-empty CONSTRAINTS and a research section
+     3 fires        <- the same 3, 3 of 3 TRUE, 0 false
+```
+
+`apis-symbol` is load-bearing, not decoration: without it the sweep returns **2**
+fires, losing hs/TASK_0001 entirely.
+
+**The character window was measured and DELETED.** The first cut bounded the
+marker to N characters past the token. Swept at 20/30/41/50/60/80/120/160/240/400/
+800/4000 it is **flat from 41 to 4,000** — every value in that range returns the
+same 3 fires — so the corpus cannot choose one and any pick would be a guess. The
+clause boundary (`;` `(` `)` em/en dash `. `) reproduces all 3 with no constant,
+and it is what actually stops `z.email()` at the head of the ts line from
+inheriting the verdict on the expression inside its own parenthetical.
+
+Applied to the three real artifacts, chained after `applyRefutations`:
+
+```
+ts/TASK_0001  … `adminEmail` — an email (e.g. z.string().email()). All three …
+           ->  … `adminEmail` — an email. All three …
+ts/TASK_0002  … `adminEmail` `z.string().email()`).   ->  … `adminEmail`).
+hs/TASK_0001  … must additionally include `wai-test` on top of `aeson` …
+           ->  … must additionally include on top of `aeson` …
+```
+
+The hs result is grammatically mangled and deliberately left that way: the pass
+may only delete, and the sibling's `dropToken` behaves identically wherever a
+token is not in a list. It no longer *requires* the unresolvable dependency, which
+is the whole job.
+
+**Residue, stated so it is not rediscovered as new.** The drop touches CONSTRAINTS
+only. GOAL still restates `wai-test` and `z.string().email()` verbatim, because
+GOAL is refine's copy of the raw prompt and rewriting it is not a deletion this
+pass can make. Whether that residue is enough to re-cause the failure is exactly
+what the live run measures.
+
+`bun run test` 4388 pass / 0 fail; `npm run lint:check` green.
+
+**Still needs the full run.** This is the one item where the subagent harnesses
+cannot see the outcome.
 
 ---
 
