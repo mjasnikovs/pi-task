@@ -10,3 +10,6 @@ nexttask*.md
 
 # Run state written by /task when pi-task is developed on itself.
 .pi-tasks/
+live-docs-*/ts/
+live-docs-*/rs/
+live-docs-*/hs/

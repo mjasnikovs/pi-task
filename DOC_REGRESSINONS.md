@@ -2142,11 +2142,26 @@ projects, not three.
 
 Artifacts in `live-docs-rerun6-2026-09-06/`.
 
-**The audit scored the dead project PASS.** hs has a `.pi-tasks/` with one task in
-it and a skeleton that builds green, and `ran` is `existsSync('.pi-tasks')`, so a
-run killed seven minutes in reads as a pass with 0 docs calls. Do not read hs's
-row. An interrupted run is not a NOT RUN and is not a PASS; the audit has no third
-answer and this is the first run that needed one.
+**The audit scored the dead project PASS — FIXED.** hs has a `.pi-tasks/` with one
+task in it and a skeleton that builds green, and `ran` was `existsSync('.pi-tasks')`,
+so a run killed seven minutes in read as a pass with 0 docs calls. An interrupted
+run is not a NOT RUN and is not a PASS, and the audit had no third answer.
+
+`taskProgress()` supplies one, on the same rule the runner's own `progress()` uses:
+count `TASK_NNNN.md`, not the `TASK_AUTO_NNNN.md` plan, and a task is done when its
+front matter says `state: completed`. A project with an unfinished task is
+`INCOMPLETE` before any reason is collected, and its table is not printed at all —
+a prefix of a run that never happened is worse than silence.
+
+```
+                    committed AUDIT.md (pre-fix)      after
+hs                  PASS                              INCOMPLETE, 0/1 tasks
+ts                  HARD FAIL                         HARD FAIL
+rs                  HARD FAIL                         HARD FAIL
+```
+
+The fix adds the seam it tests, so the unit tests cannot fail on the tree before
+it. The defect is on record instead, in run 6's own committed `AUDIT.md`.
 
 ```
 ts  HARD FAIL   10 records   1 abstained  10%   recall 4/4   build green

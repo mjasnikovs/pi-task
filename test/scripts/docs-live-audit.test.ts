@@ -1,5 +1,8 @@
 import {test, expect} from 'bun:test'
-import {inventedSymbols, scoreRecall} from '../../scripts/docs-live-audit.js'
+import {mkdirSync, mkdtempSync, writeFileSync} from 'node:fs'
+import {tmpdir} from 'node:os'
+import {join} from 'node:path'
+import {inventedSymbols, scoreRecall, taskProgress} from '../../scripts/docs-live-audit.js'
 import type {TypeOnlyLogRecord} from '../../src/workers/typeonly-log.js'
 
 // The tool's return embeds the answer prose, so scoring the answer against it asks
@@ -154,4 +157,31 @@ test('a name that differs by more than a separator is still invented', () => {
     expect(inventedSymbols('The type is `axum_kore`.', 'axum-core-0.5.6/src/body.rs')).toContain(
         'axum_kore'
     )
+})
+
+// Run 6's hs was killed by a container stop at task 1 of its plan. `.pi-tasks/`
+// existed, the Haskell skeleton still built green, and the audit scored it PASS
+// with zero docs calls. The fix adds this seam, so the test cannot fail on the
+// tree before it; the defect is on record in that run's own AUDIT.md instead.
+test('a run stopped mid-flight is not complete', () => {
+    const root = mkdtempSync(join(tmpdir(), 'audit-progress-'))
+    mkdirSync(join(root, '.pi-tasks'))
+    writeFileSync(join(root, '.pi-tasks', 'TASK_0001.md'), 'state: in_progress\n')
+    writeFileSync(join(root, '.pi-tasks', 'TASK_AUTO_0001.md'), 'state: in_progress\n')
+    expect(taskProgress(root)).toEqual({tasks: 1, done: 0})
+})
+
+test('the plan file is not a task', () => {
+    const root = mkdtempSync(join(tmpdir(), 'audit-progress-'))
+    mkdirSync(join(root, '.pi-tasks'))
+    writeFileSync(join(root, '.pi-tasks', 'TASK_0001.md'), 'state: completed\n')
+    writeFileSync(join(root, '.pi-tasks', 'TASK_AUTO_0001.md'), 'state: in_progress\n')
+    expect(taskProgress(root)).toEqual({tasks: 1, done: 1})
+})
+
+test('no .pi-tasks is zero tasks, not a finished run', () => {
+    expect(taskProgress(mkdtempSync(join(tmpdir(), 'audit-progress-')))).toEqual({
+        tasks: 0,
+        done: 0
+    })
 })

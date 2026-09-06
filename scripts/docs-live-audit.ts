@@ -181,6 +181,30 @@ function readTrail(root: string): {docs: TrailCall[]; web: TrailCall[]} {
     return {docs, web}
 }
 
+/**
+ * How many task specs the run wrote, and how many it marked off.
+ *
+ * The verdict needs this because `.pi-tasks/` exists from the first task onward,
+ * so a run the container stopped seven minutes in is indistinguishable from a
+ * finished one by presence alone — and its skeleton still builds green. Run 6's hs
+ * scored PASS on one `in_progress` task and zero docs calls.
+ *
+ * Same rule as the runner's own `progress()`: `TASK_AUTO_NNNN.md` is the plan, not
+ * a task, and only `TASK_NNNN.md` carries a `state:` worth counting.
+ */
+export function taskProgress(root: string): {tasks: number; done: number} {
+    const dir = path.join(root, '.pi-tasks')
+    if (!fs.existsSync(dir)) return {tasks: 0, done: 0}
+    let tasks = 0
+    let done = 0
+    for (const f of fs.readdirSync(dir)) {
+        if (!/^TASK_\d+\.md$/.test(f)) continue
+        tasks++
+        if (/^state:\s*completed\b/im.test(fs.readFileSync(path.join(dir, f), 'utf8'))) done++
+    }
+    return {tasks, done}
+}
+
 /** Source files the run produced, for the stale-API sweep. */
 function sourceFiles(root: string): string[] {
     const out: string[] = []
@@ -262,7 +286,9 @@ interface ProjectReport {
     pins: Record<string, {want: string; got: string | null; ok: boolean}>
     stale: {pkg: string; file: string; instead: string}[]
     build: {ok: boolean; output: string} | null
-    verdict: 'PASS' | 'HARD FAIL' | 'NOT RUN'
+    tasks: number
+    tasksDone: number
+    verdict: 'PASS' | 'HARD FAIL' | 'INCOMPLETE' | 'NOT RUN'
     reasons: string[]
 }
 
@@ -283,10 +309,16 @@ function auditProject(runRoot: string, spec: ProjectSpec, build: boolean): Proje
         pins: {},
         stale: [],
         build: null,
+        tasks: 0,
+        tasksDone: 0,
         verdict: 'NOT RUN',
         reasons: []
     }
     if (!fs.existsSync(root)) return rep
+
+    const progress = taskProgress(root)
+    rep.tasks = progress.tasks
+    rep.tasksDone = progress.done
 
     const records: TypeOnlyLogRecord[] = fs.existsSync(jsonl)
         ? readTypeOnlyLog(fs.readFileSync(jsonl, 'utf8'))
@@ -373,6 +405,14 @@ function auditProject(runRoot: string, spec: ProjectSpec, build: boolean): Proje
         rep.verdict = 'NOT RUN'
         return rep
     }
+    // Before any reason is collected: a run that never finished has no verdict to
+    // give. Its build is a skeleton's build and its abstention rate is a prefix of
+    // one it never reached, so reporting either as a result is worse than silence.
+    if (rep.tasks === 0 || rep.tasksDone < rep.tasks) {
+        rep.verdict = 'INCOMPLETE'
+        rep.reasons.push(`run did not finish: ${rep.tasksDone}/${rep.tasks} tasks completed`)
+        return rep
+    }
     if (rep.build && !rep.build.ok) rep.reasons.push(`\`${spec.testCommand}\` failed`)
     for (const s of rep.stale) rep.reasons.push(`stale API in ${s.file}: ${s.instead}`)
     for (const [pkg, p] of Object.entries(rep.pins)) {
@@ -388,6 +428,15 @@ function render(reps: ProjectReport[]): string {
         L.push(`## ${r.id} (${r.ecosystem}) — **${r.verdict}**`, '')
         if (!r.ran) {
             L.push('No `.pi-tasks/` — this project never ran.', '')
+            continue
+        }
+        if (r.verdict === 'INCOMPLETE') {
+            L.push(
+                `Stopped mid-run: ${r.tasksDone}/${r.tasks} tasks completed, `
+                    + `${r.docsCalls} docs calls. No verdict — the numbers below would `
+                    + 'be a prefix of a run that never happened.',
+                ''
+            )
             continue
         }
         for (const why of r.reasons) L.push(`- ${why}`)

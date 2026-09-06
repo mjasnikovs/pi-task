@@ -64,16 +64,7 @@ error: could not compile `docs-live-rs` (test "config") due to 2 previous errors
 warning: build failed, waiting for other jobs to finish...
 ```
 
-## hs (hackage) — **PASS**
+## hs (hackage) — **INCOMPLETE**
 
-| | |
-|---|---|
-| docs calls (trail) | 0 |
-| docs answers (jsonl) | 0 |
-| refusals, research phases | 0 |
-| abstentions ("unclear") | 0 |
-| retrieval recall | 0/0 |
-| answers with 0 invented symbols | not scoreable — log has no `retrievedText` |
-| web lookup after a docs call | 0 |
-| pins intact | 2/2 |
+Stopped mid-run: 0/1 tasks completed, 0 docs calls. No verdict — the numbers below would be a prefix of a run that never happened.
 
