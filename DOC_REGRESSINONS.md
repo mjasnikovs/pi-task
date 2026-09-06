@@ -862,8 +862,8 @@ all twelve project-runs:
 
 | metric | history | verdict |
 |---|---|---|
-| build + stale markers | 3 HARD FAIL, 9 PASS | **the instrument** |
-| abstention rate | 0% to 83% | moves, but not on the tool — see below |
+| build + stale markers | 6 HARD FAIL, 9 PASS | **the instrument** |
+| abstention rate | 0% to 100% | moves, but not on the tool — and re-run 4's ts was 0% and HARD FAILed |
 | answers with 0 invented symbols | 4 runs flagged, every flag false | fires, never truly |
 | retrieval recall | 43/44, and the 1 was a scorer bug | **saturated** |
 | pins resolved | 7/7 in every run, three version sources | **saturated** |
