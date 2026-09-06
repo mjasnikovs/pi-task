@@ -214,6 +214,25 @@ cargo   26/26 (100%)     npm 38/42 (90%)     hackage 26/33 (79%)
   aeson:eitherDecode    4/6     scotty:scotty       2/7   <--
 ```
 
+### "A multi-topic query dilutes retrieval" — REFUTED
+
+`eitherDecode` is declared in exactly one 97-byte chunk of aeson's 1,283, and its
+two misses are both queries that ask about five things at once. The obvious
+reading — that a batched query splits the eight-chunk budget and finds none of it
+— does not survive the corpus:
+
+```
+symbols named in the query   pairs   defined   rate
+  1-4                          68       62      91%
+  5-8                          27       22      81%
+  9-12                          4        4     100%
+ 13+                            2        2     100%
+```
+
+Not monotone, and the wide buckets are 4 and 2 pairs. Query breadth does not
+predict whether the declaration is retrieved. The two `eitherDecode` misses are
+misses, not a class — filed so the plausible story is not retold as a finding.
+
 ## Defect 23. A class chunk is 50x the median and BM25 buries it
 
 The four npm misses the defines-metric leaves are all hono, and one is clean:
