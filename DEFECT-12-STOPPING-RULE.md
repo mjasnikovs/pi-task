@@ -204,4 +204,8 @@ scoring discipline in DOC_REGRESSINONS.md exists to prevent.
 
 The rule is derived from twenty hackage packages. It is an indexing change, and defect 11
 is the standing proof that an index that improves does not mean an answer that improves.
-The claim still to test is a live one: does the `hspec` child stop abstaining.
+The claim still to test is whether the `hspec` child stops abstaining.
+
+That is no longer a live-run claim. Index the new corpus, then replay the four recorded
+`hspec` records through `scripts/docs-replay.ts` against it. Minutes, not four hours.
+See "Read this first" in `DOC_REGRESSINONS.md`.
