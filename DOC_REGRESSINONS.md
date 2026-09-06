@@ -1884,6 +1884,31 @@ So a worker that asks `tower` gets the answer today. Nothing needs to be built f
 that path. Whether one that asks `axum` can be routed to `tower` is the open
 question, and the two bounds already refuted above still bound it.
 
+### The ts seed was checked for the same shape and it is NOT the same
+
+Nineteen of the 65 recorded ts queries ask about `bun`, `bun-types`, `bun:test`,
+`typescript`, `node:url` or `node:fs/promises`, and the ts project's `node_modules`
+holds exactly two packages, hono and zod. That looks like the tool answering about
+things the project does not have, so it was traced rather than assumed:
+
+```
+resolvePackage("bun", <ts root>)          not_installed   (correctly)
+docsRaw("bun", …)                         7 chunks from bun.d.ts, globals.d.ts
+```
+
+`acquirePackage` is the reason, and it is deliberate: on `not_installed` it
+installs — at the range the project declares if it declares one, `latest` if not —
+and resolves from the install dir. So `bun` and `typescript` were fetched during
+the runs and answered from real chunks, with the provenance the banner reads. Not
+a defect, and written down here because the query list makes it look like one.
+
+The ts seed does share the rs seed's *shape* — no `@types/bun`, no devDependencies,
+no tsconfig — and re-run 5 lost a task to `Cannot find name 'Bun'` and
+`Property 'dir' does not exist on type 'ImportMeta'`. It is not the same class,
+because `bun test` runs untyped and the obligation is still reachable; run 6's ts
+build was green. Left alone on purpose: the rs change is forced by an impossible
+task, and changing two seeds in one session moves the stimulus twice.
+
 ### And it is not a retrieval defect at all — the import was in the prompt
 
 The probe above asked whether the raised limit reaches the missing symbol. It does,
