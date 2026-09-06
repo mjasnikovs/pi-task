@@ -1830,6 +1830,60 @@ the recorded corpus supplies that. Filed, not open.
 Widening the doc-comment mention into a trigger is NOT the lever either — half of
 crates.io is mentioned in axum's doc comments.
 
+### Defect 19 REOPENED, and the retrieval half is already closed
+
+Everything above was measured with `PACKAGE_RETRIEVE_LIMIT` at 8. The limit is 50
+now, and the two probes that filed this defect were re-run against both budget arms
+with the current constants. **`trait Service=ABSENT` is no longer true of `tower`,
+and it was the whole reason the defect was filed unfixable.**
+
+```
+docsRaw(tower, "How to use Router::oneshot to send a request in tests…")
+  budget 24k, limit 50   10 chunks 17,312 B
+  budget 48k, limit 50   20 chunks 39,894 B
+  both arms:  tower_service=Y  trait Service=Y  fn call(=Y  poll_ready=Y
+```
+
+Opened, not counted — the chunk carries the declaration, not a mention:
+
+```
+// src/util/mod.rs
+pub trait ServiceExt<Request>: tower_service::Service<Request> {
+    /// Consume this `Service`, calling it with the provided request once it is ready.
+    fn oneshot(self, req: Request) -> Oneshot<Self, Request> where Self: Sized,;
+}
+```
+
+The supertrait bound **is** the import the compiler asks for. `tower`'s corpus
+declares it, the raised limit reaches it, and the budget buys nothing extra here —
+all four probe queries carry it at 24,000 already.
+
+**The unfixed half is which package the worker asks.** Across four queries:
+
+```
+asked tower   tower_service reached  4/4
+asked axum    tower_service reached  0/4
+```
+
+That is the prefix bound doing exactly what its docstring says, and it is
+untouched. But the defect as filed said the symbol was unreachable from either
+package, and that is now wrong. What remains is narrower and different in kind:
+`axum` is the package a worker naturally asks about a `Router`, and the answer
+lives in `tower`.
+
+Run 6 is the live demonstration of the narrowed defect. Twelve rs records, and the
+one that produced the compile error asked `axum`:
+
+```
+run 6 record 10   module=axum   "How to use Router::oneshot to send a request in tests…"
+                  23,688 B retrieved, answered, no import named
+run 3             module=tower  the same class of question, asked of the right crate
+```
+
+So a worker that asks `tower` gets the answer today. Nothing needs to be built for
+that path. Whether one that asks `axum` can be routed to `tower` is the open
+question, and the two bounds already refuted above still bound it.
+
 ## Defect 18. One docs answer in five carries a false hallucination warning
 
 Nothing in this file had ever looked at `excerptVerified`. It is checked on every
@@ -1929,6 +1983,239 @@ And the verdict really is untouched, replayed rather than asserted:
 
 ---
 
+## The answer is right and the code is wrong — measured across all six runs
+
+Run 6's ts HARD FAIL is the audit's stale-API check on `z.string().email()`, and
+the docs answer named the correct form in the same run. So the question is whether
+that is a docs defect at all. Every run's zod answers and every run's shipped
+`configSchema`, read together:
+
+```
+run                shipped in configSchema        the run's own docs answer
+baseline 09-05     adminEmail: z.email()          "z.string().email() is confirmed —
+                                                   ZodString.email(message?)"   [zod 3 chunks]
+re-run 1           adminEmail: z.email()          "z.email() is a standalone constructor"
+re-run 2           adminEmail: z.email()          "z.email() is a valid string format"
+re-run 3           adminEmail: z.string().email() "the standalone z.email() is the
+                                                   recommended API"
+re-run 5           n/a — ts never reached the schema
+re-run 6           adminEmail: z.string().email() "prefer the top-level z.email()
+                                                   over z.string().email()"
+```
+
+**The tool has been right in every run since the dead-major fix, and twice the code
+did not follow it.** In run 6 the answer is as unambiguous as an answer gets — it
+names both forms and says which to prefer — and the worker wrote the other one. The
+same answer said `.int()` on `z.number()` is legacy and the worker wrote
+`z.number().superRefine(...)`.
+
+The baseline row is the interesting one in the other direction: there the tool
+*was* wrong, confirming `ZodString.email(message?)` out of the zod 3 chunks defect
+5 later deleted, and the run shipped the RIGHT form anyway. Four of six runs shipped
+`z.email()` and the answer predicted none of them.
+
+**No docs-side lever, and this time the constants were checked.** There is no
+constant this runs inside: retrieval reached the declaration, extraction quoted it
+with a preference, and the loss is entirely in a worker reading a correct answer.
+That is item 2's question asked and answered on live data — the extra retrieved
+text does not distract; the answer is simply not always consumed.
+
+Recorded so the audit's `stale API` row is not re-read as a retrieval or extraction
+failure. It is neither, in both runs that produced it.
+
+---
+
+## Item 1. `RETRIEVE_CONTENT_BUDGET` — the retrieval half, and the constant that
+## actually binds is not the same one in every ecosystem
+
+Two trees under `/home/agent/`, `bud24` and `bud48`, synced from HEAD and differing
+in exactly one line of one file, with their own `XDG_CACHE_HOME` each:
+
+```
+diff -r src/  ->  docs-retrieve.ts only
+                  export const RETRIEVE_CONTENT_BUDGET = 24_000 | 48_000
+```
+
+103 package-corpus records replay through `docs-replay --retrieve`, which is every
+recorded record that carries `retrievedText` and is not the project corpus — the
+project corpus has no root to re-retrieve against and `retrieveLive` refuses it.
+A `--dry-run` retrieves without spending a child, so the retrieval half costs
+nothing:
+
+```
+                  identical    48k bigger    48k smaller
+103 records            9            90             4
+median bytes      22,041  ->  42,569
+median chunks         16  ->      25
+```
+
+**The budget binds, and it binds hard.** But the split by ecosystem is the finding,
+because it says the two constants do not bind in the same place:
+
+```
+eco    n   med 24k   med 48k   more at 48k   med chunks   at the 50-chunk cap
+ts    43    22,750    42,635        43/43     16 ->  36           0 / 43
+rs    35    22,089    45,080        35/35     10 ->  19           1 / 35
+hs    25    18,994    20,023        12/25     50 ->  50          18 / 25
+```
+
+On npm and cargo every single record retrieves more when the budget doubles: the
+budget is the wall. On hackage the median moves 1,000 characters and eighteen of
+twenty-five records are already at the chunk cap — **`PACKAGE_RETRIEVE_LIMIT` is
+the wall there, and doubling the budget cannot move it.** The 8 -> 50 change bought
+hackage everything it could, and hackage went straight back to the new cap.
+
+That is the same shape as defects 22 and 23 one turn later. The limit was raised
+because the budget was slack; now the budget is binding on two ecosystems and the
+limit is binding on the third. Neither constant is answered by measuring the other.
+
+### And the limit past 50 is worth nothing — swept, so hackage's cap is not a lever
+
+Eighteen of twenty-five hackage records sit at the 50-chunk cap, which reads like
+the limit binding again one turn after it was raised. It is not. Three trees at
+`PACKAGE_RETRIEVE_LIMIT` 50, 100 and 200 with the budget held at production's
+24,000, on copies of one cache so the package set is identical:
+
+```
+limit  50   npm 51/51   cargo 42/42   hackage 32/35    125/128
+limit 100   npm 51/51   cargo 42/42   hackage 32/35    125/128
+limit 200   npm 51/51   cargo 42/42   hackage 32/35    125/128
+```
+
+Byte-identical, all three, every per-symbol row. The extra chunks arrive — hackage
+goes 50 -> 133 chunks and its byte total rises to the budget wall — and **not one
+of them defines a symbol the 50 did not.**
+
+```
+hspec    50c  9,891 B  ->  133c 20,649 B      defines: unchanged
+scotty   50c 16,872 B  ->  102c 23,531 B      defines: unchanged
+text     51c 16,270 B  ->  136c 24,226 B      defines: unchanged
+```
+
+So the cap at 50 was real and the ceiling behind it is the ranking, not the count:
+bm25 puts what defines the symbol in the first fifty or it does not put it there
+at all. `PACKAGE_RETRIEVE_LIMIT = 50` is a plateau, measured, and does not need
+sweeping again.
+
+### The budget's retrieval half, re-measured on the current 128-pair corpus
+
+The 101-pair number in the sweep above predates runs 5 and 6. Same harness, same
+cache-copy discipline, all recorded package records:
+
+```
+pairs 128    both 125    only 24k 0    only 48k 3    neither 0
+defines      24k 125/128        48k 128/128
+McNemar exact, two-sided                p = 0.2500
+```
+
+The three gains are all hono — `Hono` 14/16 -> 16/16 and `json` 10/11 -> 11/11 —
+and the losses are zero for the third corpus running. The retrieval half cannot
+reach significance on its own: there is nothing to trade against and the base is
+at 98%. The answer half is the decider, and it is what the A/B is spending.
+
+### Four records shrank, and all four are defect 17
+
+Every non-increasing record is hackage, all at the chunk cap, and the deltas are
+ranking noise between two independently built caches rather than a budget effect:
+
+```
+hspec    50c  9,891 B  ->  50c  9,792 B
+scotty   50c 16,506 B  ->  50c 16,293 B
+aeson    51c 20,349 B  ->  51c 20,302 B
+aeson    51c 15,008 B  ->  50c  8,162 B
+```
+
+The first three are under one percent. The fourth is not, and it is worth naming:
+`bm25()` scores over the whole FTS index, so two caches that indexed the same
+packages in the same order can still rank one query differently. The arms hold the
+package set fixed, which is the bound the runbook asks for; it is not a bound on
+per-query rank. On hackage, where the budget is not the binding constant anyway,
+that noise is the larger effect of the two.
+
+---
+
+## Re-run 6 — the first run on the raised retrieve limit, and the budget is now binding
+
+Launched on 0.40.14, left mid-flight when the previous session ended. ts and rs
+both settled; **hs was killed by the container stop at task 1**, so run 6 has two
+projects, not three.
+
+Artifacts in `live-docs-rerun6-2026-09-06/`.
+
+**The audit scored the dead project PASS.** hs has a `.pi-tasks/` with one task in
+it and a skeleton that builds green, and `ran` is `existsSync('.pi-tasks')`, so a
+run killed seven minutes in reads as a pass with 0 docs calls. Do not read hs's
+row. An interrupted run is not a NOT RUN and is not a PASS; the audit has no third
+answer and this is the first run that needed one.
+
+```
+ts  HARD FAIL   10 records   1 abstained  10%   recall 4/4   build green
+rs  HARD FAIL   12 records   2 abstained  17%   recall 4/4   cargo test RED
+hs  killed at task 1 — no jsonl, 0 docs calls, verdict meaningless
+```
+
+### The retrieve limit reached the live runs, and it moved the byte budget into contact
+
+```
+                 records   median retrieved   at >= 20,000
+run 3 (limit 8)    40           ~16,400          7 of 40
+run 6 (limit 50)   22            21,900         16 of 22
+```
+
+`RETRIEVE_CONTENT_BUDGET` is 24,000. Sixteen of twenty-two calls now sit within
+2,500 characters of it, where before the limit change seven of forty did. The
+constant that was slack is the constant that binds, which is what item 1 exists to
+measure.
+
+Abstention held at the replay's prediction: 10% and 17% against re-run 5's 43% and
+17% on the same features.
+
+### ts: the tool was right and the answer did not reach the code
+
+ts HARD FAILs on the audit's stale-API check, and the docs answer is not the
+reason. Asked how to define the schema, the child answered:
+
+```
+answer   "For email, prefer the top-level z.email() over z.string().email()"
+         "the canonical integer type is the top-level z.int(); .int() on
+          z.number() is legacy"
+shipped  adminEmail: z.string().email()
+         port: z.number().superRefine(...)
+```
+
+Both deprecated forms still compile, so `bun test` is green and only the stale
+check sees it. **This is the question item 2 was written to ask** — whether the
+extra retrieved text helps the workers that read the answers — and the first live
+answer is that a correct, explicit, unhedged answer was read and not used. Not a
+retrieval defect and not an extraction defect. It is downstream of both.
+
+### rs: defect 19 recurred, and this time it did not abstain
+
+Same crate, same trait, same compile error as re-run 4:
+
+```
+error[E0599]: trait `Service` ... is implemented but not in scope
+              perhaps you want to import it: use tower_service::Service
+```
+
+The difference is where it failed. In re-run 4 the `oneshot` question ABSTAINED,
+and the abstention was the tell. In run 6 it answered, at 23,688 retrieved
+characters, and the answer names `ServiceExt` and `oneshot` without ever naming
+the import that makes either callable:
+
+```
+retrievedText contains ServiceExt      yes
+retrievedText contains oneshot         yes
+retrievedText contains tower_service::Service   no
+```
+
+So the raised limit converted an abstention into an incomplete answer on the one
+query defect 19 owns. The recorded mechanism is unchanged — `trait Service` lives
+in `tower-service`, which shares no prefix with `axum` — but the failure is now
+silent where it used to announce itself.
+
+---
+
 # Run history
 
 Artifacts in `live-docs-run-2026-09-05/`, `live-docs-rerun-2026-09-05/`,
@@ -1942,6 +2229,7 @@ Artifacts in `live-docs-run-2026-09-05/`, `live-docs-rerun-2026-09-05/`,
 | re-run 3, 09-06 | 0.40.5 | **HARD FAIL**, 17% | PASS, 22% | PASS, 46% |
 | re-run 4, 09-06 | 0.40.9 | **HARD FAIL**, 0% | **HARD FAIL**, 14% | **HARD FAIL**, 100% (1 call) |
 | re-run 5, 09-06 | 0.40.11 | **HARD FAIL**, 43% | PASS, 17% | PASS, 33% |
+| re-run 6, 09-06 | 0.40.14 | **HARD FAIL**, 10% | **HARD FAIL**, 17% | killed at task 1 |
 
 **Re-run 5 is the best result any run has had on the hard half**: rs and hs both
 PASS, and hs has passed twice in five runs. ts HARD FAILs on `bun test`'s
