@@ -169,6 +169,8 @@ for (const r of db.prepare(\"select ecosystem,name,version,indexed_at from packa
 | tmux `send-keys` | needs `-l`, Enter as a separate call, and ~25 s for pi to boot first |
 | tmux env | inherited from the *server*, not the client |
 | a file left in the tree | `worker:files` reads it as project source — keep captures outside |
+| a harness file in `/tmp` | the RUN writes there too. `/tmp/probe.mjs` came back as the ts run's own test script. Keep harness files under `/home/agent/harness/` |
+| `pgrep -x pi` after a run | the finished runs leave ZOMBIES (`ps -o stat` shows `Zs`). They cannot be killed and do not matter; check `stat` before chasing one |
 | `cabal test` | can be green while `cabal build all` fails; compile before you test |
 | the 8-minute settle | can cut the final gate; tasks and tree are still fully scoreable |
 | task count | has no cap. `granularityFloor` only pushes up, and renumbering a spec does not shrink it — ask for fewer deliverables |
