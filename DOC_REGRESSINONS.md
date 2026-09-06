@@ -171,9 +171,12 @@ excerptCheck.ok      the field is `verified`; `ok` is undefined    -> "0 failure
 grep -c docs         matched `read: docs-live-hs.cabal`            -> "5 refusals" that were file reads
 #\s*[A-Za-z_(]       matched `# use` in a doctest                  -> real cfg_rt! items called templates
 \bGToJSON'\b         `\b` after `'` needs a word char next          -> 10 aeson classes "lost" that are present
+a top-level head RE  `issues` and `json` are MEMBERS                -> npm read 45% when it is 90%
+a case-SENSITIVE RE  fts5 folds case; the index does not care       -> scotty's df read 3.9%, not 99.4%
 ```
 
-None survived looking at the rows. Every one would have been a believable number.
+None survived looking at the rows, or at the index. Every one would have been a
+believable number.
 
 
 ## The metric that finally moves: `scripts/docs-defines.ts`
@@ -218,14 +221,28 @@ cargo   26/26 (100%)     npm 38/42 (90%)     hackage 26/33 (79%)
 1 chunk of 311 declares it:  "-- Web/Scotty.hs\nscotty :: Port -> ScottyM () -> IO ()"
 ```
 
-And the token that should find it is worthless:
+And the token that should find it is worthless — measured against the FTS index
+itself, which is the only thing that decides ranking:
 
 ```
-chunks of `scotty` containing the token "scotty":  309 / 311  (99%)
-    288 in the chunk HEADER only        6 in the body only      15 in both
-chunks of `aeson` containing "aeson":            1282 / 1283 (100%)
-    1244 header only
+    MATCH "scotty"  within scotty      309 / 311     99.4%
+    MATCH "aeson"   within aeson      1282 / 1283    99.9%
+    MATCH "hono"    within hono        169 / 1124    15.0%
+    MATCH "zod"     within zod         214 / 1956    10.9%
+    MATCH "axum"    within axum        109 / 437     24.9%
 ```
+
+Where it comes from, counted over the chunk text by hand:
+
+```
+scotty chunks carrying the name:   288 in the chunk HEADER only, 6 body only, 15 both
+aeson                             1244 header only
+```
+
+**Measure this through the FTS, never with a regex.** A case-sensitive regex reads
+scotty at 3.9%, because it will not match `Scotty` in `-- Web/Scotty.hs` — and
+fts5's default `unicode61` tokenizer folds case, so the query token certainly
+does. Off by a factor of twenty-five.
 
 The indexer prepends `-- Web/Scotty.hs` to every chunk. Haskell paths carry the
 package name, so after indexing, the package's own name has a document frequency
