@@ -2150,6 +2150,25 @@ unverified excerpts across runs 2, 3 and 5:  24
                          real fabrications:    0
 ```
 
+**Re-run 7's ts adds two more, and they are false in the two ways the earlier ones
+were.** The audit read `answers with 0 invented symbols 15/17`:
+
+```
+.      ZodError   "…calls configSchema.parse(...), which throws `ZodError` on invalid config"
+hono   obj        "For `c.json(obj, status)`: the Context class declares `json: JSONRespond`…"
+```
+
+`ZodError` is zod's real type, correctly named in an answer about PROJECT source —
+the project corpus holds no dependency's declarations, so any dependency type named
+in a project answer flags. `obj` is the answer's own shorthand for the parameter the
+declaration calls `object:`, inside prose describing the call.
+
+Running total across six runs: the invented-symbol flag has fired for **26 excerpts
+and 6 symbols, and not one has been a fabrication.** The prior session measured a
+query-echo guard and did not ship it, on the grounds that there is nothing in the
+corpus for it to protect. Two more false flags is more of the same evidence, not new
+evidence. Left alone.
+
 Twenty-four cases and the warning has never once been right. It stays, because
 the thing it watches for is real and would matter; but nothing in five live runs
 has tripped it honestly.
