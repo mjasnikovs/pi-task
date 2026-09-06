@@ -921,7 +921,10 @@ function runtimeDeps(root: string): Set<string> {
 
 /** Every leaf name a use-path brings in, and every module it globs. */
 function useTargets(body: string): {names: string[]; globs: string[]} {
-    const flat = body.replace(/#\[[^\]]*\]/g, '').replace(/\s+/g, '')
+    // Whitespace is normalised, never removed: `Inner as Outer` collapsed to
+    // `InnerasOuter` is unrecoverable, and splitting a leaf on a bare "as" turns
+    // `Hasher` into `H`.
+    const flat = body.replace(/#\[[^\]]*\]/g, '').replace(/\s+/g, ' ').trim()
     const names: string[] = []
     const globs: string[] = []
     const expand = (prefix: string, rest: string): void => {
@@ -930,8 +933,10 @@ function useTargets(body: string): {names: string[]; globs: string[]} {
             const full = prefix + rest
             if (full.endsWith('*')) globs.push(full.replace(/::\*$/, ''))
             else {
-                const leaf = full.split('::').pop()
-                if (leaf) names.push(leaf.split(' as ')[0].split('as')[0] || leaf)
+                // The SOURCE name of a rename is the hole: the supplier declares
+                // `Inner`, whatever the facade calls it.
+                const leaf = full.split('::').pop()?.split(/\s+as\s+/)[0].trim()
+                if (leaf) names.push(leaf)
             }
             return
         }

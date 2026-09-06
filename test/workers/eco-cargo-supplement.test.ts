@@ -108,6 +108,23 @@ describe('cargoExportGap', () => {
         expect(gap.wholesale('src/response/into_response.rs', 'pub fn anything() {}')).toBe(false)
     })
 
+    test('a re-exported name containing "as" is not truncated', () => {
+        // `Hasher` split on a bare "as" yields "H". The rename form is `X as Y`,
+        // which only exists with the spaces intact.
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cargo-as-'))
+        try {
+            write(dir, 'Cargo.toml', ['[package]', 'name = "h"', '', '[dependencies.dep]', 'version = "1"'].join('\n'))
+            write(dir, 'src/lib.rs', 'pub use dep::{Hasher, Inner as Outer};')
+            const gap = cargoExportGap(dir)
+            expect(gap.fillsHole('pub struct Hasher;')).toBe(true)
+            expect(gap.fillsHole('pub struct H;')).toBe(false)
+            // The rename's SOURCE name is the hole; the supplier declares `Inner`.
+            expect(gap.fillsHole('pub struct Inner;')).toBe(true)
+        } finally {
+            fs.rmSync(dir, {recursive: true, force: true})
+        }
+    })
+
     test('a crate that re-exports nothing external has no gap at all', () => {
         expect(cargoExportGap(plain).empty).toBe(true)
     })
