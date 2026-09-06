@@ -2328,6 +2328,53 @@ material as the first 15,000.
 
 ---
 
+## Under-retrieval predicts the miss, and the obvious cause is REFUTED
+
+Seven records still miss on defines after 0.40.17. Six of the seven leave both walls
+unspent — fewer than 50 chunks AND under 22,000 characters — where the hits mostly
+fill one:
+
+```
+                 n     miss rate
+retrieval slack  47     6  12.8%
+retrieval full  110     1   0.9%
+
+chunks   hit median 18  p25 12      miss median 9  p25 5
+bytes    hit median 22,450          miss median 17,710
+```
+
+So the question is why retrieval stops short of a budget nobody is spending, and
+`enforceBudget` answers it in one word:
+
+```ts
+if (total + c.content.length > budget) break
+```
+
+**`break`, not `continue`.** One oversized chunk high in the ranking discards every
+lower-ranked chunk beneath it, including ones that would have fitted. A `hono:Hono`
+miss returns 4 chunks and 17,710 characters against a 24,000 budget with 46 chunks
+of headroom left.
+
+That is a lever that costs no volume at all — the same budget, packed instead of
+truncated. **Measured, and it is worse.**
+
+```
+break -> continue, same cache, same budget
+pairs 157   only-break 2   only-continue 1   150/157 -> 149/157   p = 1.0000
+cargo 42/42 -> 41/42
+```
+
+The reason is the second `enforceBudget`. `kept` feeds `hopNames`, and the hops —
+the alias definitions that are the whole point of defect 3's fix — are re-budgeted
+alongside it as `[kept[0], ...hops, ...kept.slice(1)]`. Packing more originals into
+the first pass leaves less room in the second, and a dropped hop costs more than a
+gained tail chunk. The `break` is load-bearing and nothing said so.
+
+Recorded so the next session does not read that line, see an obvious bug, and fix
+it. The correlation above is real and its cause is not this.
+
+---
+
 ## Defect 25. One chunk in twenty-six had no provenance line, and it is why the Bun family abstains
 
 Found by the rule this file keeps proving: check the constants the mechanism runs

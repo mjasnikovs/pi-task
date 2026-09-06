@@ -178,6 +178,10 @@ function enforceBudget(chunks: RetrievedChunk[], budget: number): RetrievedChunk
             total += c.content.length
             continue
         }
+        // `break`, not `continue`, and it is load-bearing. Packing lower-ranked
+        // chunks into the gap left by an oversized one leaves less room in the
+        // SECOND enforceBudget, where the alias hops sit — and a dropped hop costs
+        // more than a gained tail chunk. Measured: defines 150/157 -> 149/157.
         if (total + c.content.length > budget) break
         out.push(c)
         total += c.content.length
