@@ -2488,6 +2488,57 @@ not mistaken for an indexing bug.
 
 ---
 
+## The hop re-budget is zero-sum — three levers, three losses, one mechanism
+
+Every symbol still missing on defines HAS a declaring chunk in its own package, and
+a small one:
+
+```
+bun:test:it                4 chunks declare it   smallest  66 B
+bun:test:describe          4                              78 B
+bun:test:expect            4                              71 B
+hono:json                  6                             146 B
+hono:Hono                  4                             225 B
+node:fs/promises:readFile 11                             195 B
+```
+
+So none of the eight is a corpus gap. All eight are `bm25` ranking a 200-byte
+declaration below the bigger chunks that merely use the name — and `definitionChunk`
+already knows how to fetch one by name. It was only ever reached for an ALIAS hop's
+type, never for a symbol the question itself asked about.
+
+Wiring it to the query's own symbols is the obvious fix, and it is the third to be
+measured and refused:
+
+```
+enforceBudget `break` -> `continue`        150/157 -> 149/157   p = 1.0000
+alias hop reads `export const`             151/159 -> 149/159   p = 0.5000
+definitionChunk for the query's symbols    151/159 -> 147/159   p = 0.2891
+                                           and cargo 42/42 -> 41/42
+```
+
+**One mechanism, three times.** `retrieveChunks` ends with
+
+```ts
+return enforceBudget([kept[0], ...hops, ...kept.slice(1)], budget)
+```
+
+The budget does not grow to hold a hop. Every chunk added to `hops` evicts one from
+the tail of `kept`, and what it evicts is a chunk that earned its place by rank.
+Three different ways of adding material all cost more than they bought, and the
+third took a cargo record with it — cargo, where nothing was being chased.
+
+**So the residual is not addressable by fetching more.** Eight misses in 159, the
+declarations are all there, and the budget has no room for them that is not already
+someone else's. What would move it is ranking a short declaration ABOVE a long user
+of the name — a scoring change, not another hop — and nothing here has tested one.
+
+`IDENTIFIER_SHAPED` is why the hop never reached these on its own, and it stays:
+`describe`, `expect`, `it` and `json` carry no capital, and dropping the gate to
+reach them was already measured once at 90/101 -> 88/101.
+
+---
+
 ## The session's shipped `src/` work, measured end to end on one instrument set
 
 Everything below is scored by the instruments as they stand at the end — the fixed
