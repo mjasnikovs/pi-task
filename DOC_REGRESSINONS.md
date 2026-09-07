@@ -2685,6 +2685,50 @@ for it is not a constant.
 
 ---
 
+## hackage PASSED — the first complete hs run in eight, and the harness is why
+
+```
+settled (all 4 planned tasks done)
+hs: green  (cabal build all && cabal test)
+```
+
+Eight runs of this test have produced: two HARD FAILs, three green-but-doomed
+verdicts on partial trees, one container stop, one 0-of-3, and now this.
+
+```
+docs calls 19    answers 20    abstentions 1 of 20   5%
+recall 4/4       pins 2/2      build green
+```
+
+**Five per cent.** Every previous hs run: 55, 80, 83, 46, 100, 33, and 9 on the
+partial. aeson's own baseline was 8 abstentions in 11 calls.
+
+The one abstention asks for `catch` in `Web.Scotty` — scotty 0.30 moved exception
+handling and the combinator is not there under that name. The audit's second
+"abstention" is defect 27's shape and rescores to an answer: a partial answer that
+named its gap.
+
+### What actually changed, and it is not one thing
+
+```
+0.40.16  chunks split at member boundaries, every slice keeps its path
+0.40.20  a partial answer stops counting as an abstention
+0.40.23  the harness stops calling a run settled while it is implementing
+0.40.24  the harness resumes a run that halts asking to be resumed
+seed     nothing here — the hs seed is unchanged
+```
+
+Only the first is retrieval. The last two are why there is a run to score at all:
+under the old settle rule this run was killed twice, once at task 1 of 3 and once at
+task 2 of 5, and both times the tree it left behind built RED.
+
+**So the honest claim is narrow.** hackage can complete, it passes when it does, and
+its abstention rate on a complete run is 5%. One run is one run — but it is the first
+complete one, and every earlier hackage number was measured on a tree that never
+finished.
+
+---
+
 ## Re-run 7's hs, on the fixed harness — 9% abstention, and an honest STALL
 
 hs re-ran alone on 0.40.23, re-seeded, with defect 31's fixes in the runner. Two
@@ -3859,6 +3903,7 @@ Artifacts in `live-docs-run-2026-09-05/`, `live-docs-rerun-2026-09-05/`,
 | re-run 5, 09-06 | 0.40.11 | **HARD FAIL**, 43% | PASS, 17% | PASS, 33% |
 | re-run 6, 09-06 | 0.40.14 | **HARD FAIL**, 10% | **HARD FAIL**, 17% | killed at task 1 |
 | re-run 7, 09-07 | 0.40.16 | **HARD FAIL**, 15% | **PASS**, 20% | no verdict — defect 31 |
+| hs alone, 09-07 | 0.40.16 + 0.40.24 harness | — | — | **PASS**, 5%, 4/4 tasks |
 
 **Re-run 5 is the best result any run has had on the hard half**: rs and hs both
 PASS, and hs has passed twice in five runs. ts HARD FAILs on `bun test`'s
