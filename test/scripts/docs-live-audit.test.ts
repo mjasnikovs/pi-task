@@ -3,7 +3,12 @@ import {tmpDir} from '../test-utils/tmp-dir.js'
 import {OBLIGATIONS} from '../../scripts/docs-live-truth.js'
 import {mkdirSync, writeFileSync} from 'node:fs'
 import {join} from 'node:path'
-import {inventedSymbols, scoreRecall, taskProgress} from '../../scripts/docs-live-audit.js'
+import {
+    inventedSymbols,
+    scoreRecall,
+    taskProgress,
+    webFollowsDocs
+} from '../../scripts/docs-live-audit.js'
 import type {TypeOnlyLogRecord} from '../../src/workers/typeonly-log.js'
 
 // The tool's return embeds the answer prose, so scoring the answer against it asks
@@ -249,4 +254,40 @@ test('a checklist line outside the tasks section is not a task', () => {
         `## tasks\n\n- [x] TASK_0001 one\n\n## coverage\n\n- [ ] not a task\n`
     )
     expect(taskProgress(root)).toEqual({tasks: 1, done: 1})
+})
+
+// The strongest signal the audit has — the docs tool was asked, and the model went to
+// the web anyway — read 0 in every run because it compared a docs module (`wai-test`)
+// to a fetch's own label, which is a URL. hackage run 8 asked docs about wai-test and
+// aeson and then fetched hackage.haskell.org for both, eleven times, scoring 0.
+test('a fetch URL naming a package the docs tool was asked about counts', () => {
+    expect(
+        webFollowsDocs(new Set(['wai-test', 'aeson', '.']), [
+            {phase: 'worker:apis', module: 'https://hackage.haskell.org/package/wai-test-3.0.0'}
+        ])
+    ).toEqual(['wai-test'])
+})
+
+test('a search query naming the package counts too', () => {
+    expect(webFollowsDocs(new Set(['wai-test']), [{phase: 'p', module: '""wai-test"'}])).toEqual([
+        'wai-test'
+    ])
+})
+
+test('a package the docs tool was never asked about does not count', () => {
+    expect(
+        webFollowsDocs(new Set(['aeson']), [{phase: 'p', module: 'https://example.com/scotty'}])
+    ).toEqual([])
+})
+
+test('the project corpus is not a package name to match on', () => {
+    expect(
+        webFollowsDocs(new Set(['.']), [{phase: 'p', module: 'https://a.example/b.html'}])
+    ).toEqual([])
+})
+
+test('a name inside a longer word is not a match', () => {
+    expect(webFollowsDocs(new Set(['wai']), [{phase: 'p', module: 'https://x/waitress'}])).toEqual(
+        []
+    )
 })

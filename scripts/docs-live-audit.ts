@@ -281,6 +281,34 @@ export function taskProgress(root: string): {tasks: number; done: number} {
     return {tasks, done}
 }
 
+/**
+ * Web calls that name a package the docs tool was already asked about.
+ *
+ * The strongest signal this audit has — the tool answered and the model went to the
+ * web anyway — read 0 in every run, because it compared a docs module to a web
+ * call's own label and those are not the same kind of string. A docs module is
+ * `wai-test`; a fetch's label is `https://hackage.haskell.org/package/wai-test-3.0.0`
+ * and a search's is `""wai-test"`. hackage run 8 asked docs about `wai-test` and
+ * `aeson`, fetched hackage for both eleven times, and scored zero.
+ *
+ * Whole-token, so `wai` does not match `waitress`. The project corpus `.` is not a
+ * package name and never matches.
+ */
+export function webFollowsDocs(
+    askedDocs: ReadonlySet<string>,
+    web: readonly {phase: string; module: string}[]
+): string[] {
+    const out: string[] = []
+    for (const pkg of askedDocs) {
+        if (pkg === '.' || pkg.length < 2) continue
+        const re = new RegExp(
+            `(?<![A-Za-z0-9_])${pkg.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![A-Za-z0-9_])`
+        )
+        if (web.some(w => re.test(w.module))) out.push(pkg)
+    }
+    return out
+}
+
 /** Source files the run produced, for the stale-API sweep. */
 function sourceFiles(root: string): string[] {
     const out: string[] = []
@@ -429,8 +457,7 @@ function auditProject(runRoot: string, spec: ProjectSpec, build: boolean): Proje
     }
 
     // Soft signal: the model asked docs about a package, then went to the web.
-    const askedDocs = new Set(trail.docs.map(c => c.module))
-    for (const w of trail.web) if (askedDocs.has(w.module)) rep.webAfterDocs.push(w.module)
+    rep.webAfterDocs = webFollowsDocs(new Set(trail.docs.map(c => c.module)), trail.web)
 
     // Pins.
     const got = resolvedPins(root, spec)

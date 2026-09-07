@@ -2701,6 +2701,59 @@ for it is not a constant.
 
 ---
 
+## Defect 32. The audit's strongest signal was comparing two kinds of string
+
+`webAfterDocs` — the model asked the docs tool about a package and then went to the
+web anyway — has read **0 in every run of this test**. It is not saturated. It could
+not fire.
+
+```ts
+const askedDocs = new Set(trail.docs.map(c => c.module))
+for (const w of trail.web) if (askedDocs.has(w.module)) rep.webAfterDocs.push(w.module)
+```
+
+A docs module is a package name. A web call's label is a URL or a quoted search
+string. They are never equal, so the set lookup never hits.
+
+**And the traffic is there.** hackage run 8 — the run that PASSED at 5% abstention —
+asked docs about `wai-test` and `aeson`, and then:
+
+```
+docs modules asked   .  wai-test  hspec  aeson  bytestring  wai  scotty
+web calls            13
+  search  "Haskell            fetch  hackage.haskell.org/package/wai-test-3.0.0
+  search  ""wai-test"         fetch  hackage.haskell.org/package/wai-test-3.0.0/src/…
+  search  "haskell            fetch  hackage.haskell.org/package/wai-extra-3.1.18/docs/…
+                              fetch  hackage.haskell.org/package/aeson-2.3.1.0/docs/Data…
+```
+
+Eleven fetches to hackage for two packages the tool had just answered about, scored
+as zero.
+
+`webFollowsDocs` matches a docs module as a whole token anywhere in the web call's
+label, so `wai-test` matches its own URL and `wai` does not match `waitress`. The
+project corpus `.` never matches. Re-scored, run 8's hs reads **3**.
+
+### Which changes how that PASS should be read
+
+hs passed, built green, and abstained once in twenty. It also went to the web for
+`wai-test` and `aeson` eleven times. **An answer that does not abstain is not the
+same as an answer that was enough**, and the abstention rate cannot tell those apart
+— this metric can, and it has been blind for eight runs.
+
+That is the fourth "cannot fire" check found tonight, and the third checked this way.
+The other two — `refusalsInResearch` and the fidelity flag — came back sound and
+saturated respectively. This one did not.
+
+**An archiving note, learned the hard way.** The hackage tarball must keep
+`dist-newstyle/cache/plan.json`: `resolvedPins` reads a cabal project's versions from
+it, and a tree archived without it audits as `pin moved: aeson -> absent`, a HARD
+FAIL that is the archive's and not the run's. Re-archiving from the live directory is
+also wrong once a later run has re-seeded it — the tree is gone, and the committed
+tarball is the only copy.
+
+---
+
 ## hackage PASSED — the first complete hs run in eight, and the harness is why
 
 ```
