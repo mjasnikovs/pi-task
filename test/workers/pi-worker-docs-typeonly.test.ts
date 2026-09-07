@@ -60,17 +60,17 @@ const cacheable = docsCacheable
 // SIGTERMed lookup as a clean one and memoise its aborted text.
 describe('cacheable — a poor answer must never be memoised (F-2e)', () => {
     test('a real answer is cached', () => {
-        expect(cacheable({excerptVerified: true}, 'Per hono@4: hc takes …')).toBe(true)
+        expect(cacheable({excerptVerified: true})).toBe(true)
     })
 
     test('"unclear from this package" is NOT cached', () => {
         // A cached abstention is served to every later asker, so the miss never
         // recurs and nothing ever re-triggers an escalation.
-        expect(cacheable({}, 'unclear from this package')).toBe(false)
+        expect(cacheable({abstained: true})).toBe(false)
     })
 
     test('a TYPE-ONLY answer is NOT cached', () => {
-        expect(cacheable({typeOnly: true}, 'hc takes two parameters…')).toBe(false)
+        expect(cacheable({typeOnly: true})).toBe(false)
     })
 
     // CHANGED, with the measurement. This asserted that an unverified excerpt is
@@ -79,16 +79,14 @@ describe('cacheable — a poor answer must never be memoised (F-2e)', () => {
     // every span verbatim. The gate reads `excerptFabricated` now, so an unverified
     // stitched quote caches and an excerpt with an absent word still does not.
     test('a stitched excerpt IS cached; a suspected fabrication is not', () => {
-        expect(cacheable({excerptVerified: false}, 'Per bun@1: …')).toBe(true)
-        expect(cacheable({excerptVerified: false, excerptFabricated: true}, 'Per bun@1: …')).toBe(
-            false
-        )
+        expect(cacheable({excerptVerified: false})).toBe(true)
+        expect(cacheable({excerptVerified: false, excerptFabricated: true})).toBe(false)
     })
 
     test('excerptVerified undefined (no excerpt offered) still caches', () => {
         // Only an excerpt that FAILED verification is disqualifying; a result with no
         // excerpt at all was never a fabrication signal and must stay cacheable.
-        expect(cacheable({}, 'Per zod@4: z.object(...) builds a schema')).toBe(true)
+        expect(cacheable({})).toBe(true)
     })
 })
 
@@ -98,21 +96,17 @@ describe('cacheable — a poor answer must never be memoised (F-2e)', () => {
 // carrying an absent word. The gate was refusing non-contiguous quoting, not
 // fabrication, and every sibling worker re-ran the lookup for it.
 test('a stitched excerpt is cacheable — the answer is sound', () => {
-    expect(docsCacheable({excerptVerified: false, excerptFabricated: false}, 'a real answer')).toBe(
-        true
-    )
+    expect(docsCacheable({excerptVerified: false, excerptFabricated: false})).toBe(true)
 })
 
 test('an excerpt with a word the source never wrote is not cacheable', () => {
-    expect(docsCacheable({excerptVerified: false, excerptFabricated: true}, 'a real answer')).toBe(
-        false
-    )
+    expect(docsCacheable({excerptVerified: false, excerptFabricated: true})).toBe(false)
 })
 
 test('a verified excerpt is cacheable, as before', () => {
-    expect(docsCacheable({excerptVerified: true}, 'a real answer')).toBe(true)
+    expect(docsCacheable({excerptVerified: true})).toBe(true)
 })
 
 test('an abstention is still not cacheable, however its excerpt checked', () => {
-    expect(docsCacheable({excerptVerified: true}, 'unclear from this package')).toBe(false)
+    expect(docsCacheable({excerptVerified: true, abstained: true})).toBe(false)
 })

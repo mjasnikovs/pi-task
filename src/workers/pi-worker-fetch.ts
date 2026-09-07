@@ -165,12 +165,17 @@ export function registerPiWorkerFetch(
  * ABOUT that page, and re-fetching cannot change it — only the abstention sentinel is
  * refused.
  */
-export function fetchCacheable(_d: Pick<FetchDetails, never>, text: string): boolean {
+export function fetchCacheable(d: Pick<FetchDetails, 'answer'>): boolean {
     // Answer QUALITY only — see docsCacheable. This predicate returns true for
     // `"Fetch aborted."` on its own; what keeps an aborted fetch out of the cache is
     // the `unavailable` outcome upstream. Leading the rule with `childExitCode === 0`
     // would not, because an aborted child settles at exit code 0.
-    return !isAbstention(text)
+    //
+    // It reads the child's bare answer, not the tool text: `isAbstention` is anchored,
+    // and the text leads with an excerpt NOTE/WARNING whenever the excerpt did not
+    // verify — which, since rule 4 asks for the closest related text, is the ordinary
+    // shape of an abstention.
+    return d.answer !== undefined && !isAbstention(d.answer)
 }
 
 /** The fetch cache key. URL verbatim (path case can matter), question normalised —

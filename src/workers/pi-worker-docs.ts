@@ -86,6 +86,12 @@ interface DocsDetails {
     /** The project-lookup budget for this attempt is spent, so the call was refused
      *  before any work. Only set when PI_TASK_PROJECT_DOCS_BUDGET is configured. */
     budgetSpent?: boolean
+    /**
+     * The child declined to answer. Recorded HERE, at the one place the bare
+     * `<answer>` is in hand: the tool text a cache predicate is handed leads with a
+     * provenance header, and the anchored matcher scores that as a real answer.
+     */
+    abstained?: boolean
 }
 
 /**
@@ -326,7 +332,8 @@ export function registerPiWorkerDocs(
                 return workerAnswer(text, {
                     ...baseDetails,
                     excerptVerified: verified,
-                    excerptFabricated: excerptFabricated(extraction.excerptCheck)
+                    excerptFabricated: excerptFabricated(extraction.excerptCheck),
+                    ...(isAbstention(extraction.answer) ? {abstained: true} : {})
                 })
             }
 
@@ -489,7 +496,8 @@ export function registerPiWorkerDocs(
                 ...baseDetails,
                 excerptVerified: verified,
                 excerptFabricated: excerptFabricated(extraction.excerptCheck),
-                ...(typeOnly.typeOnly ? {typeOnly: true} : {})
+                ...(typeOnly.typeOnly ? {typeOnly: true} : {}),
+                ...(isAbstention(extraction.answer) ? {abstained: true} : {})
             })
         },
 
@@ -549,8 +557,7 @@ export function excerptFabricated(check: {absent: readonly string[]} | undefined
 }
 
 export function docsCacheable(
-    d: Pick<DocsDetails, 'typeOnly' | 'excerptVerified' | 'excerptFabricated'>,
-    text: string
+    d: Pick<DocsDetails, 'typeOnly' | 'excerptVerified' | 'excerptFabricated' | 'abstained'>
 ): boolean {
     // Answer QUALITY only. Whether there IS an answer is `WorkerOutcome.kind`, and
     // `makeWorkerTool` has already refused an `unavailable` before reaching here —
@@ -562,7 +569,12 @@ export function docsCacheable(
     // classifier defect 18 added, 41 of 41 unverified excerpts across seven runs are
     // STITCHED — every span verbatim, not one absent word. The gate was refusing
     // non-contiguous quoting, and every sibling paid a fresh child for it.
-    return d.typeOnly !== true && d.excerptFabricated !== true && !isAbstention(text)
+    //
+    // The abstention is read off DETAILS, not off the tool text. `makeWorkerTool`
+    // hands this the FINAL text, which leads with `Per <pkg>@<version>:` — and
+    // `isAbstention` is anchored, so testing that text scored every abstention as a
+    // real answer and memoised the dead end for the whole run.
+    return d.typeOnly !== true && d.excerptFabricated !== true && d.abstained !== true
 }
 
 /** The docs cache key: a package's answer is per (module, question), with the question

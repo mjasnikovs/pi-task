@@ -266,19 +266,15 @@ test('pi-worker-fetch description is trigger-framed toward integration/wiring in
 // reason: a retyped copy is asserted against itself.
 
 test('fetch cacheable: a real answer is cached', () => {
-    expect(fetchCacheable({childExitCode: 0}, 'The endpoint accepts POST with a JSON body.')).toBe(
-        true
-    )
+    expect(fetchCacheable({answer: 'The endpoint accepts POST with a JSON body.'})).toBe(true)
 })
 
 test('fetch cacheable: "unclear from this page" is NOT cached, though the child exited 0', () => {
     // A non-answer exits 0 like any other, so a rule keyed on exit code would memoise
     // it and re-serve the dead end to every later sibling, leaving nothing to re-trigger
     // an escalation. The same rule closes this for packages in docsCacheable.
-    expect(fetchCacheable({childExitCode: 0}, 'unclear from this page')).toBe(false)
-    expect(fetchCacheable({childExitCode: 0}, '<answer>Unclear from this page.</answer>')).toBe(
-        false
-    )
+    expect(fetchCacheable({answer: 'unclear from this page'})).toBe(false)
+    expect(fetchCacheable({answer: '<answer>Unclear from this page.</answer>'})).toBe(false)
 })
 
 test('fetch cacheable: a partial "not covered by this page" answer IS still cached', () => {
@@ -286,10 +282,10 @@ test('fetch cacheable: a partial "not covered by this page" answer IS still cach
     // coverage miss NAMED inside a sourced answer, not a refusal. isAbstention matches
     // "unclear from this page" as a substring and must not reach this.
     expect(
-        fetchCacheable(
-            {childExitCode: 0},
-            'Audio callbacks are registered via obs_add_raw_audio_callback; the remove '
+        fetchCacheable({
+            answer:
+                'Audio callbacks are registered via obs_add_raw_audio_callback; the remove '
                 + 'variant is not covered by this page.'
-        )
+        })
     ).toBe(true)
 })

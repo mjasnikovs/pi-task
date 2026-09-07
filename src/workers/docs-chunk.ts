@@ -137,6 +137,10 @@ export function headedSlices(header: string, body: string, maxBytes: number): st
     const prefixed = `${header}\n${body}`
     if (Buffer.byteLength(prefixed, 'utf8') <= maxBytes) return [prefixed]
     const room = maxBytes - Buffer.byteLength(`${header}\n`, 'utf8')
+    // A header that fills the cap on its own leaves no room, and `sliceBytes` with a
+    // non-positive cap never shrinks its buffer. Slice the prefixed string instead:
+    // the first piece still names the source, which is all the header buys.
+    if (room <= 0) return sliceBytes(prefixed, maxBytes)
     return sliceBytes(body, room).map(slice => `${header}\n${slice}`)
 }
 

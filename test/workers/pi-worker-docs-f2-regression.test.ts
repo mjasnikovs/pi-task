@@ -233,8 +233,7 @@ describe('the docs tool marks the recorded case UNANSWERED and names what to fet
         // excerptVerified, abstention — and has nothing else available to key on.
         expect(d.childExitCode).toBeUndefined()
         expect(d.typeOnly).toBe(true)
-        const body = result.content[0]
-        expect(docsCacheable(d, body?.type === 'text' ? body.text : '')).toBe(false)
+        expect(docsCacheable(d)).toBe(false)
         cache.close()
     })
 })

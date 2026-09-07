@@ -6,7 +6,8 @@ import {
     sliceBytes,
     DECL_SPLIT_RE,
     MEMBER_SPLIT_RE,
-    MAX_CHUNK_BYTES
+    MAX_CHUNK_BYTES,
+    headedSlices
 } from '../../src/workers/docs-chunk.js'
 import {CARGO_DECL_SPLIT_RE} from '../../src/workers/eco-cargo.js'
 
@@ -298,3 +299,15 @@ test('a member still wider than the cap falls back to byte slicing', () => {
         expect(Buffer.byteLength(c, 'utf8')).toBeLessThanOrEqual(MAX_CHUNK_BYTES)
     }
 })
+
+test('a header wider than the cap does not hang the indexer', () => {
+    // `room` went negative and `sliceBytes(body, room)` then spun forever: `end` walks
+    // to 0, the zero-guard restores the non-positive cap, and the buffer never shrinks.
+    // Reachable from `chunkReadme`, whose header carries an unbounded heading line.
+    const header = `<!-- README: ${'h'.repeat(MAX_CHUNK_BYTES)} -->`
+    const chunks = headedSlices(header, 'body text', MAX_CHUNK_BYTES)
+    expect(chunks.length).toBeGreaterThan(0)
+    expect(chunks.join('')).toContain('body text')
+    for (const c of chunks)
+        expect(Buffer.byteLength(c, 'utf8')).toBeLessThanOrEqual(MAX_CHUNK_BYTES)
+}, 5000)
