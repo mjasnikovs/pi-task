@@ -1153,10 +1153,26 @@ all twelve project-runs:
 | answers with 0 invented symbols | 4 runs flagged, every flag false | fires, never truly |
 | retrieval recall | 43/44, and the 1 was a scorer bug | **saturated** |
 | pins resolved | 7/7 in every run, three version sources | **saturated** |
-| refusals in research | 0 in 11 of 12; one run had 1 | **saturated** |
+| refusals in research | 0 in 11 of 12; one run had 1 | **saturated, and sound** |
 
 Two of the three are saturated because the thing they watch really does work —
-that is worth knowing once, and it is known. Reporting them each run is noise, and
+that is worth knowing once, and it is known.
+
+**And `refusalsInResearch` was nearly filed as a fourth, wrongly.** It reads
+`Math.max(0, researchCalls - records.length)`, subtracting EVERY record from a
+SUBSET of trail calls, which looks like defect 9's shape: a verify that cannot fire,
+its own clamp hiding it. Measured on three real trees it is not:
+
+```
+ts   trail-all 20   research-phase 20   records 20
+rs   trail-all 15   research-phase 15   records 15
+hs   trail-all 19   research-phase 19   records 20
+```
+
+Every trailed docs call IS a research-phase call, so the subset is the whole set and
+a genuine refusal would make the difference positive. It reads 0 because there are
+no refusals. hs's one extra record — an answer with no trail line — is what the
+clamp is for, and it is 1 in 20. Reporting them each run is noise, and
 worse, a false miss in a saturated metric (as recall had) sends a session hunting a
 defect that is not there.
 
