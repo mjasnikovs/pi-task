@@ -242,19 +242,35 @@ function readTrail(root: string): {docs: TrailCall[]; web: TrailCall[]} {
 }
 
 /**
- * How many task specs the run wrote, and how many it marked off.
+ * How far the run got, read off the PLAN's own checklist.
  *
- * The verdict needs this because `.pi-tasks/` exists from the first task onward,
- * so a run the container stopped seven minutes in is indistinguishable from a
- * finished one by presence alone — and its skeleton still builds green. Run 6's hs
- * scored PASS on one `in_progress` task and zero docs calls.
+ * The verdict needs this because `.pi-tasks/` exists from the first task onward, so
+ * a run the container stopped seven minutes in is indistinguishable from a finished
+ * one by presence alone — and its skeleton still builds green.
  *
- * Same rule as the runner's own `progress()`: `TASK_AUTO_NNNN.md` is the plan, not
- * a task, and only `TASK_NNNN.md` carries a `state:` worth counting.
+ * Counting `TASK_NNNN.md` files, which is what the runner's `progress()` does, is
+ * not enough. Re-run 7's hs PLANNED THREE tasks, had one spec file written, and
+ * settled: spec files read 1 of 1 while the plan read 0 of 3. ts read 4/4 and rs
+ * 5/5 on the same rule, so the plan is the truth wherever there is one — a task the
+ * planner named and nothing ever wrote is still a task the run did not do.
+ *
+ * The fallback is the old rule, for a tree with no plan at all.
  */
 export function taskProgress(root: string): {tasks: number; done: number} {
     const dir = path.join(root, '.pi-tasks')
     if (!fs.existsSync(dir)) return {tasks: 0, done: 0}
+    const plan = fs.readdirSync(dir).find(f => /^TASK_AUTO_\d+\.md$/.test(f))
+    if (plan !== undefined) {
+        const text = fs.readFileSync(path.join(dir, plan), 'utf8')
+        // The `## tasks` section only. `## coverage` below it has bullets of its own.
+        const section = /^## tasks\s*$([\s\S]*?)^## /m.exec(text)?.[1]
+        if (section !== undefined) {
+            const lines = section.split('\n').filter(l => /^- \[[ x]\]/.test(l))
+            if (lines.length > 0) {
+                return {tasks: lines.length, done: lines.filter(l => /^- \[x\]/.test(l)).length}
+            }
+        }
+    }
     let tasks = 0
     let done = 0
     for (const f of fs.readdirSync(dir)) {

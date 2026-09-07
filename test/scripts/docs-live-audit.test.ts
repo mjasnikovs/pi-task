@@ -208,3 +208,45 @@ test('a bare string does not meet it', () => {
 test('the field NAME alone does not meet it', () => {
     expect(tsEmail.pattern.test('const adminEmail = raw.adminEmail')).toBe(false)
 })
+
+// Re-run 7's hs planned three tasks, had ONE spec file written, and the runner's
+// progress() — which counts TASK_NNNN.md — read 1/1 and settled. The plan's own
+// checklist is the truth: ts read 4/4 ticked and rs 5/5, hs 0/3.
+const PLAN = `---
+id: TASK_AUTO_0001
+---
+
+## tasks
+
+- [x] TASK_0001  Scaffold the project | decisions: none
+- [ ] Wire the executable | decisions: none
+- [ ] Write the tests | decisions: none
+
+## coverage
+`
+
+test('the plan checklist is what says how far a run got', () => {
+    const root = mkdtempSync(join(tmpdir(), 'audit-plan-'))
+    mkdirSync(join(root, '.pi-tasks'))
+    writeFileSync(join(root, '.pi-tasks', 'TASK_AUTO_0001.md'), PLAN)
+    writeFileSync(join(root, '.pi-tasks', 'TASK_0001.md'), 'state: completed\n')
+    expect(taskProgress(root)).toEqual({tasks: 3, done: 1})
+})
+
+test('with no plan it falls back to the spec files', () => {
+    const root = mkdtempSync(join(tmpdir(), 'audit-plan-'))
+    mkdirSync(join(root, '.pi-tasks'))
+    writeFileSync(join(root, '.pi-tasks', 'TASK_0001.md'), 'state: completed\n')
+    writeFileSync(join(root, '.pi-tasks', 'TASK_0002.md'), 'state: in_progress\n')
+    expect(taskProgress(root)).toEqual({tasks: 2, done: 1})
+})
+
+test('a checklist line outside the tasks section is not a task', () => {
+    const root = mkdtempSync(join(tmpdir(), 'audit-plan-'))
+    mkdirSync(join(root, '.pi-tasks'))
+    writeFileSync(
+        join(root, '.pi-tasks', 'TASK_AUTO_0001.md'),
+        `## tasks\n\n- [x] TASK_0001 one\n\n## coverage\n\n- [ ] not a task\n`
+    )
+    expect(taskProgress(root)).toEqual({tasks: 1, done: 1})
+})

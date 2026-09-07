@@ -3296,6 +3296,52 @@ that noise is the larger effect of the two.
 
 ---
 
+## Re-run 7 — and every one of its three verdicts depends on a fix made the same night
+
+Launched on 0.40.16, all three re-seeded. Artifacts in `live-docs-rerun7-2026-09-07/`.
+
+```
+ts   HARD FAIL   20 records   3 abstained  15%   recall 4/4   build green
+rs   PASS        15 records   3 abstained  20%   recall 4/4   cargo test green
+hs   INCOMPLETE  0 of 3 planned tasks, 3 docs calls
+```
+
+**Read what the audit would have said this morning: ts PASS, rs PASS, hs HARD FAIL.
+All three wrong.**
+
+- ts builds green and trips no stale marker. Defect 26's obligation check is the only
+  thing that sees `adminEmail: z.string()` against a feature requiring an email.
+- rs is the first PASS on the hard half since re-run 5, and it is the seed fix: the
+  test file opens `use tower::ServiceExt;` and calls `.oneshot(…)`.
+- hs "settled" with one spec file written of three planned tasks. Counting spec files
+  reads 1 of 1; defect 29's plan-checklist rule reads 0 of 3 and refuses a verdict.
+
+### rs is the result the session was built to get
+
+Two of the previous six runs died hand-rolling `poll_ready`/`call` because `tower`
+was not a declared dependency. Run 7 wrote the idiomatic test on the first attempt
+and `cargo test` is green. One line of `[dev-dependencies]`.
+
+Its three abstentions are one cluster and unanswerable — `#[serde(rename_all)]`,
+which appears once in serde's 399 chunks and not at all in `serde_derive`'s zero.
+
+### ts is not a docs failure either
+
+Third run running where the tool answered correctly and the code did not follow.
+`z.email()` was named, with `z.string().email()` called deprecated in the same
+sentence, and the shipped schema validates nothing. The docs tool was asked 20
+questions, abstained on 3, and every abstention is about tsconfig, `node:path` or
+`node:os` — build tooling, not a pinned package.
+
+### hs planned three tasks and executed one
+
+Not a docs defect, and worth naming: `/task-auto` wrote `TASK_0001.md`, completed it,
+and settled while `TASK_AUTO_0001.md` still listed two more tasks with no spec file
+and no tick. Re-run 6's hs also had a single task. Two runs in a row on hackage, and
+the runner's own `progress()` cannot see it because it counts spec files.
+
+---
+
 ## Re-run 6 — the first run on the raised retrieve limit, and the budget is now binding
 
 Launched on 0.40.14, left mid-flight when the previous session ended. ts and rs
@@ -3407,6 +3453,7 @@ Artifacts in `live-docs-run-2026-09-05/`, `live-docs-rerun-2026-09-05/`,
 | re-run 4, 09-06 | 0.40.9 | **HARD FAIL**, 0% | **HARD FAIL**, 14% | **HARD FAIL**, 100% (1 call) |
 | re-run 5, 09-06 | 0.40.11 | **HARD FAIL**, 43% | PASS, 17% | PASS, 33% |
 | re-run 6, 09-06 | 0.40.14 | **HARD FAIL**, 10% | **HARD FAIL**, 17% | killed at task 1 |
+| re-run 7, 09-07 | 0.40.16 | **HARD FAIL**, 15% | **PASS**, 20% | INCOMPLETE, 0/3 tasks |
 
 **Re-run 5 is the best result any run has had on the hard half**: rs and hs both
 PASS, and hs has passed twice in five runs. ts HARD FAILs on `bun test`'s
