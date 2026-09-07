@@ -2569,8 +2569,38 @@ declaration" — is right about which chunk to FETCH and wrong as a sort key ove
 everything that declares.
 
 What is left untested is a scoring change that is neither: a bm25 rank adjusted by
-declaration, rather than a partition on it. That needs a corpus bigger than 159 pairs
-to resolve a three-record effect, and this file does not have one.
+declaration, rather than a partition on it.
+
+### The corpus was widened and the number moved the way more corpus moves a number
+
+`TRUTH` gained `zod:email` — `export declare function email(params?): ZodEmail` in
+`v4/classic/schemas.d.ts`, named by 36 recorded queries, and **the symbol three live
+runs have got wrong**. Whole-token selection keeps it off `adminEmail`. It is not
+saturated: 9 of 14.
+
+```
+                 159 pairs                 173 pairs
+HEAD             151/159                   160/173
+promotion        154/159   p = 0.5078      165/173   p = 0.2266
+                 6 gained 3 lost           8 gained 3 lost
+                                           npm 84/97 -> 90/97, zod:email 9/14 -> 11/14
+```
+
+Fourteen more pairs halved the p-value and the direction held. **It is still not
+shipped**, at p = 0.2266 against a budget refused at 0.1360 and a limit at 0.1796
+tonight — the bar does not move because a lever is cheap, and promotion still takes
+a cargo record.
+
+And the corpus cannot be widened much further by method. Forty candidate symbols were
+generated from every recorded query and exactly one survived: the rest are package
+names (`axum` 47, `zod` 23), module fragments (`Data` 45, `Aeson` 41), English
+(`handler`, `schema`, `body`), or symbols that do not exist — `aeson:decodeFile` 27
+and `aeson:DecodeError` 18 are the runs' own fabrications, which is why they are
+asked about so often.
+
+**What this needs is more recorded runs, not more entries.** 190 records over ~21
+symbols is the ceiling this corpus has.
+
 
 ---
 

@@ -93,6 +93,11 @@ export const TRUTH: readonly TruthEntry[] = [
     // npm — zod 4 renamed both of these out of v3.
     {pkg: 'zod', symbol: 'safeParse', topic: 'parse without throwing'},
     {pkg: 'zod', symbol: 'issues', topic: 'reading validation errors'},
+    // The symbol three live runs have got wrong: zod 4 declares
+    // `export declare function email(params?): ZodEmail` in v4/classic/schemas.d.ts,
+    // and the shipped code wrote `z.string().email()` twice and `z.string()` once.
+    // Named by 36 recorded queries; whole-token selection keeps it off `adminEmail`.
+    {pkg: 'zod', symbol: 'email', topic: 'validating an email field'},
     {pkg: 'hono', symbol: 'Hono', topic: 'creating an app and a GET route'},
     {pkg: 'hono', symbol: 'json', topic: 'returning a JSON response'},
 
