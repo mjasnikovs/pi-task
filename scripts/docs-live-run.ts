@@ -117,6 +117,13 @@ async function waitForSettle(
     let lastPane = ''
     let lastChange = Date.now()
     let seenTasks = false
+    // Progress-gated, not a retry count. `/task-auto` halts on a loop detector and
+    // ASKS to be resumed, which an unattended run never gives it — that is why
+    // hackage produced no verdict in seven runs. Resuming is running the product the
+    // way it is meant to be run; resuming a run that has not finished another task
+    // since the last resume would be a loop of my own, so the gate is `done` moving.
+    let resumes = 0
+    let doneAtResume = -1
     while (Date.now() < hardDeadline) {
         await new Promise(r => setTimeout(r, 15_000))
         const p = progress(root)
@@ -131,12 +138,30 @@ async function waitForSettle(
             lastChange = Date.now()
             console.log(`    tasks=${p.tasks} done=${p.done} trail=${(p.trailBytes / 1024) | 0}KB`)
         } else if (seenTasks && Date.now() - lastChange > quietMs) {
-            return `STALLED (quiet ${(quietMs / 60000) | 0}m) tasks=${p.tasks} done=${p.done}`
+            if (RESUME_ASKED.test(pane) && p.done > doneAtResume) {
+                doneAtResume = p.done
+                resumes++
+                console.log(`    halted asking for a resume — resuming (${resumes})`)
+                sendLine(session, '/task-auto-resume --unattended')
+                lastChange = Date.now()
+                lastPane = ''
+                continue
+            }
+            return (
+                `STALLED (quiet ${(quietMs / 60000) | 0}m) tasks=${p.tasks} done=${p.done}`
+                + (resumes > 0 ? ` after ${resumes} resume(s)` : '')
+            )
         }
     }
     const p = progress(root)
-    return `HARD DEADLINE tasks=${p.tasks} done=${p.done}`
+    return (
+        `HARD DEADLINE tasks=${p.tasks} done=${p.done}`
+        + (resumes > 0 ? ` after ${resumes} resume(s)` : '')
+    )
 }
+
+/** `/task-auto` halting with an actionable resume, as it prints it. */
+const RESUME_ASKED = /run \/task-auto-resume|Resume to retry/
 
 /** The visible pane. Empty on failure, which reads as "unchanged" and cannot itself
  *  keep a dead run alive — the trail check still has to be quiet too. */

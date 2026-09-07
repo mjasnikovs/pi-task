@@ -2514,6 +2514,17 @@ resume — which for an UNATTENDED run means the run never finishes. That is why
 hackage has never produced a verdict in seven runs, and it is not a docs defect:
 the loop is in the critique phase of an implementation task.
 
+**So the harness gives it one.** A run that halts asking to be resumed and is never
+resumed is not the product being exercised; it is the product being cut off. The
+runner types `/task-auto-resume --unattended` when the pane asks for it, and the
+verdict carries how many times.
+
+The gate is progress, not a retry count. **A second resume requires `done` to have
+moved since the first** — resuming a run that has finished no further task is a loop
+of the harness's own, and the number of retries a run "should" get is exactly the
+kind of constant this file refuses to guess. A stall with no progress since the last
+resume still ends the run, and still says `STALLED`.
+
 ### And the docs numbers are the best hackage has ever produced
 
 ```
