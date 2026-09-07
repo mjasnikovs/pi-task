@@ -272,7 +272,9 @@ test('fetch cacheable: a real answer is cached', () => {
 test('fetch cacheable: "unclear from this page" is NOT cached, though the child exited 0', () => {
     // A non-answer exits 0 like any other, so a rule keyed on exit code would memoise
     // it and re-serve the dead end to every later sibling, leaving nothing to re-trigger
-    // an escalation. The same rule closes this for packages in docsCacheable.
+    // an escalation. The same rule closes this for packages in docsCacheable. Exit code
+    // is now unrepresentable here — the parameter is `Pick<FetchDetails, 'answer'>`, so
+    // re-adding a health term does not compile rather than failing this test.
     expect(fetchCacheable({answer: 'unclear from this page'})).toBe(false)
     expect(fetchCacheable({answer: '<answer>Unclear from this page.</answer>'})).toBe(false)
 })

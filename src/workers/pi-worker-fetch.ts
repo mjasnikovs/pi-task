@@ -24,6 +24,8 @@ interface FetchDetails {
     answer?: string
     excerpt?: string
     excerptVerified?: boolean
+    coverageMiss?: boolean
+    anchoredSection?: string
 }
 
 interface ProcLike extends EventEmitter {
@@ -107,7 +109,9 @@ export function registerPiWorkerFetch(
                 // in the TEXT, not only in details: details are for the harness, and the
                 // worker acts on what it reads.
                 const text = result.nextStep ? `${body}\n\n${result.nextStep}` : body
-                return workerAnswer(text, {
+                // Named, not inferred: `workerAnswer<T>` reads T off the literal, so a
+                // field added here would never reach the declaration the cache rules Pick from.
+                return workerAnswer<FetchDetails>(text, {
                     childExitCode: 0,
                     answer: result.answer,
                     excerpt: result.excerpt,
@@ -166,15 +170,14 @@ export function registerPiWorkerFetch(
  * refused.
  */
 export function fetchCacheable(d: Pick<FetchDetails, 'answer'>): boolean {
-    // Answer QUALITY only — see docsCacheable. This predicate returns true for
-    // `"Fetch aborted."` on its own; what keeps an aborted fetch out of the cache is
-    // the `unavailable` outcome upstream. Leading the rule with `childExitCode === 0`
-    // would not, because an aborted child settles at exit code 0.
+    // Answer QUALITY only — see docsCacheable. An aborted fetch is kept out of the
+    // cache by its `unavailable` outcome upstream, never by this rule; leading with
+    // `childExitCode === 0` would not work, because an aborted child settles at 0.
     //
-    // It reads the child's bare answer, not the tool text: `isAbstention` is anchored,
-    // and the text leads with an excerpt NOTE/WARNING whenever the excerpt did not
-    // verify — which, since rule 4 asks for the closest related text, is the ordinary
-    // shape of an abstention.
+    // It reads the child's bare answer, not the rendered tool text: `isAbstention` is
+    // anchored, and the text leads with an excerpt NOTE/WARNING whenever the excerpt
+    // did not verify — which, since rule 4 asks for the closest related text, is the
+    // ordinary shape of an abstention.
     return d.answer !== undefined && !isAbstention(d.answer)
 }
 

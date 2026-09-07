@@ -104,6 +104,10 @@ export function splitAtMatches(text: string, re: RegExp): string[] {
  * possible hallucination. Only reachable on non-ASCII text past the chunk ceiling.
  */
 export function sliceBytes(s: string, maxBytes: number): string[] {
+    // A non-positive cap never shrinks the buffer, so the loop below runs forever.
+    // Guarded here rather than at the callers: the cap is usually computed, and the
+    // next caller to compute one must not have to rediscover this.
+    if (maxBytes <= 0) return s ? [s] : []
     const out: string[] = []
     let buf = Buffer.from(s, 'utf8')
     while (buf.length > maxBytes) {
@@ -136,12 +140,18 @@ export function sliceBytes(s: string, maxBytes: number): string[] {
 export function headedSlices(header: string, body: string, maxBytes: number): string[] {
     const prefixed = `${header}\n${body}`
     if (Buffer.byteLength(prefixed, 'utf8') <= maxBytes) return [prefixed]
-    const room = maxBytes - Buffer.byteLength(`${header}\n`, 'utf8')
-    // A header that fills the cap on its own leaves no room, and `sliceBytes` with a
-    // non-positive cap never shrinks its buffer. Slice the prefixed string instead:
-    // the first piece still names the source, which is all the header buys.
+    // The header is a LABEL, and `chunkReadme` builds it from an unbounded heading line.
+    // Left whole it starves the body: a header two bytes short of the cap turned a 200 KB
+    // section into 100,000 two-byte chunks, each re-carrying the 8 KB header. Splitting the
+    // cap evenly is the one division that needs no tuning, and a cut label still names the
+    // source.
+    const head = sliceBytes(header, Math.floor(maxBytes / 2))[0] ?? ''
+    const room = maxBytes - Buffer.byteLength(`${head}\n`, 'utf8')
+    // Only a cap of a byte or two reaches this. Slice the prefixed string and accept the
+    // degenerate result: the body pieces carry no provenance — the very defect this
+    // function exists to fix, but the alternative here is emitting nothing.
     if (room <= 0) return sliceBytes(prefixed, maxBytes)
-    return sliceBytes(body, room).map(slice => `${header}\n${slice}`)
+    return sliceBytes(body, room).map(slice => `${head}\n${slice}`)
 }
 
 /**

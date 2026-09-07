@@ -300,6 +300,14 @@ test('a member still wider than the cap falls back to byte slicing', () => {
     }
 })
 
+test('sliceBytes returns rather than spins on a non-positive cap', () => {
+    // The hang lives here, not at one caller: `end` walks to 0, the zero-guard restores
+    // the cap, and `subarray(0, <= 0)` leaves the buffer the same length forever.
+    expect(sliceBytes('body', 0)).toEqual(['body'])
+    expect(sliceBytes('body', -5)).toEqual(['body'])
+    expect(sliceBytes('', 0)).toEqual([])
+}, 5000)
+
 test('a header wider than the cap does not hang the indexer', () => {
     // `room` went negative and `sliceBytes(body, room)` then spun forever: `end` walks
     // to 0, the zero-guard restores the non-positive cap, and the buffer never shrinks.
@@ -310,4 +318,20 @@ test('a header wider than the cap does not hang the indexer', () => {
     expect(chunks.join('')).toContain('body text')
     for (const c of chunks)
         expect(Buffer.byteLength(c, 'utf8')).toBeLessThanOrEqual(MAX_CHUNK_BYTES)
+}, 5000)
+
+test('a header that leaves a sliver of room does not shred the body', () => {
+    // The hang guard only covered `room <= 0`. A header two bytes short of the cap left
+    // `room = 2`, so a 200 KB section came back as ~100,000 two-byte chunks, each one
+    // re-carrying the 8 KB header — 243 MB of chunk text handed to the index.
+    const header = `<!-- README: ${'h'.repeat(MAX_CHUNK_BYTES - 20)} -->`
+    const body = 'x'.repeat(200 * 1024)
+    const chunks = headedSlices(header, body, MAX_CHUNK_BYTES)
+    const floor = Math.ceil(Buffer.byteLength(body, 'utf8') / MAX_CHUNK_BYTES)
+    expect(chunks.length).toBeLessThanOrEqual(floor * 2 + 2)
+    for (const c of chunks) {
+        expect(Buffer.byteLength(c, 'utf8')).toBeLessThanOrEqual(MAX_CHUNK_BYTES)
+        expect(c).toContain('<!-- README:')
+    }
+    expect(chunks.map(c => c.split('\n').slice(1).join('\n')).join('')).toBe(body)
 }, 5000)

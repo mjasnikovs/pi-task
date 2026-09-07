@@ -195,7 +195,7 @@ function tmpCwd(): string {
 /** A cacheable demo tool that counts run() invocations. */
 function cachingTool(opts?: {
     cacheKey?: (p: {q: string}) => string | null
-    cacheable?: (d: {n: number}, t: string) => boolean
+    cacheable?: (d: {n: number}) => boolean
     cachePkg?: (p: {q: string}) => {pkg: string; ecosystem?: 'npm' | 'cargo'} | undefined
     /** Answer or not. Default: every call answers. */
     outcome?: (text: string, details: {n: number}) => WorkerOutcome<{n: number}>
@@ -359,4 +359,15 @@ test('childFailureReason names the kill through the one ordered ladder', () => {
     expect(childFailureReason({exitCode: 3, aborted: false})).toBe('exit')
     // Nothing killed it; the caller simply has no answer to give.
     expect(childFailureReason({exitCode: 0, aborted: false})).toBe('no-answer')
+})
+
+test('the source carries no raw NUL — git would call the file binary', () => {
+    // The cache-key separator was written as a literal U+0000. Git then diffed the whole
+    // file as "Binary files differ", so the `cacheable` signature change was invisible to
+    // review. The escape is the same byte in the key and leaves the source text.
+    const src = fs.readFileSync(
+        path.join(import.meta.dirname, '../../src/workers/shared.ts'),
+        'utf8'
+    )
+    expect(src.includes('\u0000')).toBe(false)
 })

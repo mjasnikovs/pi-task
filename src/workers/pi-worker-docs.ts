@@ -529,22 +529,10 @@ export function registerPiWorkerDocs(
         // child that ran fine and answered "unclear from this package" exits 0 — so a rule
         // keyed on exit code would memoise that non-answer and re-serve it as a hit to
         // every later sibling, with nothing left to re-trigger an escalation.
-        //
-        // `text` is supplied by makeWorkerTool (shared.ts) alongside details, so the
-        // content check needs no new plumbing.
         cacheable: docsCacheable
     })
 }
 
-/**
- * The cache rule for the docs channel, as a NAMED export rather than an anonymous
- * property of an adapter literal.
- *
- * As a property of the adapter literal it would be reachable only through
- * `registerTool → execute()`, so a test would have to retype the rule and would then
- * assert against its own copy — green even after the shipped rule changed. Exported,
- * the test imports the rule it is checking.
- */
 /**
  * Did the excerpt cite a word the source never wrote?
  *
@@ -556,6 +544,15 @@ export function excerptFabricated(check: {absent: readonly string[]} | undefined
     return check !== undefined && check.absent.length > 0
 }
 
+/**
+ * The cache rule for the docs channel, as a NAMED export rather than an anonymous
+ * property of an adapter literal.
+ *
+ * As a property of the adapter literal it would be reachable only through
+ * `registerTool → execute()`, so a test would have to retype the rule and would then
+ * assert against its own copy — green even after the shipped rule changed. Exported,
+ * the test imports the rule it is checking.
+ */
 export function docsCacheable(
     d: Pick<DocsDetails, 'typeOnly' | 'excerptVerified' | 'excerptFabricated' | 'abstained'>
 ): boolean {
