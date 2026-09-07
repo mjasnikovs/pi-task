@@ -1,7 +1,7 @@
 import {test, expect, afterEach} from 'bun:test'
+import {tmpDir} from '../test-utils/tmp-dir.js'
 import * as fs from 'node:fs'
 import * as fsp from 'node:fs/promises'
-import * as os from 'node:os'
 import * as path from 'node:path'
 import {srcPath} from '../test-utils/src-tree.js'
 import {
@@ -19,7 +19,7 @@ import {
 import {npmDeclaredDeps} from '../../src/workers/docs-ecosystems.js'
 
 function tmpCwd(): string {
-    return fs.mkdtempSync(path.join(os.tmpdir(), 'research-cache-'))
+    return tmpDir('research-cache-')
 }
 
 const saved = process.env[RESEARCH_RUN_ID_ENV]

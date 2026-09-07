@@ -1,6 +1,5 @@
 import {describe, expect, test} from 'bun:test'
-import {mkdtempSync} from 'node:fs'
-import {tmpdir} from 'node:os'
+import {tmpDir} from '../test-utils/tmp-dir.js'
 import {
     parseContractLines,
     keepGroundedContracts,
@@ -89,7 +88,7 @@ describe('keepGroundedContracts — the anti-synthesis (F3) guard', () => {
 
 describe('appendContracts / readContracts', () => {
     test('stores grounded entries and dedups against existing on re-append', async () => {
-        const cwd = mkdtempSync(`${tmpdir()}/contracts-`)
+        const cwd = tmpDir('contracts-')
         await appendContracts(cwd, [
             {quote: 'POST /api/listings/:id/photos', anchor: 'Photos API'},
             {quote: 'GET /api/photos/:id', anchor: ''}
@@ -106,12 +105,12 @@ describe('appendContracts / readContracts', () => {
     })
 
     test('readContracts on a fresh dir is empty', async () => {
-        const cwd = mkdtempSync(`${tmpdir()}/contracts-empty-`)
+        const cwd = tmpDir('contracts-empty-')
         expect(await readContracts(cwd)).toBe('')
     })
 
     test('empty entries is a no-op', async () => {
-        const cwd = mkdtempSync(`${tmpdir()}/contracts-noop-`)
+        const cwd = tmpDir('contracts-noop-')
         await appendContracts(cwd, [])
         expect(await readContracts(cwd)).toBe('')
     })
@@ -170,7 +169,7 @@ describe('end-to-end: parse → ground → store', () => {
             parseContractLines(childOutput),
             design
         )
-        const cwd = mkdtempSync(`${tmpdir()}/contracts-e2e-`)
+        const cwd = tmpDir('contracts-e2e-')
         await appendContracts(cwd, grounded)
         const stored = await readContracts(cwd)
         expect(stored).toContain('POST /api/listings/:id/photos')

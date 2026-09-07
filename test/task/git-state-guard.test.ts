@@ -5,9 +5,9 @@
  * a `--fix`-style file rewrite, junk-file creation, and untracked-file deletion.
  */
 import {describe, expect, setDefaultTimeout, test} from 'bun:test'
+import {tmpDir} from '../test-utils/tmp-dir.js'
 import {execFileSync} from 'node:child_process'
 import * as fs from 'node:fs'
-import * as os from 'node:os'
 import * as path from 'node:path'
 import {
     captureGitState,
@@ -31,7 +31,7 @@ function git(cwd: string, ...args: string[]): string {
 /** A fresh repo with one committed file, one tracked-and-modified file, and one
  *  untracked file — the shape of a task's uncommitted work at verify time. */
 function makeRepo(): string {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-guard-test-'))
+    const dir = tmpDir('pi-guard-test-')
     git(dir, 'init', '-q', '-b', 'main')
     // Repo-level, not on this file's git() helper alone, so the product's own git
     // calls during reconcile round-trip the LF fixtures byte-for-byte too.
@@ -47,7 +47,7 @@ function makeRepo(): string {
 
 describe('captureGitState', () => {
     test('non-git directory disables the guard', async () => {
-        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-guard-nogit-'))
+        const dir = tmpDir('pi-guard-nogit-')
         const snap = await captureGitState(dir)
         expect(snap.ok).toBe(false)
         const rec = await reconcileGitState(dir, snap)

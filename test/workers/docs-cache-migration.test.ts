@@ -1,7 +1,6 @@
 import {test, expect} from 'bun:test'
+import {tmpDir} from '../test-utils/tmp-dir.js'
 import {Database} from 'bun:sqlite'
-import * as fs from 'node:fs'
-import * as os from 'node:os'
 import * as path from 'node:path'
 import {openCache} from '../../src/workers/docs-cache.js'
 import {ensureIndexed} from '../../src/workers/docs-index.js'
@@ -46,7 +45,7 @@ END;
 
 // `:memory:` cannot be reopened, and reopening is the whole scenario.
 function tempDbPath(): string {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'docs-cache-mig-'))
+    const dir = tmpDir('docs-cache-mig-')
     return path.join(dir, 'docs.sqlite')
 }
 

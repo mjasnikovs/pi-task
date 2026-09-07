@@ -13,8 +13,8 @@
  */
 
 import {afterEach, beforeEach, describe, expect, test} from 'bun:test'
+import {tmpDir} from '../test-utils/tmp-dir.js'
 import * as fs from 'node:fs'
-import * as os from 'node:os'
 import * as path from 'node:path'
 import {
     buildGateDeps,
@@ -41,7 +41,7 @@ function write(dir: string, files: Record<string, string>): void {
 }
 
 function makeRepo(files: Record<string, string> = {'a.ts': 'export const a = 1\n'}): string {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gate-build-'))
+    const dir = tmpDir('gate-build-')
     git(dir, 'init', '-q')
     git(dir, 'config', 'user.email', 't@t')
     git(dir, 'config', 'user.name', 't')
@@ -54,7 +54,7 @@ function makeRepo(files: Record<string, string> = {'a.ts': 'export const a = 1\n
     return dir
 }
 
-const noGit = (): string => fs.mkdtempSync(path.join(os.tmpdir(), 'gate-build-nogit-'))
+const noGit = (): string => tmpDir('gate-build-nogit-')
 
 /** Drops the optional markers so a test can call a dep without `!`. The markers
  *  on GateDeps exist for the partial ones the gate tests hand-build. */

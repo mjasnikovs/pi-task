@@ -9,8 +9,8 @@
  * snapshot in config/group-args.ts, set here the way session_start sets it.
  */
 import {describe, expect, test} from 'bun:test'
+import {tmpDir} from '../test-utils/tmp-dir.js'
 import * as fs from 'node:fs'
-import * as os from 'node:os'
 import * as path from 'node:path'
 import {
     childModelEndpoints,
@@ -74,7 +74,7 @@ describe('probeModelEndpoints', () => {
 
 /** An agent dir with any subset of the files pi keeps there. */
 function makeDir(files: Record<string, unknown>): string {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-agent-dir-'))
+    const dir = tmpDir('pi-agent-dir-')
     for (const [name, body] of Object.entries(files)) {
         fs.writeFileSync(path.join(dir, name), JSON.stringify(body))
     }

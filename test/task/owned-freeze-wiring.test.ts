@@ -10,8 +10,8 @@
  * with no such pair, is left untouched.
  */
 import {afterEach, describe, expect, test} from 'bun:test'
+import {tmpDir} from '../test-utils/tmp-dir.js'
 import * as fs from 'node:fs'
-import * as os from 'node:os'
 import * as path from 'node:path'
 import {
     claimOwnedFreezeForThisTask,
@@ -46,7 +46,7 @@ interface FixtureOpts {
 }
 
 function fixture(opts: FixtureOpts = {}): string {
-    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'owned-freeze-wiring-'))
+    const cwd = tmpDir('owned-freeze-wiring-')
     dirs.push(cwd)
     const tasks = path.join(cwd, '.pi-tasks')
     fs.mkdirSync(tasks, {recursive: true})

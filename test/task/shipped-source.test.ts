@@ -1,4 +1,5 @@
 import {describe, expect, test} from 'bun:test'
+import {tmpDir} from '../test-utils/tmp-dir.js'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
@@ -22,7 +23,7 @@ import {TASKS_DIR_NAME} from '../../src/task/task-types.js'
  */
 
 function tree(spec: Record<string, string>): string {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipped-src-'))
+    const dir = tmpDir('shipped-src-')
     for (const [rel, body] of Object.entries(spec)) {
         const full = path.join(dir, rel)
         fs.mkdirSync(path.dirname(full), {recursive: true})

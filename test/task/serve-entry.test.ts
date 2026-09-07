@@ -1,6 +1,6 @@
 import {describe, expect, test} from 'bun:test'
-import {mkdirSync, mkdtempSync, writeFileSync} from 'node:fs'
-import {tmpdir} from 'node:os'
+import {tmpDir} from '../test-utils/tmp-dir.js'
+import {mkdirSync, writeFileSync} from 'node:fs'
 import * as path from 'node:path'
 import {
     findAppConstructions,
@@ -27,7 +27,7 @@ const RUN18_ENTRY =
     + 'export type AppType = typeof _routes\n'
 
 function makeTree(files: Record<string, string>, pkg?: object): string {
-    const dir = mkdtempSync(path.join(tmpdir(), 'pi-serve-entry-'))
+    const dir = tmpDir('pi-serve-entry-')
     if (pkg) writeFileSync(path.join(dir, 'package.json'), JSON.stringify(pkg, null, 2))
     for (const [rel, body] of Object.entries(files)) {
         mkdirSync(path.join(dir, path.dirname(rel)), {recursive: true})

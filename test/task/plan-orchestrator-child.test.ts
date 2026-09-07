@@ -15,8 +15,8 @@
  */
 
 import {afterEach, beforeEach, describe, expect, mock, test} from 'bun:test'
+import {tmpDir} from '../test-utils/tmp-dir.js'
 import * as fs from 'node:fs'
-import * as os from 'node:os'
 import * as path from 'node:path'
 import * as realChildRunner from '../../src/task/child-runner.js'
 import * as realOrchestrator from '../../src/task/orchestrator.js'
@@ -95,7 +95,7 @@ const gitInit = (dir: string): void => {
 }
 
 function repo(withGit = true): string {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'plan-child-'))
+    const dir = tmpDir('plan-child-')
     if (withGit) gitInit(dir)
     return dir
 }

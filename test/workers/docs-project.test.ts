@@ -1,6 +1,6 @@
 import {test, expect, describe} from 'bun:test'
+import {tmpDir} from '../test-utils/tmp-dir.js'
 import * as fs from 'node:fs'
-import * as os from 'node:os'
 import * as path from 'node:path'
 import {
     projectDocsRaw,
@@ -20,7 +20,7 @@ import {abstentionSentence, isAbstention} from '../../src/workers/abstention.js'
  * files in a temp dir.
  */
 function withFiles<T>(files: Record<string, string>, fn: (cwd: string, abs: string[]) => T): T {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'docs-project-'))
+    const dir = tmpDir('docs-project-')
     const abs: string[] = []
     try {
         for (const [rel, content] of Object.entries(files)) {
@@ -126,7 +126,7 @@ test('the project prompt instructs the abstention the host actually recognises',
 test('the project walk skips a cargo target/ and a cabal dist-newstyle/', () => {
     // Build output is not project source. `git ls-files` never lists it, but the
     // fallback walk is what runs outside a repo — and it only knew npm's skips.
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'docs-project-skip-'))
+    const dir = tmpDir('docs-project-skip-')
     fs.writeFileSync(path.join(dir, 'Cargo.toml'), '[package]\nname = "x"\n', 'utf8')
     fs.mkdirSync(path.join(dir, 'src'), {recursive: true})
     fs.writeFileSync(path.join(dir, 'src', 'lib.rs'), 'pub fn a() {}', 'utf8')
@@ -142,7 +142,7 @@ test('the project walk skips a cargo target/ and a cabal dist-newstyle/', () => 
 test('the empty answer names the extensions THIS project was searched for', () => {
     // The wording was written when only .ts/.tsx were ever indexed. A cargo-only
     // project was told the tool had looked for TypeScript.
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'docs-project-empty-'))
+    const dir = tmpDir('docs-project-empty-')
     fs.writeFileSync(path.join(dir, 'Cargo.toml'), '[package]\nname = "app"\n', 'utf8')
     const cache = openCache(':memory:')
     try {
@@ -161,7 +161,7 @@ test("a dependency's skip list does not hide the PROJECT's own tests", () => {
     // `skipDirs` says which directories of a DOWNLOADED package are not its API.
     // Folded into the project's own walk, a Tauri repo stopped indexing its own
     // TypeScript tests and examples because cargo's row names those directories.
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'docs-project-both-'))
+    const dir = tmpDir('docs-project-both-')
     fs.writeFileSync(path.join(dir, 'package.json'), '{"name":"app"}', 'utf8')
     fs.mkdirSync(path.join(dir, 'src-tauri'), {recursive: true})
     fs.writeFileSync(path.join(dir, 'src-tauri', 'Cargo.toml'), '[package]\nname="a"\n', 'utf8')
@@ -185,7 +185,7 @@ test("a binary crate's OWN source indexes — private items are the question the
     // to the project's own code indexed a Rust `main.rs` to nothing at all, and
     // `pi-worker-docs(".", …)` — which the APIS prompt tells the worker to use —
     // answered "no chunks" for the whole Rust half of a repo.
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'docs-project-rs-'))
+    const dir = tmpDir('docs-project-rs-')
     fs.writeFileSync(path.join(dir, 'Cargo.toml'), '[package]\nname = "app"\n', 'utf8')
     fs.mkdirSync(path.join(dir, 'src'), {recursive: true})
     fs.writeFileSync(

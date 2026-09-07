@@ -1,6 +1,6 @@
 import {afterEach, describe, expect, test} from 'bun:test'
+import {tmpDir} from '../test-utils/tmp-dir.js'
 import * as fsp from 'node:fs/promises'
-import * as os from 'node:os'
 import * as path from 'node:path'
 import {
     buildPlanDeps,
@@ -30,7 +30,7 @@ import {
 const PLAN_ID = 'TASK_PLAN_0001'
 
 async function seededRepo(): Promise<string> {
-    const cwd = await fsp.mkdtemp(path.join(os.tmpdir(), 'pi-plan-orch-'))
+    const cwd = tmpDir('pi-plan-orch-')
     const now = new Date().toISOString()
     const fm: TaskFrontMatter = {
         id: PLAN_ID,
@@ -183,7 +183,7 @@ const DECIDED: PlanOutcome = {
 
 describe('handleTaskPlan', () => {
     async function freshRepo(): Promise<string> {
-        return await fsp.mkdtemp(path.join(os.tmpdir(), 'pi-plan-cmd-'))
+        return tmpDir('pi-plan-cmd-')
     }
 
     test('an empty prompt primes the editor instead of starting a plan', async () => {
@@ -306,7 +306,7 @@ describe('handleTaskPlan', () => {
 
 describe('the read-only contract', () => {
     async function freshRepo2(): Promise<string> {
-        return await fsp.mkdtemp(path.join(os.tmpdir(), 'pi-plan-ro-'))
+        return tmpDir('pi-plan-ro-')
     }
 
     test('an abandoned plan leaves no file behind', async () => {

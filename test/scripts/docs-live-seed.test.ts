@@ -1,7 +1,7 @@
 import {test, expect} from 'bun:test'
+import {tmpDir} from '../test-utils/tmp-dir.js'
 import {execFileSync} from 'node:child_process'
 import * as fs from 'node:fs'
-import * as os from 'node:os'
 import * as path from 'node:path'
 import {cargoManifest, writeGitignore} from '../../scripts/docs-live-seed.js'
 
@@ -18,7 +18,7 @@ const BUILD_DIR: Record<string, string> = {
 
 for (const [ecosystem, dir] of Object.entries(BUILD_DIR)) {
     test(`a seeded ${ecosystem} project does not track ${dir}/`, () => {
-        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'seed-gitignore-'))
+        const root = tmpDir('seed-gitignore-')
         try {
             fs.mkdirSync(path.join(root, dir), {recursive: true})
             fs.writeFileSync(path.join(root, dir, 'artifact'), 'built\n')

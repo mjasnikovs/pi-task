@@ -4,8 +4,8 @@
  * + injection blocks.
  */
 import {describe, expect, test} from 'bun:test'
+import {tmpDir} from '../test-utils/tmp-dir.js'
 import * as fs from 'node:fs'
-import * as os from 'node:os'
 import * as path from 'node:path'
 import {
     parseRequirementLines,
@@ -45,7 +45,7 @@ const CADENCE_QUOTE =
 const CT_QUOTE = 'every component/page test captures a screenshot committed as a baseline'
 
 function makeCwd(): string {
-    return fs.mkdtempSync(path.join(os.tmpdir(), 'pi-requirements-'))
+    return tmpDir('pi-requirements-')
 }
 
 describe('parseRequirementLines', () => {

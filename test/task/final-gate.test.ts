@@ -5,9 +5,9 @@
  * each case is fast and hermetic.
  */
 import {afterAll, describe, expect, test} from 'bun:test'
+import {tmpDir} from '../test-utils/tmp-dir.js'
 import {spawnSync} from 'node:child_process'
 import * as fs from 'node:fs'
-import * as os from 'node:os'
 import * as path from 'node:path'
 import {
     bootSkipVerdict,
@@ -60,7 +60,7 @@ afterAll(() => {
 })
 
 function makeDir(pkg?: object): string {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-final-gate-'))
+    const dir = tmpDir('pi-final-gate-')
     madeDirs.push(dir)
     if (pkg) fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify(pkg, null, 2))
     return dir
@@ -79,7 +79,7 @@ async function withFakeBin(
     script: string,
     fn: () => void | Promise<void>
 ): Promise<void> {
-    const bin = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-fake-bin-'))
+    const bin = tmpDir('pi-fake-bin-')
     const file = path.join(bin, name)
     fs.writeFileSync(
         file,
@@ -489,7 +489,7 @@ describe('discoverGateCommandBodies', () => {
     })
 
     test('Makefile targets resolve to their recipe lines (non-npm parity)', async () => {
-        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gate-bodies-'))
+        const dir = tmpDir('gate-bodies-')
         fs.writeFileSync(
             path.join(dir, 'Makefile'),
             'lint:\n\truff check .\n\ntest:\n\tpytest -q\n'

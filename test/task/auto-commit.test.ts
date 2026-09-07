@@ -1,7 +1,7 @@
 import {expect, test} from 'bun:test'
+import {tmpDir} from '../test-utils/tmp-dir.js'
 import {execFileSync} from 'node:child_process'
 import * as fs from 'node:fs'
-import * as os from 'node:os'
 import * as path from 'node:path'
 import {
     gitCommitAll,
@@ -201,7 +201,7 @@ test('gitStashRef: sha when a stash exists, null when not', async () => {
 // The revert must undo CODE and preserve the trail. These use a REAL repo,
 // because the reset acts on actual files and a faked spawn would test nothing.
 function realRepo(): {dir: string; g: (...a: string[]) => string} {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-autocommit-'))
+    const dir = tmpDir('pi-autocommit-')
     const g = (...a: string[]): string =>
         execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', ...a], {
             cwd: dir,

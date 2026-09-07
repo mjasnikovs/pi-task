@@ -1,4 +1,5 @@
 import {describe, expect, test} from 'bun:test'
+import {tmpDir} from '../test-utils/tmp-dir.js'
 import {
     collectProjectEnv,
     findLoginCredentials,
@@ -11,12 +12,12 @@ import {
     settle,
     type DeepSessionFacts
 } from '../../src/task/deep-render-check'
-import {mkdtempSync, writeFileSync} from 'node:fs'
+import {writeFileSync} from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
 
 const dirWithEnv = (contents: string, name = '.env'): string => {
-    const dir = mkdtempSync(path.join(os.tmpdir(), 'deep-render-test-'))
+    const dir = tmpDir('deep-render-test-')
     writeFileSync(path.join(dir, name), contents)
     return dir
 }
@@ -93,7 +94,7 @@ describe('collectProjectEnv', () => {
     })
 
     test('a project with no dotenv is simply empty of them', () => {
-        const dir = mkdtempSync(path.join(os.tmpdir(), 'deep-render-test-'))
+        const dir = tmpDir('deep-render-test-')
         expect(findLoginCredentials(collectProjectEnv(dir, {} as NodeJS.ProcessEnv))).toBeNull()
     })
 })

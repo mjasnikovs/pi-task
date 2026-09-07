@@ -12,9 +12,8 @@
  * config-items.test.ts is the one that iterates `ITEMS` per row.
  */
 import {afterEach, beforeEach, describe, expect, test} from 'bun:test'
+import {tmpDir} from '../test-utils/tmp-dir.js'
 import * as fs from 'node:fs'
-import * as os from 'node:os'
-import * as path from 'node:path'
 import type {ExtensionAPI, ExtensionCommandContext} from '@earendil-works/pi-coding-agent'
 import {ITEMS, registerConfig} from '../../src/config/register.js'
 import {getConfig} from '../../src/config/config.js'
@@ -58,7 +57,7 @@ let savedExempt: string[]
 
 beforeEach(() => {
     notified.length = 0
-    cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'task-config-'))
+    cwd = tmpDir('task-config-')
     savedVerify = getConfig().verifyWork
     savedExempt = [...getConfig().commandTimeoutExemptTools]
 })

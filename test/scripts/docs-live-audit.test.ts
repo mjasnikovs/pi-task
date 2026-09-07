@@ -1,7 +1,7 @@
 import {test, expect} from 'bun:test'
+import {tmpDir} from '../test-utils/tmp-dir.js'
 import {OBLIGATIONS} from '../../scripts/docs-live-truth.js'
-import {mkdirSync, mkdtempSync, writeFileSync} from 'node:fs'
-import {tmpdir} from 'node:os'
+import {mkdirSync, writeFileSync} from 'node:fs'
 import {join} from 'node:path'
 import {inventedSymbols, scoreRecall, taskProgress} from '../../scripts/docs-live-audit.js'
 import type {TypeOnlyLogRecord} from '../../src/workers/typeonly-log.js'
@@ -165,7 +165,7 @@ test('a name that differs by more than a separator is still invented', () => {
 // with zero docs calls. The fix adds this seam, so the test cannot fail on the
 // tree before it; the defect is on record in that run's own AUDIT.md instead.
 test('a run stopped mid-flight is not complete', () => {
-    const root = mkdtempSync(join(tmpdir(), 'audit-progress-'))
+    const root = tmpDir('audit-progress-')
     mkdirSync(join(root, '.pi-tasks'))
     writeFileSync(join(root, '.pi-tasks', 'TASK_0001.md'), 'state: in_progress\n')
     writeFileSync(join(root, '.pi-tasks', 'TASK_AUTO_0001.md'), 'state: in_progress\n')
@@ -173,7 +173,7 @@ test('a run stopped mid-flight is not complete', () => {
 })
 
 test('the plan file is not a task', () => {
-    const root = mkdtempSync(join(tmpdir(), 'audit-progress-'))
+    const root = tmpDir('audit-progress-')
     mkdirSync(join(root, '.pi-tasks'))
     writeFileSync(join(root, '.pi-tasks', 'TASK_0001.md'), 'state: completed\n')
     writeFileSync(join(root, '.pi-tasks', 'TASK_AUTO_0001.md'), 'state: in_progress\n')
@@ -181,7 +181,7 @@ test('the plan file is not a task', () => {
 })
 
 test('no .pi-tasks is zero tasks, not a finished run', () => {
-    expect(taskProgress(mkdtempSync(join(tmpdir(), 'audit-progress-')))).toEqual({
+    expect(taskProgress(tmpDir('audit-progress-'))).toEqual({
         tasks: 0,
         done: 0
     })
@@ -226,7 +226,7 @@ id: TASK_AUTO_0001
 `
 
 test('the plan checklist is what says how far a run got', () => {
-    const root = mkdtempSync(join(tmpdir(), 'audit-plan-'))
+    const root = tmpDir('audit-plan-')
     mkdirSync(join(root, '.pi-tasks'))
     writeFileSync(join(root, '.pi-tasks', 'TASK_AUTO_0001.md'), PLAN)
     writeFileSync(join(root, '.pi-tasks', 'TASK_0001.md'), 'state: completed\n')
@@ -234,7 +234,7 @@ test('the plan checklist is what says how far a run got', () => {
 })
 
 test('with no plan it falls back to the spec files', () => {
-    const root = mkdtempSync(join(tmpdir(), 'audit-plan-'))
+    const root = tmpDir('audit-plan-')
     mkdirSync(join(root, '.pi-tasks'))
     writeFileSync(join(root, '.pi-tasks', 'TASK_0001.md'), 'state: completed\n')
     writeFileSync(join(root, '.pi-tasks', 'TASK_0002.md'), 'state: in_progress\n')
@@ -242,7 +242,7 @@ test('with no plan it falls back to the spec files', () => {
 })
 
 test('a checklist line outside the tasks section is not a task', () => {
-    const root = mkdtempSync(join(tmpdir(), 'audit-plan-'))
+    const root = tmpDir('audit-plan-')
     mkdirSync(join(root, '.pi-tasks'))
     writeFileSync(
         join(root, '.pi-tasks', 'TASK_AUTO_0001.md'),

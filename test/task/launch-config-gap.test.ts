@@ -5,8 +5,8 @@
  * it needs the gate's spawner, and final-gate.test.ts drives it there.
  */
 import {expect, test, describe} from 'bun:test'
+import {tmpDir} from '../test-utils/tmp-dir.js'
 import * as fs from 'node:fs'
-import * as os from 'node:os'
 import * as path from 'node:path'
 import {
     bodySourceFiles,
@@ -31,7 +31,7 @@ if (!password) {
 `
 
 function withTree(files: Record<string, string>, fn: (cwd: string) => void): void {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'launch-config-gap-'))
+    const dir = tmpDir('launch-config-gap-')
     try {
         for (const [rel, body] of Object.entries(files)) {
             fs.mkdirSync(path.dirname(path.join(dir, rel)), {recursive: true})

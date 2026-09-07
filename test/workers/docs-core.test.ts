@@ -1,4 +1,5 @@
 import {describe, expect, test} from 'bun:test'
+import {tmpDir} from '../test-utils/tmp-dir.js'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
@@ -25,7 +26,7 @@ const FIXTURES = path.resolve(__dirname, '__fixtures__')
 
 /** Make a throwaway project dir whose package.json has the given dep maps. */
 function makeProjectDir(pkgJson: Record<string, unknown>): string {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'docs-pin-'))
+    const dir = tmpDir('docs-pin-')
     fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify(pkgJson), 'utf8')
     return dir
 }
@@ -623,7 +624,7 @@ describe('buildVersionBanner — resolvable but not declared', () => {
     // Measured on npm in the same container: 23 declared deps, 106 undeclared
     // packages on disk, three of three answered with no warning.
     function cargoProject(): string {
-        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'docs-undeclared-'))
+        const dir = tmpDir('docs-undeclared-')
         fs.writeFileSync(
             path.join(dir, 'Cargo.toml'),
             [
@@ -691,7 +692,7 @@ describe('buildVersionBanner — resolvable but not declared', () => {
     })
 
     test('no manifest at all says nothing — "cannot tell" is not "not declared"', () => {
-        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'docs-nomanifest-'))
+        const dir = tmpDir('docs-nomanifest-')
         expect(buildVersionBanner(undefined, 'ms', '2.1.0', dir)).toBe('')
         fs.rmSync(dir, {recursive: true, force: true})
     })

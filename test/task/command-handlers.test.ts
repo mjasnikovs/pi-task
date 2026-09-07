@@ -13,8 +13,8 @@
  * in the orchestrator suites rather than from the command table.
  */
 import {afterEach, beforeEach, describe, expect, test} from 'bun:test'
+import {tmpDir} from '../test-utils/tmp-dir.js'
 import * as fs from 'node:fs'
-import * as os from 'node:os'
 import * as path from 'node:path'
 import type {ExtensionAPI, ExtensionCommandContext} from '@earendil-works/pi-coding-agent'
 import {registerTask} from '../../src/task/orchestrator.js'
@@ -42,7 +42,7 @@ function commandTable(register: (pi: ExtensionAPI) => void): Map<string, Handler
 
 const dirs: string[] = []
 function projectDir(): string {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'task-cmd-'))
+    const dir = tmpDir('task-cmd-')
     dirs.push(dir)
     return dir
 }

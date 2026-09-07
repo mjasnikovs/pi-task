@@ -1,6 +1,6 @@
 import {test, expect, describe} from 'bun:test'
+import {tmpDir} from '../test-utils/tmp-dir.js'
 import * as fs from 'node:fs'
-import * as os from 'node:os'
 import * as path from 'node:path'
 import {
     buildExternalContext,
@@ -252,7 +252,7 @@ describe('buildExternalContext policy', () => {
         // project ambiguous, and then NO block was emitted at all — worse than
         // always-npm, because the CONTEXT prompt tells the model to quote a block
         // that would never be there. The decision belongs to each name.
-        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ext-poly-'))
+        const dir = tmpDir('ext-poly-')
         fs.writeFileSync(
             path.join(dir, 'package.json'),
             JSON.stringify({
@@ -439,7 +439,7 @@ describe('enrichment is gated on the project manifest', () => {
     // see this gate at all — that is how ten registry installs of `config.ts`,
     // `app.ts` and `name` shipped. This one writes a real manifest.
     test('a backticked filename in a real npm project is never fanned out', async () => {
-        const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'enrich-gate-'))
+        const cwd = tmpDir('enrich-gate-')
         fs.writeFileSync(
             path.join(cwd, 'package.json'),
             JSON.stringify({name: 'p', dependencies: {zod: '^4.0.0'}})
@@ -481,7 +481,7 @@ describe('the research binding fetches no package docs', () => {
     //    docs tool was called 49 times across the three runs with no bad name.
     // The version lookup is the half that earns its keep and stays.
     function projectWithZod(): string {
-        const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'research-nodocs-'))
+        const cwd = tmpDir('research-nodocs-')
         fs.writeFileSync(
             path.join(cwd, 'package.json'),
             JSON.stringify({name: 'p', dependencies: {zod: '4.5.4'}})

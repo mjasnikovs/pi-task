@@ -11,6 +11,7 @@
  * gate instead, because they run `runFinalIntegrationGate` end to end.
  */
 import {describe, expect, test} from 'bun:test'
+import {tmpDir} from '../test-utils/tmp-dir.js'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
@@ -36,7 +37,7 @@ const itPosix = IS_WINDOWS ? test.skip : test
 const nodeScript = (script: string): [string, string[]] => [process.execPath, ['-e', script]]
 
 function makeDir(pkg?: object): string {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-boot-probe-'))
+    const dir = tmpDir('pi-boot-probe-')
     if (pkg) fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify(pkg, null, 2))
     return dir
 }

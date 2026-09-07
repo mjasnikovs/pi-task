@@ -1,6 +1,6 @@
 import {describe, expect, test} from 'bun:test'
+import {tmpDir} from '../test-utils/tmp-dir.js'
 import * as fsp from 'node:fs/promises'
-import * as os from 'node:os'
 import * as path from 'node:path'
 import {
     allocatePlanId,
@@ -14,7 +14,7 @@ import {
 import {ensureTasksDir, tasksDir} from '../../src/task/task-io.js'
 
 async function tmpRepo(): Promise<string> {
-    return await fsp.mkdtemp(path.join(os.tmpdir(), 'pi-plan-io-'))
+    return tmpDir('pi-plan-io-')
 }
 
 describe('allocatePlanId', () => {

@@ -5,8 +5,8 @@
  * throwaway `.pi-tasks` dir.
  */
 import {describe, expect, test} from 'bun:test'
+import {tmpDir} from '../test-utils/tmp-dir.js'
 import * as fs from 'node:fs'
-import * as os from 'node:os'
 import * as path from 'node:path'
 import {
     appendDeclaredScripts,
@@ -21,7 +21,7 @@ import {
 } from '../../src/task/launch-contract.js'
 
 function makeCwd(): string {
-    return fs.mkdtempSync(path.join(os.tmpdir(), 'pi-launch-contract-'))
+    return tmpDir('pi-launch-contract-')
 }
 
 // A design line of the shape the grounding guard reads: script names in backticks.

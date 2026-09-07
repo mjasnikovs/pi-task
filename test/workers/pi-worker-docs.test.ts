@@ -1,6 +1,6 @@
 import {test, expect} from 'bun:test'
+import {tmpDir} from '../test-utils/tmp-dir.js'
 import * as fs from 'node:fs'
-import * as os from 'node:os'
 import * as path from 'node:path'
 import type {AgentToolResult} from '@earendil-works/pi-agent-core'
 import {
@@ -258,7 +258,7 @@ test('packageRootOf maps a subpath specifier to its package.json key', () => {
  * include answers the detector never reaches.
  */
 test('a project-source lookup is recorded in the PI_TASK_TYPEONLY_LOG sink', async () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'docs-project-log-'))
+    const dir = tmpDir('docs-project-log-')
     fs.writeFileSync(
         path.join(dir, 'svc.ts'),
         'export class UserService {\n  list(): string[] {\n    return []\n  }\n}\n',
@@ -304,7 +304,7 @@ test('a project-source lookup is recorded in the PI_TASK_TYPEONLY_LOG sink', asy
  * project-source lookup runs, so a refusal that still spawns saves nothing.
  */
 test('a project-docs budget refuses further "." lookups without spawning', async () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'docs-budget-'))
+    const dir = tmpDir('docs-budget-')
     fs.writeFileSync(path.join(dir, 'svc.ts'), 'export class UserService {}\n', 'utf8')
     const saved = process.env[PROJECT_DOCS_BUDGET_ENV]
     process.env[PROJECT_DOCS_BUDGET_ENV] = '2'
@@ -384,7 +384,7 @@ test('a docs ERROR still reports the auto-install provenance its siblings report
     // auto-installed AT A DECLARED RANGE and then failed loses the
     // `versionSource`/`declaredRange` saying which range was pulled — on the one
     // path where that is the explanation.
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-docs-pin-'))
+    const dir = tmpDir('pi-docs-pin-')
     fs.writeFileSync(
         path.join(dir, 'package.json'),
         JSON.stringify({name: 'host', dependencies: {'never-installed-pkg': '^2.3.4'}})
@@ -439,7 +439,7 @@ test('the description names the manifests it reads and says it refuses otherwise
 })
 
 test('a directory with no manifest is refused, and nothing is spawned or fetched', async () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'docs-no-manifest-'))
+    const dir = tmpDir('docs-no-manifest-')
     fs.writeFileSync(path.join(dir, 'foo.txt'), 'not a manifest', 'utf8')
     let spawns = 0
     let versionCalls = 0
@@ -471,7 +471,7 @@ test('a directory with no manifest is refused, and nothing is spawned or fetched
 })
 
 test('an ecosystem the directory does not hold is refused by name', async () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'docs-not-detected-'))
+    const dir = tmpDir('docs-not-detected-')
     let spawns = 0
     const result = await runTool(
         {

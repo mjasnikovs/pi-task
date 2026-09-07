@@ -1,6 +1,6 @@
 import {describe, expect, test} from 'bun:test'
+import {tmpDir} from '../test-utils/tmp-dir.js'
 import * as fs from 'node:fs'
-import * as os from 'node:os'
 import * as path from 'node:path'
 import {CHILD_BASE_ARGS} from '../../src/shared/child-process.js'
 import {childBaseArgs, extensionArgs} from '../../src/shared/child-extensions.js'
@@ -52,7 +52,7 @@ describe('childBaseArgs', () => {
     })
 
     test('a whitelisted existing file is injected as -e BEFORE --no-extensions, per spawn', () => {
-        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-task-wl-'))
+        const dir = tmpDir('pi-task-wl-')
         const ext = path.join(dir, 'provider.ts')
         fs.writeFileSync(ext, '// test extension\n')
         const prev = getConfig().extensionWhitelist
@@ -70,7 +70,7 @@ describe('childBaseArgs', () => {
     })
 
     test('internal worker extensions ride first verbatim and dedupe against the whitelist', () => {
-        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-task-wl-'))
+        const dir = tmpDir('pi-task-wl-')
         const worker = path.join(dir, 'worker-ext.js')
         const user = path.join(dir, 'user-ext.ts')
         fs.writeFileSync(worker, '')

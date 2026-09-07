@@ -1,6 +1,6 @@
 import {describe, expect, test} from 'bun:test'
+import {tmpDir} from '../test-utils/tmp-dir.js'
 import * as fs from 'node:fs'
-import * as os from 'node:os'
 import * as path from 'node:path'
 import {
     extensionLabel,
@@ -10,7 +10,7 @@ import {
 
 /** Scratch pi home + project cwd so enumeration never touches the real ~/.pi. */
 function scratch(): {agentDir: string; cwd: string; cleanup: () => void} {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-task-extlist-'))
+    const root = tmpDir('pi-task-extlist-')
     const agentDir = path.join(root, 'agent')
     const cwd = path.join(root, 'work')
     fs.mkdirSync(path.join(agentDir, 'extensions'), {recursive: true})
@@ -37,7 +37,7 @@ describe('extensionLabel', () => {
 
 describe('selfPackageRoot', () => {
     test('walks up to the nearest package.json', () => {
-        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-task-selfroot-'))
+        const dir = tmpDir('pi-task-selfroot-')
         fs.mkdirSync(path.join(dir, 'dist', 'config'), {recursive: true})
         fs.writeFileSync(path.join(dir, 'package.json'), '{}')
         try {

@@ -1,6 +1,6 @@
 import {test, expect, afterEach} from 'bun:test'
+import {tmpDir} from '../test-utils/tmp-dir.js'
 import * as fs from 'node:fs'
-import * as os from 'node:os'
 import * as path from 'node:path'
 import {Type} from '@sinclair/typebox'
 import {Text} from '@earendil-works/pi-tui'
@@ -189,7 +189,7 @@ afterEach(() => {
 })
 
 function tmpCwd(): string {
-    return fs.mkdtempSync(path.join(os.tmpdir(), 'shared-cache-'))
+    return tmpDir('shared-cache-')
 }
 
 /** A cacheable demo tool that counts run() invocations. */

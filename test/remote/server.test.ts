@@ -1,7 +1,6 @@
 import {describe, it, expect, beforeEach, afterEach, test} from 'bun:test'
-import {mkdtempSync, rmSync} from 'node:fs'
-import {tmpdir} from 'node:os'
-import path from 'node:path'
+import {tmpDir} from '../test-utils/tmp-dir.js'
+import {rmSync} from 'node:fs'
 import {
     startServer,
     getLocalIPs,
@@ -25,7 +24,7 @@ let xdgDir: string | null = null
 let prevXdg: string | undefined
 beforeEach(() => {
     prevXdg = process.env.XDG_DATA_HOME
-    xdgDir = mkdtempSync(path.join(tmpdir(), 'server-xdg-'))
+    xdgDir = tmpDir('server-xdg-')
     process.env.XDG_DATA_HOME = xdgDir
 })
 

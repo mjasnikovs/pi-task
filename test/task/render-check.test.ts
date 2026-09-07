@@ -7,8 +7,8 @@
  * smoke runs when a browser is present.
  */
 import {describe, expect, test} from 'bun:test'
+import {tmpDir} from '../test-utils/tmp-dir.js'
 import * as fs from 'node:fs'
-import * as os from 'node:os'
 import * as path from 'node:path'
 import {
     findHeadlessBrowser,
@@ -61,7 +61,7 @@ describe('judgeRenderedDom', () => {
 
 describe('findHeadlessBrowser', () => {
     test('honours an explicit CHROME_BIN that exists', () => {
-        const fake = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'chrome-')), 'chrome')
+        const fake = path.join(tmpDir('chrome-'), 'chrome')
         fs.writeFileSync(fake, '')
         const old = process.env.CHROME_BIN
         process.env.CHROME_BIN = fake
@@ -91,7 +91,7 @@ describe('runRenderCheck', () => {
     // fixed DOM to stdout, exactly like `chrome --dump-dom`. Lets the flow be tested
     // without a real browser on the box.
     const fakeBrowser = (domToPrint: string, exit = 0): string => {
-        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fake-chrome-'))
+        const dir = tmpDir('fake-chrome-')
         const js = path.join(dir, 'dump.js')
         fs.writeFileSync(
             js,
@@ -142,7 +142,7 @@ describe('runRenderCheck', () => {
     const realBrowser = playwrightCachedChromium()
     const smoke = realBrowser ? test : test.skip
     smoke('real headless browser executes page JS and renders the mount', () => {
-        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'render-smoke-'))
+        const dir = tmpDir('render-smoke-')
         const page = path.join(dir, 'index.html')
         fs.writeFileSync(
             page,

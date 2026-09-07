@@ -8,8 +8,8 @@
  * shape IS the contract: a future reader has to parse rows this build wrote.
  */
 import {describe, expect, test} from 'bun:test'
+import {tmpDir} from '../test-utils/tmp-dir.js'
 import * as fs from 'node:fs'
-import * as os from 'node:os'
 import * as path from 'node:path'
 import {
     acceptDebtFile,
@@ -31,7 +31,7 @@ import {
 } from '../../src/task/accept-debt.js'
 
 function makeCwd(): string {
-    return fs.mkdtempSync(path.join(os.tmpdir(), 'pi-accept-debt-'))
+    return tmpDir('pi-accept-debt-')
 }
 
 // A realistic enforce re-verify FAIL: the diagnosis indicts the ORIGINAL work,

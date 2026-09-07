@@ -12,8 +12,8 @@
  * the gate keeps painting while it runs.
  */
 import {describe, expect, test} from 'bun:test'
-import {mkdtempSync, rmSync, writeFileSync} from 'node:fs'
-import {tmpdir} from 'node:os'
+import {tmpDir} from '../test-utils/tmp-dir.js'
+import {rmSync, writeFileSync} from 'node:fs'
 import * as path from 'node:path'
 import {runWorkVerification} from '../../src/task/verify-work.js'
 import {buildGateDeps} from '../../src/task/gate-deps.js'
@@ -85,7 +85,7 @@ describe('the gate paints while the deterministic stage runs', () => {
         // A repo whose only static check sleeps, so the health run IS the gap. No
         // task file, so the gate returns straight after it: this exercises the
         // pre-child stage alone, with no model child involved.
-        const dir = mkdtempSync(path.join(tmpdir(), 'deadair-'))
+        const dir = tmpDir('deadair-')
         try {
             writeFileSync(
                 path.join(dir, 'package.json'),

@@ -8,9 +8,9 @@
  * `if`. Several are quoted from this repo and named where they live.
  */
 import {describe, expect, test} from 'bun:test'
+import {tmpDir} from '../test-utils/tmp-dir.js'
 import {spawnSync} from 'node:child_process'
 import * as fs from 'node:fs'
-import * as os from 'node:os'
 import * as path from 'node:path'
 import {
     findMissingEnvDeclarations,
@@ -161,7 +161,7 @@ describe('the step-aside rules', () => {
 // ── tree-level ────────────────────────────────────────────────────────────────
 
 function makeRepo(files: Record<string, string>, untracked: Record<string, string> = {}): string {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'env-closure-'))
+    const dir = tmpDir('env-closure-')
     const write = (rel: string, body: string): void => {
         fs.mkdirSync(path.dirname(path.join(dir, rel)), {recursive: true})
         fs.writeFileSync(path.join(dir, rel), body)
@@ -250,7 +250,7 @@ describe('scanEnvTemplateClosure', () => {
     })
 
     test('not a git work tree ⇒ inert (never guesses at tracked state)', () => {
-        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'env-closure-bare-'))
+        const dir = tmpDir('env-closure-bare-')
         fs.writeFileSync(path.join(dir, '.env.example'), 'DATABASE_URL=\n')
         fs.writeFileSync(path.join(dir, 'seed.ts'), 'const p = process.env.ADMIN_PHONE\n')
         expect(scanEnvTemplateClosure(dir).missing).toHaveLength(0)

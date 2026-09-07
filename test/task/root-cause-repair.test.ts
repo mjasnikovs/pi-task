@@ -13,9 +13,8 @@
  *     yield none.
  */
 import {describe, expect, test} from 'bun:test'
+import {tmpDir} from '../test-utils/tmp-dir.js'
 import * as fs from 'node:fs'
-import * as os from 'node:os'
-import * as path from 'node:path'
 import {
     buildRepairScopeFence,
     buildRepairTitle,
@@ -34,7 +33,7 @@ import {
 } from '../../src/task/root-cause-repair.js'
 
 function makeCwd(): string {
-    return fs.mkdtempSync(path.join(os.tmpdir(), 'pi-root-cause-'))
+    return tmpDir('pi-root-cause-')
 }
 
 // ─── Verbatim ledger entries ──────────────────────────────────────

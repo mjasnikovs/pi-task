@@ -3,9 +3,8 @@
  * the fix could still lose a message, evict a live question, or block a run.
  */
 import {afterEach, describe, expect, mock, test} from 'bun:test'
+import {tmpDir} from '../test-utils/tmp-dir.js'
 import * as fs from 'node:fs'
-import * as os from 'node:os'
-import * as path from 'node:path'
 import type {ExtensionAPI, ExtensionCommandContext} from '@earendil-works/pi-coding-agent'
 import {
     getBridge,
@@ -38,7 +37,7 @@ void mock.module('../../src/remote/push.js', () => ({
 
 const dirs: string[] = []
 function tmpRepo(): string {
-    const d = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-review-'))
+    const d = tmpDir('pi-review-')
     dirs.push(d)
     return d
 }

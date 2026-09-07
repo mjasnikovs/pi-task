@@ -1,6 +1,6 @@
 import {describe, expect, test} from 'bun:test'
-import {mkdirSync, mkdtempSync, rmSync, writeFileSync} from 'node:fs'
-import {tmpdir} from 'node:os'
+import {tmpDir} from '../test-utils/tmp-dir.js'
+import {mkdirSync, rmSync, writeFileSync} from 'node:fs'
 import * as path from 'node:path'
 import {
     normalizeRefPath,
@@ -322,7 +322,7 @@ describe('resolveDanglingRefs', () => {
 
 describe('findDanglingArtifacts (tree seam)', () => {
     function makeRepo(): string {
-        const dir = mkdtempSync(path.join(tmpdir(), 'artifact-closure-'))
+        const dir = tmpDir('artifact-closure-')
         mkdirSync(path.join(dir, 'src/server'), {recursive: true})
         mkdirSync(path.join(dir, 'src/client'), {recursive: true})
         writeFileSync(
@@ -390,7 +390,7 @@ describe('findDanglingArtifacts (tree seam)', () => {
     })
 
     test('missing script entrypoint is flagged; test/fixture trees are not scanned', () => {
-        const dir = mkdtempSync(path.join(tmpdir(), 'artifact-closure-'))
+        const dir = tmpDir('artifact-closure-')
         try {
             writeFileSync(
                 path.join(dir, 'package.json'),
@@ -421,7 +421,7 @@ describe('generated HTML (nexttask 3)', () => {
         )
 
     function makeRepo(files: Record<string, string>, scripts: Record<string, string>): string {
-        const dir = mkdtempSync(path.join(tmpdir(), 'gen-html-'))
+        const dir = tmpDir('gen-html-')
         writeFileSync(
             path.join(dir, 'package.json'),
             JSON.stringify({name: 'fx', scripts: {build: 'bun run build.ts', ...scripts}})

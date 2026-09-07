@@ -5,8 +5,8 @@
  * onToolResult.
  */
 import {describe, expect, test} from 'bun:test'
+import {tmpDir} from '../test-utils/tmp-dir.js'
 import * as fs from 'node:fs'
-import * as os from 'node:os'
 import * as path from 'node:path'
 import {
     truncateToolResult,
@@ -54,7 +54,7 @@ describe('collectTaskTreeChanges (cross-task deletion probe input)', () => {
     }
 
     function makeRepo(): string {
-        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gate-deps-'))
+        const dir = tmpDir('gate-deps-')
         git(dir, 'init', '-q')
         git(dir, 'config', 'user.email', 't@t')
         git(dir, 'config', 'user.name', 't')
@@ -104,7 +104,7 @@ describe('collectIgnoredSnapshot / gatePassesWithoutIgnored', () => {
     }
 
     function makeRepo(files: Record<string, string>): string {
-        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ignored-writes-'))
+        const dir = tmpDir('ignored-writes-')
         git(dir, 'init', '-q')
         git(dir, 'config', 'user.email', 't@t')
         git(dir, 'config', 'user.name', 't')
@@ -182,7 +182,7 @@ describe('collectIgnoredSnapshot / gatePassesWithoutIgnored', () => {
     })
 
     test('inv-degrade: no git repo at all → empty snapshot, no throw', async () => {
-        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ignored-nogit-'))
+        const dir = tmpDir('ignored-nogit-')
         fs.writeFileSync(path.join(dir, '.env'), 'A=1\n')
         expect(await collectIgnoredSnapshot(dir)).toEqual({})
     })
@@ -238,7 +238,7 @@ describe('collectIgnoredSnapshot / gatePassesWithoutIgnored', () => {
             })
         })
         expect(parseBuildOutdirs(dir)).toEqual(['public/assets'])
-        expect(parseBuildOutdirs(fs.mkdtempSync(path.join(os.tmpdir(), 'no-pkg-')))).toEqual([])
+        expect(parseBuildOutdirs(tmpDir('no-pkg-'))).toEqual([])
     })
 })
 
@@ -257,7 +257,7 @@ describe('gate-deps diff collectors', () => {
     }
 
     function makeRepo(files: Record<string, string> = {'a.ts': 'export const a = 1\n'}): string {
-        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gate-collect-'))
+        const dir = tmpDir('gate-collect-')
         git(dir, 'init', '-q')
         git(dir, 'config', 'user.email', 't@t')
         git(dir, 'config', 'user.name', 't')
@@ -275,7 +275,7 @@ describe('gate-deps diff collectors', () => {
         }
     }
 
-    const noGit = (): string => fs.mkdtempSync(path.join(os.tmpdir(), 'gate-nogit-'))
+    const noGit = (): string => tmpDir('gate-nogit-')
 
     describe('collectChangedFiles', () => {
         test('pre-commit: tracked edits by numstat, untracked files counted from disk', async () => {

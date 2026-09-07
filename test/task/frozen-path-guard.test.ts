@@ -5,9 +5,9 @@
  * asserting what is left on disk afterwards.
  */
 import {describe, expect, test} from 'bun:test'
+import {tmpDir} from '../test-utils/tmp-dir.js'
 import {execFileSync} from 'node:child_process'
 import * as fs from 'node:fs'
-import * as os from 'node:os'
 import * as path from 'node:path'
 import {
     frozenPathsFromSpec,
@@ -139,7 +139,7 @@ function realGit(cwd: string): FrozenGit {
 /** A repo whose committed HEAD stands in for the finished task: a frozen file, a
  *  frozen directory, and an ordinary file the edit pass is free to change. */
 function makeRepo(): string {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-frozen-test-'))
+    const dir = tmpDir('pi-frozen-test-')
     gitCli(dir, 'init', '-q', '-b', 'main')
     // Repo-level, so the product's own revert git calls honor it too.
     gitCli(dir, 'config', 'core.autocrlf', 'false')

@@ -1,4 +1,5 @@
 import {test, expect, describe} from 'bun:test'
+import {tmpDir} from '../test-utils/tmp-dir.js'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
@@ -13,7 +14,7 @@ const REC = {
 }
 
 function tmpSink(): string {
-    return path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'typeonly-log-')), 'answers.jsonl')
+    return path.join(tmpDir('typeonly-log-'), 'answers.jsonl')
 }
 
 describe('logDocsAnswer', () => {

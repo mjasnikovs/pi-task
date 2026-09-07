@@ -1,4 +1,5 @@
 import {test, expect} from 'bun:test'
+import {tmpDir} from '../test-utils/tmp-dir.js'
 import {
     extractRuntimeSpecifiers,
     classifyRuntimeImport,
@@ -9,7 +10,6 @@ import {
     rewritePhantomSpecifiers
 } from '../../src/workers/phantom-imports.js'
 import * as fs from 'node:fs'
-import * as os from 'node:os'
 import * as nodePath from 'node:path'
 
 const TYPES = `
@@ -98,7 +98,7 @@ test('formatApiOverrideBanner: top banner that supersedes the doc, or empty when
 // `bun` on disk. This stub shadows any bun install on the machine, and its types
 // declare only `bun:test` — which makes `bun:sql` phantom and `SQL` the correction.
 async function withStubbedBun(fn: (dir: string) => void | Promise<void>): Promise<void> {
-    const dir = fs.mkdtempSync(nodePath.join(os.tmpdir(), 'phantom-deliv-'))
+    const dir = tmpDir('phantom-deliv-')
     const pkg = nodePath.join(dir, 'node_modules', 'bun')
     fs.mkdirSync(pkg, {recursive: true})
     fs.writeFileSync(

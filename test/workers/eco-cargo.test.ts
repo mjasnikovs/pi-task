@@ -1,4 +1,5 @@
 import {describe, expect, test} from 'bun:test'
+import {tmpDir} from '../test-utils/tmp-dir.js'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
@@ -111,7 +112,7 @@ describe('finding a crate on disk', () => {
     test('the newest fetched copy answers when no lock is in reach', () => {
         // This is where the post-fetch re-resolve arrives: it is handed the
         // download directory, which holds no manifest.
-        const modulesDir = fs.mkdtempSync(path.join(os.tmpdir(), 'eco-cargo-mod-'))
+        const modulesDir = tmpDir('eco-cargo-mod-')
         fs.mkdirSync(path.join(modulesDir, 'cargo', 'left-pad-2.0.0', 'src'), {recursive: true})
         fs.writeFileSync(
             path.join(modulesDir, 'cargo', 'left-pad-2.0.0', 'src', 'lib.rs'),
@@ -126,7 +127,7 @@ describe('finding a crate on disk', () => {
     test('a prerelease checkout is found, not reported missing', () => {
         // `clap-4.0.0-rc.1` split at the LAST dash gives version "rc.1", which no
         // version test accepts — so a crate sitting right there reads as absent.
-        const modulesDir = fs.mkdtempSync(path.join(os.tmpdir(), 'eco-cargo-pre-'))
+        const modulesDir = tmpDir('eco-cargo-pre-')
         fs.mkdirSync(path.join(modulesDir, 'cargo', 'clap-4.0.0-rc.1', 'src'), {recursive: true})
         fs.writeFileSync(
             path.join(modulesDir, 'cargo', 'clap-4.0.0-rc.1', 'src', 'lib.rs'),
@@ -145,7 +146,7 @@ describe('finding a crate on disk', () => {
     test('a crate whose NAME ends in a dash and a digit is found', () => {
         // `md-5-0.10.6` split at the FIRST dash a digit follows gives name "md"
         // and version "5-0.10.6", so md-5, sha-1 and utf-8 all read as absent.
-        const modulesDir = fs.mkdtempSync(path.join(os.tmpdir(), 'eco-cargo-dash-'))
+        const modulesDir = tmpDir('eco-cargo-dash-')
         fs.mkdirSync(path.join(modulesDir, 'cargo', 'md-5-0.10.6', 'src'), {recursive: true})
         fs.writeFileSync(
             path.join(modulesDir, 'cargo', 'md-5-0.10.6', 'src', 'lib.rs'),
@@ -164,7 +165,7 @@ describe('finding a crate on disk', () => {
     test('build metadata sorts by its RELEASE, not as a missing patch', () => {
         // `2.0.16+zstd.1.5.7` splits on `.` into 2, 0, "16+zstd", 1, 5, 7 — the
         // patch reads as NaN, coerced to 0, so 2.0.16 loses to 2.0.9.
-        const modulesDir = fs.mkdtempSync(path.join(os.tmpdir(), 'eco-cargo-meta-'))
+        const modulesDir = tmpDir('eco-cargo-meta-')
         for (const dir of ['zstd-sys-2.0.9', 'zstd-sys-2.0.16+zstd.1.5.7']) {
             fs.mkdirSync(path.join(modulesDir, 'cargo', dir, 'src'), {recursive: true})
             fs.writeFileSync(
@@ -184,7 +185,7 @@ describe('finding a crate on disk', () => {
     test('a lock pin the disk does not hold is not_installed, not a substitute', () => {
         // Answering from another checkout's newer copy sets no install pin, so
         // buildVersionBanner emits nothing and the swap is silent.
-        const modulesDir = fs.mkdtempSync(path.join(os.tmpdir(), 'eco-cargo-pin-'))
+        const modulesDir = tmpDir('eco-cargo-pin-')
         fs.mkdirSync(path.join(modulesDir, 'cargo', 'tiny-crate-9.9.9', 'src'), {recursive: true})
         fs.writeFileSync(
             path.join(modulesDir, 'cargo', 'tiny-crate-9.9.9', 'src', 'lib.rs'),
@@ -372,7 +373,7 @@ describe('chunking the surface', () => {
 
 describe('acquiring a crate', () => {
     test('downloads the .crate to a file and hands it to tar', async () => {
-        const modulesDir = fs.mkdtempSync(path.join(os.tmpdir(), 'eco-cargo-acq-'))
+        const modulesDir = tmpDir('eco-cargo-acq-')
         const argv: string[][] = []
         const io = defaultEcosystemIo({
             cargoHome: CARGO_HOME,
@@ -413,7 +414,7 @@ describe('acquiring a crate', () => {
         // `use tokio_util::codec` is how the crate is written in Rust source, and
         // crateOf yields that. The crates.io API normalises `_` to `-`; the CDN
         // does not — it answers 403 for the underscore path.
-        const modulesDir = fs.mkdtempSync(path.join(os.tmpdir(), 'eco-cargo-name-'))
+        const modulesDir = tmpDir('eco-cargo-name-')
         const urls: string[] = []
         const io = defaultEcosystemIo({
             cargoHome: CARGO_HOME,
@@ -529,7 +530,7 @@ describe('end to end', () => {
         // corpus, which keeps only its newest. Moving the lock back must therefore
         // be a cache HIT, not a re-index.
         const cache = openCache(':memory:')
-        const project = fs.mkdtempSync(path.join(os.tmpdir(), 'eco-cargo-lock-'))
+        const project = tmpDir('eco-cargo-lock-')
         fs.writeFileSync(path.join(project, 'Cargo.toml'), '[package]\nname = "p"\n', 'utf8')
         const pin = (version: string): void =>
             fs.writeFileSync(
@@ -537,7 +538,7 @@ describe('end to end', () => {
                 `version = 4\n\n[[package]]\nname = "many"\nversion = "${version}"\n`,
                 'utf8'
             )
-        const home = fs.mkdtempSync(path.join(os.tmpdir(), 'eco-cargo-home-'))
+        const home = tmpDir('eco-cargo-home-')
         for (const version of ['1.0.0', '2.0.0']) {
             const dir = path.join(home, 'registry', 'src', 'index', `many-${version}`, 'src')
             fs.mkdirSync(dir, {recursive: true})

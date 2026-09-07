@@ -15,6 +15,7 @@
  * fake browser is, so the spawn-flow cases are POSIX-only.
  */
 import {afterAll, describe, expect, test} from 'bun:test'
+import {tmpDir} from '../test-utils/tmp-dir.js'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
@@ -60,7 +61,7 @@ afterAll(() => {
 /** A CDP-speaking fake browser on disk. `mode` 'hang' never prints the banner;
  *  'crash' exits before it — the driver's two launch failure modes. */
 function fakeBrowser(scenario: Scenario, mode: 'serve' | 'hang' | 'crash' = 'serve'): string {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'deep-render-fake-'))
+    const dir = tmpDir('deep-render-fake-')
     dirs.push(dir)
     const js = path.join(dir, 'fake-chrome.mjs')
     fs.writeFileSync(js, FAKE_SOURCE(scenario, mode))

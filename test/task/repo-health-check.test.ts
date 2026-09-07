@@ -1,5 +1,6 @@
 import {afterEach, describe, expect, test} from 'bun:test'
-import {mkdtempSync, rmSync, writeFileSync} from 'node:fs'
+import {tmpDir} from '../test-utils/tmp-dir.js'
+import {rmSync, writeFileSync} from 'node:fs'
 import {spawnSync} from 'node:child_process'
 import {tmpdir} from 'node:os'
 import * as path from 'node:path'
@@ -14,7 +15,7 @@ const cargoInstalled = spawnSync('cargo', ['--version']).error === undefined
 
 const made: string[] = []
 function tmpRepo(files: Record<string, string>): string {
-    const dir = mkdtempSync(path.join(tmpdir(), 'health-'))
+    const dir = tmpDir('health-')
     made.push(dir)
     for (const [name, content] of Object.entries(files)) {
         writeFileSync(path.join(dir, name), content)

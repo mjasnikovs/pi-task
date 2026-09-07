@@ -1,6 +1,6 @@
 import {describe, expect, test} from 'bun:test'
+import {tmpDir} from '../test-utils/tmp-dir.js'
 import * as fs from 'node:fs'
-import * as os from 'node:os'
 import * as path from 'node:path'
 import {
     ECOSYSTEMS,
@@ -70,11 +70,11 @@ describe('the npm row', () => {
         expect(fs.existsSync(path.join(FIXTURES, 'package.json'))).toBe(false)
         expect(npm.detect(FIXTURES)).toBe(true)
 
-        const declaredOnly = fs.mkdtempSync(path.join(os.tmpdir(), 'eco-npm-'))
+        const declaredOnly = tmpDir('eco-npm-')
         fs.writeFileSync(path.join(declaredOnly, 'package.json'), '{}', 'utf8')
         expect(npm.detect(declaredOnly)).toBe(true)
 
-        const neither = fs.mkdtempSync(path.join(os.tmpdir(), 'eco-none-'))
+        const neither = tmpDir('eco-none-')
         expect(npm.detect(neither)).toBe(false)
 
         fs.rmSync(declaredOnly, {recursive: true, force: true})
@@ -190,7 +190,7 @@ describe('choosing an ecosystem', () => {
     const ROSTER = [fakeRow('npm', 'package.json'), fakeRow('cargo', 'Cargo.toml')]
 
     function dirWith(...manifests: string[]): string {
-        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'eco-choose-'))
+        const dir = tmpDir('eco-choose-')
         for (const m of manifests) fs.writeFileSync(path.join(dir, m), '', 'utf8')
         return dir
     }
@@ -261,7 +261,7 @@ describe('choosing an ecosystem', () => {
         // From the frontend directory the crate is in a sibling, and checking only
         // the cwd's own children reads the project as npm-only — which is the
         // original bug, one directory over.
-        const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'eco-sibling-'))
+        const repo = tmpDir('eco-sibling-')
         fs.writeFileSync(path.join(repo, 'package.json'), '{}', 'utf8')
         fs.mkdirSync(path.join(repo, 'src-tauri'), {recursive: true})
         fs.writeFileSync(path.join(repo, 'src-tauri', 'Cargo.toml'), '[package]\n', 'utf8')

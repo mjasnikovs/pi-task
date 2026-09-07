@@ -6,8 +6,8 @@
  * guaranteed present).
  */
 import {afterEach, describe, expect, test} from 'bun:test'
+import {tmpDir} from '../test-utils/tmp-dir.js'
 import * as fs from 'node:fs'
-import * as os from 'node:os'
 import * as path from 'node:path'
 import {
     clearRunnerCache,
@@ -25,7 +25,7 @@ describe('resolveRunner', () => {
     })
 
     test('bare name dead, known location exists and runs → absolute path + prefix (the run-16 shape)', () => {
-        const home = fs.mkdtempSync(path.join(os.tmpdir(), 'runner-'))
+        const home = tmpDir('runner-')
         const binDir = path.join(home, '.bun', 'bin')
         fs.mkdirSync(binDir, {recursive: true})
         const exe = process.platform === 'win32' ? 'bun.exe' : 'bun'
@@ -48,7 +48,7 @@ describe('resolveRunner', () => {
     })
 
     test('BUN_INSTALL outranks ~/.bun', () => {
-        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'runner-'))
+        const root = tmpDir('runner-')
         const exe = process.platform === 'win32' ? 'bun.exe' : 'bun'
         const installBin = path.join(root, 'custom', 'bin')
         const homeBin = path.join(root, '.bun', 'bin')
@@ -65,7 +65,7 @@ describe('resolveRunner', () => {
     })
 
     test('a location that exists but does not RUN is not resolved (broken binary)', () => {
-        const home = fs.mkdtempSync(path.join(os.tmpdir(), 'runner-'))
+        const home = tmpDir('runner-')
         const binDir = path.join(home, '.bun', 'bin')
         fs.mkdirSync(binDir, {recursive: true})
         fs.writeFileSync(path.join(binDir, process.platform === 'win32' ? 'bun.exe' : 'bun'), '')
@@ -75,7 +75,7 @@ describe('resolveRunner', () => {
     })
 
     test('nowhere spawnable → ok false, bare name unchanged (callers keep the env-gap contract)', () => {
-        const home = fs.mkdtempSync(path.join(os.tmpdir(), 'runner-'))
+        const home = tmpDir('runner-')
         const r = resolveRunner('definitely-not-a-runner', {
             probe: () => false,
             env: {HOME: home, USERPROFILE: home}

@@ -8,8 +8,8 @@
  * declare itself.
  */
 import {describe, expect, test, beforeAll, afterAll} from 'bun:test'
+import {tmpDir} from '../test-utils/tmp-dir.js'
 import * as fs from 'node:fs'
-import * as os from 'node:os'
 import * as path from 'node:path'
 
 import {
@@ -31,7 +31,7 @@ function write(base: string, rel: string, body: string): void {
 }
 
 beforeAll(() => {
-    root = fs.mkdtempSync(path.join(os.tmpdir(), 'cargo-gap-'))
+    root = tmpDir('cargo-gap-')
     // A PUBLISHED manifest: cargo normalises every dependency to its own table,
     // so the inline `axum-core = { … }` form the crate was written with is gone.
     write(
@@ -78,7 +78,7 @@ beforeAll(() => {
     )
     write(root, 'src/glob.rs', ['pub use axum_core::extract::*;'].join('\n'))
 
-    plain = fs.mkdtempSync(path.join(os.tmpdir(), 'cargo-plain-'))
+    plain = tmpDir('cargo-plain-')
     write(
         plain,
         'Cargo.toml',
@@ -118,7 +118,7 @@ describe('cargoExportGap', () => {
     test('a re-exported name containing "as" is not truncated', () => {
         // `Hasher` split on a bare "as" yields "H". The rename form is `X as Y`,
         // which only exists with the spaces intact.
-        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cargo-as-'))
+        const dir = tmpDir('cargo-as-')
         try {
             write(
                 dir,
@@ -183,7 +183,7 @@ describe('the cargo supplements hook reads the PROJECT lock', () => {
     // resolved — which is an index whose shape depends on the machine.
     let project = ''
     beforeAll(() => {
-        project = fs.mkdtempSync(path.join(os.tmpdir(), 'cargo-proj-'))
+        project = tmpDir('cargo-proj-')
         write(
             project,
             'Cargo.toml',
@@ -218,7 +218,7 @@ describe('the cargo supplements hook reads the PROJECT lock', () => {
     })
 
     test('a project with no lock resolves no version, so no supplement', async () => {
-        const bare = fs.mkdtempSync(path.join(os.tmpdir(), 'cargo-nolock-'))
+        const bare = tmpDir('cargo-nolock-')
         try {
             const pkg = resolveCrate('tiny-axum', project, {
                 cargoHome: CARGO_HOME_FIXTURE,

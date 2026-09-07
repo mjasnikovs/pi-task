@@ -2537,12 +2537,39 @@ TypeError: Attempted to assign to readonly property.
 
 The alternatives were worse. A sweep matching a list of prefixes goes stale the
 moment a test adds one, silently. A sweep of "directories that appeared while I
-ran" deletes a CONCURRENT run's live roots. So the fix is per-file and the other
-seven leakers are still open, each one an `afterAll` and a registry away.
+ran" deletes a CONCURRENT run's live roots.
 
-`withTmpTaskDir` in `test/test-utils/` already does this correctly with try/finally,
-and `pi-task-test-` still leaked 2,237 — so a correct helper is not enough on its
-own either. Whatever replaces this has to survive a test that throws.
+### The whole suite, closed
+
+`test/test-utils/tmp-dir.ts` registers `afterAll` at module scope. `--isolate` gives
+each test file its own module registry, so importing it initialises once per file
+and the hook belongs to that file — which is the preload's completeness without the
+preload's readonly problem, at the cost of one import per file.
+
+Every call site converted, in four shapes the census turned up one at a time:
+
+```
+mkdtempSync(path.join(os.tmpdir(), 'x-'))     97 sites, 46 files
+mkdtempSync(`${tmpdir()}/x-`)                  5
+await fsp.mkdtemp(path.join(tmpdir(), 'x-'))   4
+mkdtempSync(nodePath.join(os.tmpdir(), 'x-'))  1
+```
+
+Measured on the tree before and after, one full `bun run test`:
+
+```
+before   252 directories left behind   (95 final-gate + 157 across the rest)
+after      0
+4,496 tests, 0 fail
+```
+
+`grep -rn mkdtemp test/` now returns only `tmpDir` and its own definition, so the
+next test to want a temp root has one obvious way to get one.
+
+`withTmpTaskDir` already did this correctly with try/finally, and `pi-task-test-`
+still leaked 2,237 — a correct helper is not enough when a test can throw past it.
+It routes through `tmpDir` now and keeps its `finally`, which frees the root early
+and leaves the registry to catch what escapes.
 
 ---
 

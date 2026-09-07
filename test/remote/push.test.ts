@@ -1,6 +1,6 @@
 import {describe, it, expect, beforeEach, afterEach} from 'bun:test'
-import {mkdtempSync, mkdirSync, rmSync, existsSync, readFileSync, writeFileSync} from 'node:fs'
-import {tmpdir} from 'node:os'
+import {tmpDir} from '../test-utils/tmp-dir.js'
+import {mkdirSync, rmSync, existsSync, readFileSync, writeFileSync} from 'node:fs'
 import path from 'node:path'
 import {
     loadOrCreateVapidKeys,
@@ -23,7 +23,7 @@ function sub(endpoint: string): PushSubscriptionJSON {
 describe('loadOrCreateVapidKeys', () => {
     let dir: string
     beforeEach(() => {
-        dir = mkdtempSync(path.join(tmpdir(), 'vapid-'))
+        dir = tmpDir('vapid-')
     })
     afterEach(() => {
         rmSync(dir, {recursive: true, force: true})
@@ -71,7 +71,7 @@ describe('subscription store', () => {
     let prevXdg: string | undefined
     beforeEach(() => {
         prevXdg = process.env.XDG_DATA_HOME
-        dir = mkdtempSync(path.join(tmpdir(), 'subs-'))
+        dir = tmpDir('subs-')
         process.env.XDG_DATA_HOME = dir
         clearSubscriptions()
     })
@@ -127,7 +127,7 @@ describe('logPush', () => {
     let prevLog: string | undefined
     let prevDebug: string | undefined
     beforeEach(() => {
-        dir = mkdtempSync(path.join(tmpdir(), 'pushlog-'))
+        dir = tmpDir('pushlog-')
         prevLog = process.env.PI_REMOTE_PUSH_LOG
         prevDebug = process.env.PI_REMOTE_PUSH_DEBUG
         process.env.PI_REMOTE_PUSH_LOG = path.join(dir, 'push.log')
@@ -170,7 +170,7 @@ describe('deliver', () => {
     let prevXdg: string | undefined
     beforeEach(() => {
         prevXdg = process.env.XDG_DATA_HOME
-        dir = mkdtempSync(path.join(tmpdir(), 'subs-'))
+        dir = tmpDir('subs-')
         process.env.XDG_DATA_HOME = dir
         clearSubscriptions()
     })
@@ -223,7 +223,7 @@ describe('subscription persistence', () => {
     let prevXdg: string | undefined
     beforeEach(() => {
         prevXdg = process.env.XDG_DATA_HOME
-        dir = mkdtempSync(path.join(tmpdir(), 'subs-'))
+        dir = tmpDir('subs-')
         process.env.XDG_DATA_HOME = dir
         clearSubscriptions()
     })

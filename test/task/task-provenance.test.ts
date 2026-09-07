@@ -1,6 +1,6 @@
 import {describe, expect, test} from 'bun:test'
+import {tmpDir} from '../test-utils/tmp-dir.js'
 import * as fs from 'node:fs'
-import * as os from 'node:os'
 import * as path from 'node:path'
 import {
     parseIntroducingTask,
@@ -47,7 +47,7 @@ describe('taskThatIntroduced (real git)', () => {
         if (r.exitCode !== 0) throw new Error(`git ${args[0]} failed: ${r.stderr.toString()}`)
     }
     test('sync lookup matches the injected-git variant', async () => {
-        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'prov-'))
+        const dir = tmpDir('prov-')
         git(dir, 'init', '-q')
         git(dir, 'config', 'user.email', 't@t')
         git(dir, 'config', 'user.name', 't')

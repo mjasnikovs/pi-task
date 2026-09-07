@@ -1,6 +1,6 @@
 import {describe, expect, test} from 'bun:test'
-import {existsSync, mkdtempSync, readFileSync, writeFileSync, mkdirSync} from 'node:fs'
-import {tmpdir} from 'node:os'
+import {tmpDir} from '../test-utils/tmp-dir.js'
+import {existsSync, readFileSync, writeFileSync, mkdirSync} from 'node:fs'
 import * as path from 'node:path'
 import {makeLedger, type LedgerSpec} from '../../src/task/ledger.js'
 import {tasksDir} from '../../src/task/task-io.js'
@@ -33,7 +33,7 @@ function recSpec(over: Partial<LedgerSpec<Rec>> = {}): LedgerSpec<Rec> {
 }
 
 function fresh(): string {
-    return mkdtempSync(`${tmpdir()}/ledger-`)
+    return tmpDir('ledger-')
 }
 
 describe('makeLedger', () => {

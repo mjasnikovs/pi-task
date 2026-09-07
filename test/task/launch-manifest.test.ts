@@ -5,8 +5,8 @@
  * not expose.
  */
 import {expect, test, describe} from 'bun:test'
+import {tmpDir} from '../test-utils/tmp-dir.js'
 import * as fs from 'node:fs'
-import * as os from 'node:os'
 import * as path from 'node:path'
 import {
     readLaunchManifest,
@@ -15,7 +15,7 @@ import {
 } from '../../src/task/launch-manifest.js'
 
 function tree(files: Record<string, string>): string {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'launch-manifest-'))
+    const dir = tmpDir('launch-manifest-')
     for (const [rel, body] of Object.entries(files)) {
         fs.mkdirSync(path.dirname(path.join(dir, rel)), {recursive: true})
         fs.writeFileSync(path.join(dir, rel), body)

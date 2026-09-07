@@ -1,7 +1,7 @@
 import {test, expect, describe} from 'bun:test'
+import {tmpDir} from '../test-utils/tmp-dir.js'
 import {splitAtMatches, chunkDeclarations} from '../../src/workers/docs-chunk.js'
 import * as fs from 'node:fs'
-import * as os from 'node:os'
 import * as path from 'node:path'
 import {openCache} from '../../src/workers/docs-cache.js'
 import {ensureIndexed, chunkerFingerprint} from '../../src/workers/docs-index.js'
@@ -58,7 +58,7 @@ test('ensureIndexed is idempotent on second call (cache hit)', () => {
 
 test('ensureIndexed re-ingests when content hash changes', () => {
     const cache = openCache(':memory:')
-    const tmpPkgRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'docs-index-test-'))
+    const tmpPkgRoot = tmpDir('docs-index-test-')
     try {
         fs.writeFileSync(
             path.join(tmpPkgRoot, 'package.json'),

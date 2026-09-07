@@ -1,6 +1,6 @@
 import {describe, expect, test} from 'bun:test'
-import {mkdtempSync, writeFileSync, rmSync} from 'node:fs'
-import {tmpdir} from 'node:os'
+import {tmpDir} from '../test-utils/tmp-dir.js'
+import {writeFileSync, rmSync} from 'node:fs'
 import {join} from 'node:path'
 import {
     findSynthesizedWiring,
@@ -96,7 +96,7 @@ describe('wiringProbeText / wiringDefectText', () => {
 
 describe('readReferencedDocs', () => {
     test('reads @-mentioned files and skips unreadable ones', () => {
-        const dir = mkdtempSync(join(tmpdir(), 'wiring-'))
+        const dir = tmpDir('wiring-')
         try {
             writeFileSync(join(dir, 'DESIGN.md'), 'pinned: /api/photos/:id')
             const out = readReferencedDocs(dir, 'see @DESIGN.md, and @missing/absent.md.')

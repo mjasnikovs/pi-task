@@ -1,4 +1,5 @@
 import {describe, expect, test} from 'bun:test'
+import {tmpDir} from '../test-utils/tmp-dir.js'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
@@ -113,7 +114,7 @@ describe("cabal's own tarball cache", () => {
     })
 
     test('acquire unpacks the cached tarball instead of asking Hackage', async () => {
-        const modulesDir = fs.mkdtempSync(path.join(os.tmpdir(), 'eco-hs-'))
+        const modulesDir = tmpDir('eco-hs-')
         const argv: string[][] = []
         const io = defaultEcosystemIo({
             modulesDir,
@@ -142,7 +143,7 @@ describe("cabal's own tarball cache", () => {
     })
 
     test('a package cabal has never fetched is downloaded from Hackage', async () => {
-        const modulesDir = fs.mkdtempSync(path.join(os.tmpdir(), 'eco-hs-dl-'))
+        const modulesDir = tmpDir('eco-hs-dl-')
         let requested = ''
         const io = defaultEcosystemIo({
             modulesDir,
@@ -194,7 +195,7 @@ describe('the surface', () => {
     test('a pin the disk does not hold is not_installed, not a substitute', () => {
         // Answering from another version's unpack sets no install pin, so
         // buildVersionBanner emits nothing and the swap is silent.
-        const modulesDir = fs.mkdtempSync(path.join(os.tmpdir(), 'eco-hs-pin-'))
+        const modulesDir = tmpDir('eco-hs-pin-')
         const root = path.join(modulesDir, 'hackage', 'tiny-hs-9.9.9')
         fs.mkdirSync(path.join(root, 'src'), {recursive: true})
         fs.writeFileSync(path.join(root, 'src', 'X.hs'), 'module X where\n', 'utf8')
