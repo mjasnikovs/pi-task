@@ -2601,6 +2601,20 @@ asked about so often.
 **What this needs is more recorded runs, not more entries.** 190 records over ~21
 symbols is the ceiling this corpus has.
 
+And the new row's misses are the promotion mechanism seen a third time. All five
+`zod:email` failures are budget-saturated:
+
+```
+38 chunks 23,997 B    36 chunks 23,986 B    33 chunks 23,324 B
+37 chunks 24,005 B    17 chunks 21,552 B
+```
+
+Seventeen to thirty-eight chunks against a 24,000 budget, and the 200-byte
+`export declare function email(params?): ZodEmail` is not among them. Nothing is
+missing from the corpus and nothing is starved of budget — the declaration is simply
+ranked below eight-kilobyte zod chunks that use the word. Promotion moves this row
+9/14 -> 11/14, which is where two of its eight gains come from.
+
 
 ---
 
