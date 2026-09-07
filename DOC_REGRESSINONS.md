@@ -2539,6 +2539,41 @@ reach them was already measured once at 90/101 -> 88/101.
 
 ---
 
+### The scoring change the zero-sum finding pointed at — measured, both ways, not shipped
+
+Promotion adds nothing. It reorders what bm25 already returned so a chunk that
+DECLARES a symbol the query names sorts ahead of one that merely uses it. Order is
+still membership, because `enforceBudget` cuts by it — but nothing is evicted to make
+room for something fetched.
+
+```
+HEAD                                        151/159
+promote declaring chunks, bm25 order        154/159   6 gained, 3 lost   p = 0.5078
+                                            npm 75/83 -> 79/83, cargo 42/42 -> 41/42
+promote declaring chunks, smallest first    151/159   6 gained, 6 lost   p = 1.0000
+```
+
+**The first is the only lever in this family that is not strictly negative**, and it
+is still not shippable. Three levers before it lost; this one gains three net at
+p = 0.51 and takes a cargo record. The budget was refused tonight at p = 0.1360 and
+the limit at p = 0.1796, both stronger than this.
+
+The two variants say something precise about why. Promoting by RANK put hono's 8 KiB
+`HonoRequest` at the front — it declares query symbols too — and cut the result from
+eleven chunks to five, burying the 225-byte `class Hono` that was asked for. So
+promotion helps `bun:test` (describe, expect, `it`, four gains) and hurts hono.
+
+Sorting the promoted group smallest-first fixes hono and breaks the rest: 6 for 6,
+exactly nothing. `definitionChunk`'s principle — "the definition of a name is a short
+declaration" — is right about which chunk to FETCH and wrong as a sort key over
+everything that declares.
+
+What is left untested is a scoring change that is neither: a bm25 rank adjusted by
+declaration, rather than a partition on it. That needs a corpus bigger than 159 pairs
+to resolve a three-record effect, and this file does not have one.
+
+---
+
 ## The session's shipped `src/` work, measured end to end on one instrument set
 
 Everything below is scored by the instruments as they stand at the end — the fixed
