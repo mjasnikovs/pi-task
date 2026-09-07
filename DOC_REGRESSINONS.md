@@ -2488,6 +2488,54 @@ not mistaken for an indexing bug.
 
 ---
 
+## Re-run 7's hs, on the fixed harness — 9% abstention, and an honest STALL
+
+hs re-ran alone on 0.40.23, re-seeded, with defect 31's fixes in the runner. Two
+things came out of it and they are separate.
+
+### The harness told the truth, and the truth is that hs halts
+
+```
+first poll     tasks=5 done=0      (the old code would have said tasks=1)
+final          STALLED (quiet 8m) tasks=5 done=2
+```
+
+Not "settled". The pane and the trail were both still for eight minutes, and the
+pane says why:
+
+```
+Error: TASK_0003 failed: critique loop detected 3×. Resume to retry.
+Error: TASK_AUTO_0001 stopped at "Implement makeApp :: FilePath -> Scotty serving
+       GET /config…" — loop detected 3× in critique — fix and run /task-auto-resume.
+```
+
+`/task-auto` did not die. It halted deliberately, named the task, and asked for a
+resume — which for an UNATTENDED run means the run never finishes. That is why
+hackage has never produced a verdict in seven runs, and it is not a docs defect:
+the loop is in the critique phase of an implementation task.
+
+### And the docs numbers are the best hackage has ever produced
+
+```
+11 records    1 abstained    9%
+
+aeson    5 answered of 5      (baseline: 8 abstentions in 11, 73%)
+scotty   2 of 2               (baseline: 3 in 7, 43%)
+text     1 of 2
+.        2 of 2
+```
+
+Against every previous hs run — 55%, 80%, 83%, 46%, 100%, 33% — nine per cent is a
+different regime. The single abstention is `Text type, Data.Text module, toText`,
+and `toText` is not a Data.Text export.
+
+**Read it with the caveat it deserves.** The run halted at task 3 of 5, so this is
+eleven questions and not the eighteen a complete hs run has asked; a shorter run
+asks earlier, easier questions. It is not a controlled comparison and it is the
+first hackage evidence that points the same way as the replay corpus.
+
+---
+
 ## Defect 31. The harness called a run "settled" while it was implementing
 
 hs has no verdict in two runs. Re-run 6's was a container stop. Re-run 7's is this,
