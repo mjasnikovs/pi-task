@@ -2601,6 +2601,24 @@ asked about so often.
 **What this needs is more recorded runs, not more entries.** 190 records over ~21
 symbols is the ceiling this corpus has.
 
+How fast that ceiling moves, measured rather than guessed:
+
+```
+ts   66 records over 6 runs   11.0 per run
+rs   55 records over 6 runs    9.2 per run
+hs   54 records over 5 runs   10.8 per run
+```
+
+Roughly ten per project-run, so a full three-project run adds about thirty. Going
+from 173 scored pairs to something that resolves a three-record effect is several
+more full runs, not one.
+
+The hypothesis this was meant to test — that hackage yields fewer records per hour
+and is therefore a poor way to grow the corpus — is WRONG. hs matches ts within a
+tenth of a record per run. Its cost is wall clock, not yield: re-run 7's hs spent
+ninety minutes on a single task and made five docs calls in that time, while its
+completed runs sit at the same ten as everyone else.
+
 And the new row's misses are the promotion mechanism seen a third time. All five
 `zod:email` failures are budget-saturated:
 
