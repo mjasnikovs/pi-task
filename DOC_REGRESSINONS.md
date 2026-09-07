@@ -3474,12 +3474,20 @@ sentence, and the shipped schema validates nothing. The docs tool was asked 20
 questions, abstained on 3, and every abstention is about tsconfig, `node:path` or
 `node:os` — build tooling, not a pinned package.
 
-### hs planned three tasks and executed one
+### hs has no verdict, and the harness is why — see defect 31
 
-Not a docs defect, and worth naming: `/task-auto` wrote `TASK_0001.md`, completed it,
-and settled while `TASK_AUTO_0001.md` still listed two more tasks with no spec file
-and no tick. Re-run 6's hs also had a single task. Two runs in a row on hackage, and
-the runner's own `progress()` cannot see it because it counts spec files.
+The first reading of this was "`/task-auto` wrote one task and stopped". It did not.
+The tmux capture taken when the harness killed the session reads
+`TASK_0001 · implementing · 8:02`, compiling Haskell probes. `waitForSettle` watched
+`.pi-tasks/*.log`, which is written at phase boundaries, so eleven minutes inside one
+implementation phase looked quiet; it declared the run settled and `run7.sh` built a
+tree with one of three tasks written.
+
+**hs's RED is the harness's, not the tool's, and re-run 7 has no hs result.** Both
+halves are fixed in 0.40.23 and hs is re-running: the runner now reads the plan's
+checklist for how many tasks there are, and requires the terminal to stop repainting
+before it will call anything quiet. The first poll of the re-run reads `tasks=5
+done=0` where the old code would have said `tasks=1`.
 
 ---
 
@@ -3594,7 +3602,7 @@ Artifacts in `live-docs-run-2026-09-05/`, `live-docs-rerun-2026-09-05/`,
 | re-run 4, 09-06 | 0.40.9 | **HARD FAIL**, 0% | **HARD FAIL**, 14% | **HARD FAIL**, 100% (1 call) |
 | re-run 5, 09-06 | 0.40.11 | **HARD FAIL**, 43% | PASS, 17% | PASS, 33% |
 | re-run 6, 09-06 | 0.40.14 | **HARD FAIL**, 10% | **HARD FAIL**, 17% | killed at task 1 |
-| re-run 7, 09-07 | 0.40.16 | **HARD FAIL**, 15% | **PASS**, 20% | INCOMPLETE, 0/3 tasks |
+| re-run 7, 09-07 | 0.40.16 | **HARD FAIL**, 15% | **PASS**, 20% | no verdict — defect 31 |
 
 **Re-run 5 is the best result any run has had on the hard half**: rs and hs both
 PASS, and hs has passed twice in five runs. ts HARD FAILs on `bun test`'s
