@@ -84,74 +84,78 @@ The full run in `DOCS-LIVE-RUNBOOK.md` is still the only DISCOVERY instrument, a
 it paid a third time — re-run 6 is what exposed both the seed defect and the fact
 that the byte budget had become binding.
 
-0. **A two-tree A/B is contaminated unless it is order-balanced. Read this first.**
-   Four alternating passes over one fixed 103-record set answered **76, 85, 88, 89**.
-   Slot 1 is twelve points below everything after it and the arm alternates, so that
-   line is POSITION. The budget A/B's own A/A — same tree, same cache, byte-identical
-   content — read p = 0.0118 while the A/B beside it read p = 0.0636.
+0. **Read this first: every instrument in this project has been wrong this month,
+   and four of them were found in one night.** Not the docs tool — the things that
+   MEASURE it. Defects 26 to 31 are all instrument, and each one had already changed
+   a verdict before it was found:
 
-   The protocol that survives is one warm-up pass, discarded, then **ABBA**, scored
-   with `docs-replay --compare-pooled a1,a2 b1,b2`. It works: re-measured that way,
-   both within-arm A/A controls read exactly p = 1.0000.
+   ```
+   26  the audit could not see a requirement DROPPED     ts would have read PASS
+   27  a partial answer scored as an abstention          every replay abstention
+                                                         inflated by a third to a half
+   28  a stitched excerpt refused the cache              a quarter of all answers
+   29  taskProgress counted specs written, not planned   hs read 1 of 1 against 3
+   30  the suite leaked 252 temp dirs per run            filled /tmp, broke docker exec
+   31  waitForSettle called a run settled mid-implement  hs built half-written, RED
+   ```
 
-   `--arm` is immune — both arms of one record run back to back in one process. Only
-   a build-time constant forces two trees.
-
-   **This is a MODEL-side effect.** `docs-defines` uses no model and the same tree
-   scored twice is byte-identical, so its A/A floor is zero. Do not apply the warm-up
-   discipline to it, and do not read its p-values as if noise were the worry.
+   Two of them share a shape worth naming: **a predicate whose docstring justified
+   itself on a premise a later fix had quietly invalidated.** Defect 15's clause made
+   `isAbstention`'s substring match unsafe; defect 18's classifier made
+   `excerptVerified` unusable as a fabrication signal. Both fixes left their consumer
+   behind. When a measurement disagrees with a mechanism you have opened and read,
+   suspect the instrument.
 
 1. **Two constants are CLOSED. Do not re-open either without a new lever.**
 
    ```
-   RETRIEVE_CONTENT_BUDGET   24,000 -> 48,000   answers p = 0.1360 balanced,
-                                                defines p = 0.2500.  STAYS at 24,000
-   PACKAGE_RETRIEVE_LIMIT    8 -> 50            answers 159/206 -> 163/206,
-                                                p = 0.5716 balanced.  STAYS at 50,
+   RETRIEVE_CONTENT_BUDGET   24,000 -> 48,000   p = 0.3323 balanced.  STAYS at 24,000
+   PACKAGE_RETRIEVE_LIMIT    8 -> 50            p = 0.1796 balanced.  STAYS at 50,
                                                 on its retrieval half, which needs
                                                 no model
+   MIN_TOKEN_LEN             2 -> 3             the peak moves to 2 the moment one
+                                                two-letter symbol enters TRUTH
    ```
 
-   The limit's shipped answer-side claim, 67/94 -> 79/94 at p = 0.0075, does NOT
-   replicate — it was the sequence it ran in. Three measurements now agree that
-   retrieved VOLUME is not what makes this child answer: a between-record correlation
-   at p = 0.20, the budget at 0.1360, the limit at 0.5716. **Stop tuning volume.**
-   What the text IS, is what moves.
+   The limit's shipped answer-side claim (67/94 -> 79/94, p = 0.0075) does NOT
+   replicate. Three measurements now agree that retrieved VOLUME is not what makes
+   this child answer. **Stop tuning volume.** What the text IS, is what moves — see
+   defect 25.
 
-2. **Re-run 7 was launched on 0.40.16 and is the first live run with all of it.**
-   Artifacts in `/home/agent/docs-live/`, run 6's in `prev-6/`. Score it the way
-   `DOCS-LIVE-RUNBOOK.md` says. Two fixes are on trial in it and neither has live
-   evidence yet:
+   A two-tree A/B still needs one warm-up pass then **ABBA**, scored with
+   `docs-replay --compare-pooled a1,a2 b1,b2`. The effect is five points, not the
+   twelve first reported; that first reading was mostly defect 27.
 
-   **The rs seed never declared `tower`.** axum's only in-process way to drive a
-   `Router` is `tower::ServiceExt::oneshot`, and the third obligation is to cover both
-   responses in tests. Re-runs 4 and 6 both hand-rolled `poll_ready`/`call` and both
-   failed on `use tower_service::Service`; re-run 6's own test file says it avoided
-   `oneshot` BECAUSE tower was not a direct dependency. Two of six runs died on this.
+2. **Defect 25 is the shape that pays: what the chunks ARE.** 3.8% of chunks held
+   51.1% of all indexed bytes, cut at 8 KiB byte offsets. Two fixes shipped — every
+   slice keeps its path line, and an oversized declaration splits at its members —
+   for defines 137/153 -> 148/153, p = 0.0034. Splitting CLASS members too was
+   measured and buys nothing (p = 1.0000); the patch is not kept.
 
-   **Defect 25, the chunker.** 3.8% of chunks sat at the 8 KiB cap and held 51.1% of
-   all indexed bytes. Two fixes: every slice keeps its path line (487 headless -> 0),
-   and an oversized declaration splits at its members instead of at byte offsets
-   (at-cap bytes 51.1% -> 16.6%, `@types/node` 509 -> 3,838 chunks).
+3. **Still open on defines, 8 of 159, and none of it is a constant.**
 
-3. **The truth set now covers the Bun family, and that is what decided defect 25.**
-   The member split was REJECTED at 125/128 -> 123/128 and then shipped at 14/29 ->
-   23/29, p = 0.0039, on the same data — because `TRUTH` had no entry for a single
-   package it repairs. The metric could see the cost and not the benefit.
+   ```
+   bun:test:describe 5/6   bun:test:expect 5/6   bun:test:it 3/6
+   hono:Hono 12/13   hono:json 10/11   node:fs/promises:readFile 1/2
+   ```
 
-   Write new entries the same way or not at all: **named by a recorded query, declared
-   by the published docs.** Reading the index for candidates is how a truth set stops
-   being one. `TruthEntry.named` exists for the case where the question says
-   `Bun.file` and the code says `function file`.
+   Refuted on the way here, do not redo: `enforceBudget`'s `break` (packing is worse,
+   150 -> 149, the hops get evicted), and teaching the alias hop to see
+   `export const` (151 -> 149, the hop evicts the declaration it was chasing a type
+   for). Both are pinned by tests that say "on purpose".
 
-   Still open on defines, and none of it is the limit or the budget:
-   `bun:test:describe` 3/6, `bun:test:expect` 5/6, `node:url:fileURLToPath` 0/1,
-   `node:fs/promises:readFile` 1/2, `hono:Hono` 13/16.
+4. **Write a TRUTH entry the way the last three were, or not at all: named by a
+   recorded query, declared by the published docs.** Reading the index for candidates
+   is how a truth set stops being one. The member split was REJECTED at 125/128 and
+   then shipped at p = 0.0005 on the same data, because `TRUTH` had no entry for a
+   single package it repairs. `TruthEntry.named` exists for `Bun.file` vs
+   `function file`; selection is whole-token since `queryAsks`.
 
-4. **Defect 19 was diagnosed three times in one session** and only the last reading
-   came from opening the file the run produced. Do not re-open the first two: the
-   retrieval bound was measured at limit 8 and no longer holds, and the extraction
-   omission is real, under-powered and not fatal. The seed was the cause.
+5. **Three live runs now say the same thing about ts, and it is not a docs defect.**
+   The tool named `z.email()` correctly in every run since the dead-major fix, and
+   the code shipped `z.string().email()` twice and `z.string()` once. Nothing in
+   retrieval or extraction is implicated. Defect 26's obligation check is what sees
+   the third case at all.
 
 2. **Run the defines harness before and after anything you change.** It is real
    now, with tests. `bun scripts/docs-defines.ts … --out a.jsonl` then
