@@ -2450,6 +2450,44 @@ being even a proxy.
 
 ---
 
+## Re-run 7's rs abstentions are one cluster, and the material is not indexable
+
+Rescored with defect 27's anchored matcher, rs is **3 abstentions in 15, 20%** — the
+`tower` record was a partial answer. All three that remain ask the same thing:
+
+```
+"How to derive Deserialize on a struct, and how #[serde(rename_all = …)] …"
+"Container attribute rename_all with \"camelCase\": how it transforms admin_email"
+"derive(Serialize) on a struct with #[serde(rename_all = \"camelCase\")]"
+```
+
+The corpus cannot answer it, and the numbers say so exactly:
+
+```
+serde          399 chunks    1 contains `rename_all`
+serde_derive     0 chunks
+```
+
+The one hit is a doc-comment example in `src/core/ser/fmt.rs` showing
+`#[serde(rename_all = "kebab-case")]` — which is why the child answered the general
+shape once and declined on camelCase specifically. That is correct behaviour, not a
+miss.
+
+**And the supplement rule cannot fix it, for a good reason.** `serde_derive` shares
+serde's prefix, so `DEFECT-12-STOPPING-RULE.md` would admit it as a candidate, and
+it is on disk with `rename_all` in three files. All three are
+`src/internals/{ast,attr,case}.rs` — a private `mod internals`, which is exactly what
+the cargo surface reduction drops. `case.rs` IMPLEMENTS the camelCase transform; it
+does not document it. serde's attribute reference lives on serde.rs, in neither
+crate's source.
+
+Filed under the class this file already carries: a query whose material is absent
+from every indexable public surface cannot be answered, and the tool abstaining is
+the right outcome. Recorded with its numbers so the `serde_derive: 0 chunks` line is
+not mistaken for an indexing bug.
+
+---
+
 ## Defect 27. A partial answer was scored as an abstention, and it moved the headline
 
 `isAbstention` was a SUBSTRING match, and its own docstring said why that was safe:
