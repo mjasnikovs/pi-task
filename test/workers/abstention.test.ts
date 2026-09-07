@@ -50,3 +50,31 @@ test('the sentences the prompts actually ship are the ones the matcher knows', (
     expect(projectPrompt).toContain(abstentionSentence('project'))
     expect(isAbstention(UNCLEAR_ANSWER)).toBe(true)
 })
+
+// The matcher was a substring match, and defect 15's fix to rule 4 made its premise
+// false: "answer the parts <content> covers, and name the parts it does not" gets a
+// child naming a gap with the phrase the same prompt just taught it. Six of 73
+// flagged abstentions across seven runs were substantial answers that ended that way.
+test('a partial answer that names its gap is not an abstention', () => {
+    expect(
+        isAbstention(
+            'tower::ServiceExt::oneshot is `fn oneshot(self, req: Request) -> Oneshot<Self, Request>`. '
+                + 'For the usage example on an axum Router: unclear from this package.'
+        )
+    ).toBe(false)
+})
+
+test('the sentence alone is still an abstention', () => {
+    expect(isAbstention('unclear from this package')).toBe(true)
+    expect(isAbstention('unclear from this project')).toBe(true)
+    expect(isAbstention('unclear from this page')).toBe(true)
+})
+
+test('the sentence with an explanation after it is still an abstention', () => {
+    expect(isAbstention('unclear from this package — no signature is given anywhere')).toBe(true)
+})
+
+test('leading quoting or bullets do not hide the sentence', () => {
+    expect(isAbstention('  "unclear from this package"')).toBe(true)
+    expect(isAbstention('- unclear from this package')).toBe(true)
+})

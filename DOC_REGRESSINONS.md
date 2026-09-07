@@ -2450,6 +2450,85 @@ being even a proxy.
 
 ---
 
+## Defect 27. A partial answer was scored as an abstention, and it moved the headline
+
+`isAbstention` was a SUBSTRING match, and its own docstring said why that was safe:
+
+> Rule 4 asks for this sentinel INSTEAD of an answer, so nothing sourced can
+> contain it.
+
+**True when it was written, and defect 15's fix made it false.** Rule 4 now ends:
+
+```
+A question with several parts: answer the parts <content> covers, and name
+the parts it does not. Use rule 4's sentence alone only when it covers no part.
+```
+
+A child naming the missing part reaches for the phrase the same prompt just taught
+it. Found in re-run 7's rs, where a `tower` record scored `unclear` carrying this:
+
+```
+tower::ServiceExt::oneshot signature is `fn oneshot(self, req: Request) ->
+Oneshot<Self, Request> where Self: Sized`. The Oneshot type is declared as
+`pub struct Oneshot<S: Service<Req>, Req> {}` … Yes, it is gated behind the "util"
+feature … For the usage example on an axum Router: unclear from this package.
+```
+
+Three of four parts answered exactly, and the record counted as a non-answer.
+
+All six such cases across seven runs were opened and every one is substantial —
+full signatures for `oneshot`, `TcpListener::bind`, `eitherDecode`, a whole zod
+schema. `ABSTENTION_RE` is anchored now: rule 4 asks for the sentence ALONE, so
+leading with it is the abstention and trailing it behind real content is the
+partial answer defect 15 exists to produce. The cost is stated in the code — a child
+that writes prose and only then declines outright now scores as an answer, a shape
+that does not occur in 243 recorded answers, all 67 real abstentions leading.
+
+### It is much larger on the replay corpus than on the live one
+
+The live corpus spans runs that predate defect 15. The replay corpus does not — every
+record replays through production's current prompt:
+
+```
+                     abstain, substring   anchored
+ledger bud24  n=103          27              15
+ledger bud48  n=103          18              10
+ledger lim-A1 n=103          24              17
+ledger lim-B1 n=103          22              13
+```
+
+Twelve of 27 in the first. **Every abstention number this project has reported from a
+replay was inflated by a third to a half.**
+
+### Which corrects one of this session's own headline claims
+
+Both ledger sets were rescored offline — they store the answer text, so no model was
+spent — and the two decisions are unchanged while the reasoning behind one is not:
+
+```
+BUDGET                            substring        anchored
+A/A 24k pass1 vs pass2       76->88  p=0.0118   88->91  p=0.5811
+A/B 24k vs 48k, one pass     76->85  p=0.0636   88->93  p=0.2668
+balanced, two passes each    10/19   p=0.1360   6/11    p=0.3323
+
+LIMIT                             substring        anchored
+A/A within limit 8                   p=1.0000              p=1.0000
+A/A within limit 50                  p=1.0000              p=1.0000
+ABBA pooled                  12/16   p=0.5716   4/10    p=0.1796
+```
+
+**"The A/A moved further than the A/B" is no longer true.** Rescored it is 0.5811
+against 0.2668, the right way round. The four slots read **88, 93, 91, 93** rather
+than 76, 85, 88, 89: slot 1 is still the lowest and the warm-up pass is still the
+right discipline, but the effect is five points and not twelve, and a good part of
+what looked like position was this scorer.
+
+`RETRIEVE_CONTENT_BUDGET` stays at 24,000 and `PACKAGE_RETRIEVE_LIMIT` stays at 50.
+Neither verdict moves. The limit's answer half reads p = 0.1796 rather than 0.5716,
+which is a direction and still not a finding.
+
+---
+
 ### Defect 26. The audit cannot see a requirement that was DROPPED
 
 `STALE` catches code written against the wrong major. It has no way to catch code
@@ -3014,7 +3093,10 @@ A/B     24k pass 1 -> 48k pass 1    only-A  5   only-B 14   76/103 -> 85/103   p
 ```
 
 **The control moved further than the treatment, and it is the one that reaches
-significance.** Mean bytes shown in the A/A are identical to the character —
+significance.** — CORRECTED by defect 27 below: rescored with an anchored
+abstention matcher the A/A reads p = 0.5811 and the A/B p = 0.2668, the right way
+round. The numbers in this section are the substring scorer's. The verdict does not
+change; this sentence does. Mean bytes shown in the A/A are identical to the character —
 20,882 both passes — so retrieval is not what changed. Read by position instead of
 by arm, the whole thing is one monotone line:
 

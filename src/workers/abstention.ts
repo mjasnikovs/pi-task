@@ -45,16 +45,28 @@ export function abstentionSentence(kind: AbstentionKind): string {
  * Matches any corpus's abstention. Built from the same table the prompts read, so
  * adding a corpus cannot leave a matcher behind.
  *
- * A SUBSTRING match, unlike fetch-core's separate `not covered by this page`
- * sentinel, which is anchored. The instructions differ, so the matchers must. The
- * "not covered" rule asks for a partial answer that NAMES what is missing, so a
- * sourced answer legitimately contains the phrase and only an anchored match keeps
- * it from being filed as a coverage miss. Rule 4 below asks for this sentinel
- * INSTEAD of an answer, so nothing sourced can contain it, and a substring match
- * still catches a child that wraps the sentence in an explanation.
+ * ANCHORED, and it was a substring match until it was measured. The docstring here
+ * used to say "rule 4 asks for this sentinel INSTEAD of an answer, so nothing
+ * sourced can contain it". That was true when it was written and defect 15's fix
+ * made it false: rule 4 now ends with "answer the parts <content> covers, and name
+ * the parts it does not", and a child naming the missing part reaches for the
+ * phrase the same prompt just taught it.
+ *
+ * Six of 73 flagged abstentions across seven runs were substantial answers that
+ * named a gap at the end — full signatures for `oneshot`, `TcpListener::bind`,
+ * `eitherDecode`, a whole zod schema — every one scored as a non-answer. Rule 4
+ * asks for the sentence ALONE, so leading with it is the abstention and trailing it
+ * behind real content is the partial answer defect 15 exists to produce.
+ *
+ * The leading `<answer>` tag is admitted because some consumers see the child's raw
+ * output rather than the parsed body.
+ *
+ * The cost, stated: a child that writes prose first and only then declines outright
+ * now scores as an answer. Across 243 recorded answers that shape does not occur —
+ * all 67 real abstentions lead with the sentence.
  */
 const ABSTENTION_RE = new RegExp(
-    `unclear\\s+from\\s+this\\s+(${Object.values(NOUNS).join('|')})\\b`,
+    `^(?:\\s*<answer>)?[\\s"'\`\\-*]*unclear\\s+from\\s+this\\s+(${Object.values(NOUNS).join('|')})\\b`,
     'i'
 )
 
