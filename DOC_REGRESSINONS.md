@@ -2488,6 +2488,64 @@ not mistaken for an indexing bug.
 
 ---
 
+## Defect 30. The test suite leaks a temp directory per test, and it stopped the machine
+
+Not a docs defect. It is written here because it is what broke this session's
+container, and because nothing else would have found it.
+
+`/tmp` reached **1,048,576 of 1,048,576 inodes**. The disk was 44% free — the
+failure was inode exhaustion, and the first thing to break was not a test:
+
+```
+OCI runtime exec failed: open /tmp/runc-process306046884: no space left on device
+```
+
+`docker exec` could no longer create its own control file, so the live run could not
+be inspected at all. The cause, counted by prefix:
+
+```
+13,110  pi-final-gate-        3,036  gate-build-
+ 3,892  research-cache-       2,898  pi-guard-test-
+ 3,450  pi-accept-debt-       2,237  pi-task-test-
+ 3,312  gate-collect-         2,208  pi-boot-probe-
+```
+
+Cleaning those freed **664,000 inodes**, 100% -> 37%.
+
+### The worst one, measured before and after
+
+`final-gate.test.ts` has 82 calls to a `makeDir` helper that mkdtemps and returns,
+and one `rmSync` between them. One run:
+
+```
+before the fix    0 -> 95 directories left behind
+after the fix     0 -> 0
+118 tests, 0 fail
+```
+
+Ninety-five per run, and the suite ran ten times tonight.
+
+### What was tried first, and why it is not there
+
+A preload that wraps `mkdtemp` and removes what the process created would have
+fixed every one of the 103 prefixes at once, with no list to go stale — which is
+the shape this file keeps arguing for. **Bun's `node:fs` exports are readonly:**
+
+```
+TypeError: Attempted to assign to readonly property.
+```
+
+The alternatives were worse. A sweep matching a list of prefixes goes stale the
+moment a test adds one, silently. A sweep of "directories that appeared while I
+ran" deletes a CONCURRENT run's live roots. So the fix is per-file and the other
+seven leakers are still open, each one an `afterAll` and a registry away.
+
+`withTmpTaskDir` in `test/test-utils/` already does this correctly with try/finally,
+and `pi-task-test-` still leaked 2,237 — so a correct helper is not enough on its
+own either. Whatever replaces this has to survive a test that throws.
+
+---
+
 ## Defect 28. A quarter of every run's answers were refused the cache, none of them wrongly
 
 Defect 18 fixed the WARNING an unverified excerpt prints. It did not touch the

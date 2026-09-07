@@ -4,7 +4,7 @@
  * mocked spawn would test the mock). Scripts are trivial shell one-liners, so
  * each case is fast and hermetic.
  */
-import {describe, expect, test} from 'bun:test'
+import {afterAll, describe, expect, test} from 'bun:test'
 import {spawnSync} from 'node:child_process'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
@@ -38,8 +38,30 @@ import {inertClosure, type EnvClosure} from '../../src/task/env-template-closure
 const IS_WINDOWS = process.platform === 'win32'
 const itPosix = IS_WINDOWS ? test.skip : test
 
+/**
+ * Every root this file makes, removed together at the end.
+ *
+ * Eighty-two callers and one `rmSync` between them: a suite run left 82 directories
+ * behind, and enough runs left 13,110 of them — the largest single share of the
+ * 1,048,576 inodes that filled this machine's `/tmp` and stopped `docker exec`
+ * creating its own control file. A per-test `try/finally` would need 82 edits and
+ * still miss the next caller; one registry cannot.
+ */
+const madeDirs: string[] = []
+
+afterAll(() => {
+    for (const dir of madeDirs) {
+        try {
+            fs.rmSync(dir, {recursive: true, force: true})
+        } catch {
+            // A test that removed its own root already is fine. Cleanup never fails a run.
+        }
+    }
+})
+
 function makeDir(pkg?: object): string {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-final-gate-'))
+    madeDirs.push(dir)
     if (pkg) fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify(pkg, null, 2))
     return dir
 }
