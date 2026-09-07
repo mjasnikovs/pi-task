@@ -97,7 +97,13 @@ that the byte budget had become binding.
    29  taskProgress counted specs written, not planned   hs read 1 of 1 against 3
    30  the suite leaked 252 temp dirs per run            filled /tmp, broke docker exec
    31  waitForSettle called a run settled mid-implement  hs built half-written, RED
+   32  webAfterDocs compared a package name to a URL     0 in eight runs, while hs
+                                                         run 8 fetched hackage 11x
    ```
+
+   Three more checks were tested the same way and came back CLEAN: `refusalsInResearch`
+   is sound, the fidelity flag is saturated but honest, and `enforceBudget`'s `break`
+   is load-bearing. Four for seven — the check earns its keep, and it is not a reflex.
 
    Two of them share a shape worth naming: **a predicate whose docstring justified
    itself on a premise a later fix had quietly invalidated.** Defect 15's clause made
@@ -126,13 +132,26 @@ that the byte budget had become binding.
    `docs-replay --compare-pooled a1,a2 b1,b2`. The effect is five points, not the
    twelve first reported; that first reading was mostly defect 27.
 
-2. **Defect 25 is the shape that pays: what the chunks ARE.** 3.8% of chunks held
+2. **RE-RUN 8 IS RUNNING IN THE CONTAINER RIGHT NOW — score it first.** Launched on
+   0.40.24 at 04:27, all three re-seeded; `/tmp/run8.log` and `/tmp/run-{ts,rs,hs}.log`,
+   previous artifacts in `prev-8/`. It is the first full run with every fix below, and
+   the first whose harness will neither kill it mid-implementation nor abandon it when
+   it asks to be resumed. Note that the audit's `web lookup after a docs call` row now
+   MEANS something — it was blind until 0.40.25.
+
+   **hackage PASSED for the first time in eight runs**, on 0.40.16 plus the 0.40.24
+   harness: 4 of 4 tasks, `cabal test` green, 20 records, 1 abstention — 5% against a
+   history of 55, 80, 83, 46, 100 and 33. Read it with defect 32 beside it: the same
+   run fetched hackage eleven times for `wai-test` and `aeson`, which no abstention
+   rate can see.
+
+3. **Defect 25 is the shape that pays: what the chunks ARE.** 3.8% of chunks held
    51.1% of all indexed bytes, cut at 8 KiB byte offsets. Two fixes shipped — every
    slice keeps its path line, and an oversized declaration splits at its members —
    for defines 137/153 -> 148/153, p = 0.0034. Splitting CLASS members too was
    measured and buys nothing (p = 1.0000); the patch is not kept.
 
-3. **Still open on defines, 8 of 159, and none of it is a constant.**
+4. **Still open on defines, 8 of 173, and none of it is a constant.**
 
    ```
    bun:test:describe 5/6   bun:test:expect 5/6   bun:test:it 3/6
@@ -144,7 +163,7 @@ that the byte budget had become binding.
    `export const` (151 -> 149, the hop evicts the declaration it was chasing a type
    for). Both are pinned by tests that say "on purpose".
 
-4. **The residual is a RANKING problem and adding chunks cannot fix it.** Every
+5. **The residual is a RANKING problem and adding chunks cannot fix it.** Every
    symbol still missing on defines has a 66-to-225-byte declaration in its own
    package; `zod:email`'s five misses each retrieve 17 to 38 chunks and 21.5 to 24 KB
    without it. Three levers that FETCH one all lost, because
@@ -170,14 +189,14 @@ that the byte budget had become binding.
    smallest-first — measured, 6 for 6, exactly nothing. What is untested is a bm25
    rank ADJUSTED by declaration rather than partitioned on it.
 
-5. **Write a TRUTH entry the way the last four were, or not at all: named by a
+6. **Write a TRUTH entry the way the last four were, or not at all: named by a
    recorded query, declared by the published docs.** Reading the index for candidates
    is how a truth set stops being one. The member split was REJECTED at 125/128 and
    then shipped at p = 0.0005 on the same data, because `TRUTH` had no entry for a
    single package it repairs. `TruthEntry.named` exists for `Bun.file` vs
    `function file`; selection is whole-token since `queryAsks`.
 
-6. **Three live runs now say the same thing about ts, and it is not a docs defect.**
+7. **Three live runs now say the same thing about ts, and it is not a docs defect.**
    The tool named `z.email()` correctly in every run since the dead-major fix, and
    the code shipped `z.string().email()` twice and `z.string()` once. Nothing in
    retrieval or extraction is implicated. Defect 26's obligation check is what sees
