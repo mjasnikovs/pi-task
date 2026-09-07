@@ -2488,6 +2488,55 @@ not mistaken for an indexing bug.
 
 ---
 
+## The session's shipped `src/` work, measured end to end on one instrument set
+
+Everything below is scored by the instruments as they stand at the end — the fixed
+`definesSymbol`, whole-token selection, and the widened truth set — so the only
+thing that differs between the arms is `src/`. Session start is 0.40.14's chunker
+with `PACKAGE_RETRIEVE_LIMIT` already at 50.
+
+```
+pairs 159   both 139   only-start 4   only-HEAD 12   neither 4
+defines     143/159 -> 151/159        McNemar exact, two-sided: p = 0.0768
+npm          67/83  ->  75/83
+cargo        42/42   unchanged        hackage  34/34  unchanged
+```
+
+Both framings are true and neither is the other:
+
+```
+header fix -> member split      137/153 -> 148/153   12 gained, 1 lost   p = 0.0034
+session start -> HEAD           143/159 -> 151/159   12 gained, 4 lost   p = 0.0768
+```
+
+The second has the header fix inside the treatment and three more losses, so it is
+the weaker number and the honest one to quote for "what the night's `src/` changes
+bought".
+
+**The twelve gains and the four losses are the same mechanism seen twice.**
+
+```
+gained   bun:test:expect 4   bun:test:describe 3   bun:write 2
+         node:url:fileURLToPath 1   node:fs/promises:readFile 1   bun:test:beforeEach 1
+lost     bun:test:it 3       hono:Hono 1
+```
+
+Splitting an oversized `declare module` puts real member declarations into the
+ranking — `export const expect: Expect`, `function fileURLToPath(…)` — and pushes
+out the small chunks that were winning before. For `describe` and `expect` that is
+a straight upgrade: what they had was `test-globals.d.ts`'s
+`declare var describe: typeof import("bun:test").describe`, an alias.
+
+`it` has nothing better to be upgraded TO. Its only declarations anywhere are that
+same alias and `export { test as it }`, both small chunks, and both now rank below
+the members the split created. **The trade is a globals alias out for a real
+declaration in, and `it` is the one symbol where the alias was all there was.**
+
+That is the residual: 8 misses in 159, `bun:test:it` 3/6 the largest, and the fix
+for it is not a constant.
+
+---
+
 ## Re-run 7's hs, on the fixed harness — 9% abstention, and an honest STALL
 
 hs re-ran alone on 0.40.23, re-seeded, with defect 31's fixes in the runner. Two
