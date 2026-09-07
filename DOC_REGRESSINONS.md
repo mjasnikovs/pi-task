@@ -2488,6 +2488,62 @@ not mistaken for an indexing bug.
 
 ---
 
+## Defect 31. The harness called a run "settled" while it was implementing
+
+hs has no verdict in two runs. Re-run 6's was a container stop. Re-run 7's is this,
+and it is the harness's own.
+
+`waitForSettle` watched two things: at least one task exists, and `.pi-tasks/*.log`
+has stopped growing for eight minutes. Those logs are written at PHASE boundaries.
+A task that spends eleven minutes inside one implementation phase writes nothing —
+so the trail reads quiet and the run reads finished.
+
+The tmux capture taken at kill time says what was actually happening:
+
+```
+TASK_0001 · App/Config.hs: Config record, loadConfig, configResponse
+implementing · 8:02 · 40k/120k [▓▓▓░░░░░]
+↳ bash cat > /tmp/test3.hs << 'EOF' module Main where import Data.Aeson…
+```
+
+Eight minutes into implementing, compiling Haskell probes. The harness declared it
+settled, `run7.sh` moved on, `docs-live-build.ts` built a tree with one of three
+tasks written, and hs came back RED.
+
+**Two separate bugs, and each alone was enough.**
+
+```
+tasks/done      counted TASK_NNNN.md — the specs WRITTEN, not the tasks PLANNED.
+                hs read 1 of 1 while its plan listed three, so "all done" was
+                true on the first task.
+quiet           counted the trail only, which does not move inside a phase.
+```
+
+Both are fixed and the positive signal is now the plan itself:
+
+```
+done      every planned task ticked in TASK_AUTO_NNNN.md's checklist
+stalled   the trail has not grown AND the pane has not repainted, for quietMs
+```
+
+The pane carries an elapsed timer that ticks every second, so a live run cannot look
+still even while it writes no file. A failed capture reads as unchanged and cannot
+keep a dead run alive on its own, because the trail still has to be quiet too. The
+verdict string says `STALLED` now rather than `settled`, because that is what it
+means.
+
+Read against the same three trees the harness just ran:
+
+```
+ts   planned 4  done 4      rs   planned 5  done 5      hs   planned 3  done 0
+```
+
+`docs-live-audit.ts` got the same reader for defect 29, from the same evidence. It
+is the second consumer of a "how far did it get" number that was counting the wrong
+thing — the audit reported PASS on it, the runner reported settled.
+
+---
+
 ## Defect 30. The test suite leaks a temp directory per test, and it stopped the machine
 
 Not a docs defect. It is written here because it is what broke this session's

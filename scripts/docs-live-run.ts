@@ -62,37 +62,90 @@ function progress(root: string): {tasks: number; done: number; trailBytes: numbe
             trailBytes += fs.statSync(full).size
         }
     }
-    return {tasks, done, trailBytes}
+    const plan = planProgress(dir)
+    return {...(plan ?? {tasks, done}), trailBytes}
+}
+
+/**
+ * The plan's own checklist, which is what says how many tasks there ARE.
+ *
+ * Counting `TASK_NNNN.md` counts the specs WRITTEN, and re-run 7's hs planned three
+ * and had one written — so spec files read 1 of 1 and the run looked complete on its
+ * first task. `## coverage` below the list has bullets of its own, so the section is
+ * bounded.
+ */
+function planProgress(dir: string): {tasks: number; done: number} | null {
+    const plan = fs.readdirSync(dir).find(f => /^TASK_AUTO_\d+\.md$/.test(f))
+    if (plan === undefined) return null
+    const section = /^## tasks\s*$([\s\S]*?)^## /m.exec(
+        fs.readFileSync(path.join(dir, plan), 'utf8')
+    )
+    if (section === null) return null
+    const lines = section[1].split('\n').filter(l => /^- \[[ x]\]/.test(l))
+    if (lines.length === 0) return null
+    return {tasks: lines.length, done: lines.filter(l => /^- \[x\]/.test(l)).length}
 }
 
 /**
  * Wait for the run to settle.
  *
- * Settled means the trail has stopped growing AND at least one task exists —
- * never a fixed wall clock. A clock on a model-driven run is a hardware test:
- * the same run on a busier box is a different number, and the bound goes stale
- * the moment the model changes.
+ * Never a fixed wall clock. A clock on a model-driven run is a hardware test: the
+ * same run on a busier box is a different number, and the bound goes stale the
+ * moment the model changes.
+ *
+ * DONE is every planned task ticked. That is the only positive signal; everything
+ * else here is a stall detector.
+ *
+ * The trail alone is not a stall detector, and re-run 7's hs is why. `.pi-tasks/`
+ * logs are written at PHASE boundaries, so a task that spends eleven minutes inside
+ * one implementation phase writes nothing — the trail reads quiet, this returned
+ * "settled" while the TUI said `TASK_0001 · implementing · 8:02`, and the harness
+ * then built a half-written tree and called it RED. Two of seven runs have no hs
+ * verdict and this produced one of them.
+ *
+ * So quiet means BOTH quiet: the trail has not grown and the terminal has not
+ * repainted. The pane carries an elapsed timer that ticks every second, so a live
+ * run cannot look still even when it writes no file.
  */
-async function waitForSettle(root: string, quietMs: number, hardDeadline: number): Promise<string> {
+async function waitForSettle(
+    root: string,
+    quietMs: number,
+    hardDeadline: number,
+    session: string
+): Promise<string> {
     let lastBytes = -1
+    let lastPane = ''
     let lastChange = Date.now()
     let seenTasks = false
     while (Date.now() < hardDeadline) {
         await new Promise(r => setTimeout(r, 15_000))
         const p = progress(root)
         if (p.tasks > 0) seenTasks = true
-        if (p.trailBytes !== lastBytes) {
+        if (seenTasks && p.done === p.tasks) {
+            return `settled (all ${p.tasks} planned tasks done)`
+        }
+        const pane = paneText(session)
+        if (p.trailBytes !== lastBytes || pane !== lastPane) {
             lastBytes = p.trailBytes
+            lastPane = pane
             lastChange = Date.now()
-            console.log(
-                `    tasks=${p.tasks} done=${p.done} trail=${(p.trailBytes / 1024) | 0}KB`
-            )
+            console.log(`    tasks=${p.tasks} done=${p.done} trail=${(p.trailBytes / 1024) | 0}KB`)
         } else if (seenTasks && Date.now() - lastChange > quietMs) {
-            return `settled (quiet ${(quietMs / 60000) | 0}m) tasks=${p.tasks} done=${p.done}`
+            return `STALLED (quiet ${(quietMs / 60000) | 0}m) tasks=${p.tasks} done=${p.done}`
         }
     }
     const p = progress(root)
     return `HARD DEADLINE tasks=${p.tasks} done=${p.done}`
+}
+
+/** The visible pane. Empty on failure, which reads as "unchanged" and cannot itself
+ *  keep a dead run alive — the trail check still has to be quiet too. */
+function paneText(session: string): string {
+    try {
+        return execFileSync('tmux', ['capture-pane', '-p', '-t', session], {encoding: 'utf8'})
+    } catch {
+        return ''
+    }
 }
 
 async function main(): Promise<void> {
@@ -126,7 +179,7 @@ async function main(): Promise<void> {
     sendLine(session, `/task-auto ${feature}`)
 
     const hardDeadline = Date.now() + timeoutMin * 60_000
-    const verdict = await waitForSettle(root, quietMin * 60_000, hardDeadline)
+    const verdict = await waitForSettle(root, quietMin * 60_000, hardDeadline, session)
     console.log(`    ${verdict}`)
 
     // Written OUTSIDE the project, and this is not tidiness. A capture left in the
