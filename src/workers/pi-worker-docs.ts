@@ -56,6 +56,12 @@ interface DocsDetails {
     hitCache?: boolean
     chunksRetrieved?: number
     excerptVerified?: boolean
+    /**
+     * The excerpt cites a word the source never wrote — a possible fabrication, as
+     * opposed to a quote stitched from several real spans. `excerptVerified: false`
+     * covers both and cannot tell them apart.
+     */
+    excerptFabricated?: boolean
     childExitCode?: number
     indexingMs?: number
     indexedFiles?: number
@@ -319,7 +325,8 @@ export function registerPiWorkerDocs(
                 })
                 return workerAnswer(text, {
                     ...baseDetails,
-                    excerptVerified: verified
+                    excerptVerified: verified,
+                    excerptFabricated: excerptFabricated(extraction.excerptCheck)
                 })
             }
 
@@ -481,6 +488,7 @@ export function registerPiWorkerDocs(
             return workerAnswer(text, {
                 ...baseDetails,
                 excerptVerified: verified,
+                excerptFabricated: excerptFabricated(extraction.excerptCheck),
                 ...(typeOnly.typeOnly ? {typeOnly: true} : {})
             })
         },
@@ -529,15 +537,32 @@ export function registerPiWorkerDocs(
  * assert against its own copy — green even after the shipped rule changed. Exported,
  * the test imports the rule it is checking.
  */
+/**
+ * Did the excerpt cite a word the source never wrote?
+ *
+ * `verified` is false for a stitched quote too, and the two must not share a gate:
+ * one is a possible fabrication and the other is what the extraction prompt asks
+ * for. Absent of a check, nothing was verified and nothing is claimed.
+ */
+export function excerptFabricated(check: {absent: readonly string[]} | undefined): boolean {
+    return check !== undefined && check.absent.length > 0
+}
+
 export function docsCacheable(
-    d: Pick<DocsDetails, 'typeOnly' | 'excerptVerified'>,
+    d: Pick<DocsDetails, 'typeOnly' | 'excerptVerified' | 'excerptFabricated'>,
     text: string
 ): boolean {
     // Answer QUALITY only. Whether there IS an answer is `WorkerOutcome.kind`, and
     // `makeWorkerTool` has already refused an `unavailable` before reaching here —
     // opening this with `childExitCode === 0` memoises an aborted lookup for the
     // whole run, because a signal-killed child satisfies it.
-    return d.typeOnly !== true && d.excerptVerified !== false && !isAbstention(text)
+    //
+    // It reads `excerptFabricated`, not `excerptVerified`. A quarter of every run's
+    // answers come back unverified and this refused all of them; re-checked with the
+    // classifier defect 18 added, 41 of 41 unverified excerpts across seven runs are
+    // STITCHED — every span verbatim, not one absent word. The gate was refusing
+    // non-contiguous quoting, and every sibling paid a fresh child for it.
+    return d.typeOnly !== true && d.excerptFabricated !== true && !isAbstention(text)
 }
 
 /** The docs cache key: a package's answer is per (module, question), with the question

@@ -2488,6 +2488,51 @@ not mistaken for an indexing bug.
 
 ---
 
+## Defect 28. A quarter of every run's answers were refused the cache, none of them wrongly
+
+Defect 18 fixed the WARNING an unverified excerpt prints. It did not touch the
+BOOLEAN, and `docsCacheable` gates on the boolean:
+
+```ts
+return d.typeOnly !== true && d.excerptVerified !== false && !isAbstention(text)
+```
+
+`excerptVerified` is false for a stitched quote and for a possible fabrication
+alike — that is the whole point of defect 18 — so the cache refused both. The rate
+is stable across every run:
+
+```
+243 recorded answers    excerptVerified false: 60   24.7%
+per run: 3/17  4/17  6/22  3/14  2/5  1/10  4/17  0/10  1/6  3/18  4/9  1/13
+         1/7   7/12  3/9   4/10  6/12  4/20  3/15
+```
+
+Re-checked with `verifyExcerpt`, the classifier defect 18 added, over every record
+that still carries its content:
+
+```
+unverified excerpts re-checkable        41
+    stitched, every span verbatim       41
+    carrying a word the source lacks     0
+```
+
+**Forty-one of forty-one.** The gate has been refusing non-contiguous quoting, and a
+docs answer is per (module, question) — so every sibling worker that asked the same
+question paid a fresh child for it, once per run, for a quarter of all answers.
+
+`excerptFabricated` is a separate field now, set from `excerptCheck.absent.length`
+at both worker call sites, and `docsCacheable` reads that. A stitched quote caches;
+an excerpt with an absent word still does not. The test that pinned the old contract
+is updated rather than deleted, and says why.
+
+This is the same shape as defect 27 one section up, and they were found the same
+way: a predicate whose docstring justified itself on a premise a later fix had
+quietly invalidated. Defect 15's clause made `isAbstention`'s substring safe-by-
+argument false; defect 18's classifier made `excerptVerified`'s use as a fabrication
+signal false. **Both fixes left the consumer behind.**
+
+---
+
 ## Defect 27. A partial answer was scored as an abstention, and it moved the headline
 
 `isAbstention` was a SUBSTRING match, and its own docstring said why that was safe:

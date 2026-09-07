@@ -73,8 +73,16 @@ describe('cacheable — a poor answer must never be memoised (F-2e)', () => {
         expect(cacheable({typeOnly: true}, 'hc takes two parameters…')).toBe(false)
     })
 
-    test('an unverified excerpt is NOT cached — never memoise a suspected fabrication', () => {
-        expect(cacheable({excerptVerified: false}, 'Per bun@1: …')).toBe(false)
+    // CHANGED, with the measurement. This asserted that an unverified excerpt is
+    // never cached, on the reading that unverified means suspected fabrication. It
+    // does not: 41 of 41 unverified excerpts across seven runs are stitched quotes,
+    // every span verbatim. The gate reads `excerptFabricated` now, so an unverified
+    // stitched quote caches and an excerpt with an absent word still does not.
+    test('a stitched excerpt IS cached; a suspected fabrication is not', () => {
+        expect(cacheable({excerptVerified: false}, 'Per bun@1: …')).toBe(true)
+        expect(cacheable({excerptVerified: false, excerptFabricated: true}, 'Per bun@1: …')).toBe(
+            false
+        )
     })
 
     test('excerptVerified undefined (no excerpt offered) still caches', () => {
@@ -82,4 +90,29 @@ describe('cacheable — a poor answer must never be memoised (F-2e)', () => {
         // excerpt at all was never a fabrication signal and must stay cacheable.
         expect(cacheable({}, 'Per zod@4: z.object(...) builds a schema')).toBe(true)
     })
+})
+
+// A quarter of every run's answers carry `excerptVerified: false`, and the cache
+// refused all of them. Re-checked with the classifier defect 18 added, 41 of 41
+// unverified excerpts across seven runs are STITCHED — every span verbatim, none
+// carrying an absent word. The gate was refusing non-contiguous quoting, not
+// fabrication, and every sibling worker re-ran the lookup for it.
+test('a stitched excerpt is cacheable — the answer is sound', () => {
+    expect(docsCacheable({excerptVerified: false, excerptFabricated: false}, 'a real answer')).toBe(
+        true
+    )
+})
+
+test('an excerpt with a word the source never wrote is not cacheable', () => {
+    expect(docsCacheable({excerptVerified: false, excerptFabricated: true}, 'a real answer')).toBe(
+        false
+    )
+})
+
+test('a verified excerpt is cacheable, as before', () => {
+    expect(docsCacheable({excerptVerified: true}, 'a real answer')).toBe(true)
+})
+
+test('an abstention is still not cacheable, however its excerpt checked', () => {
+    expect(docsCacheable({excerptVerified: true}, 'unclear from this package')).toBe(false)
 })
