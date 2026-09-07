@@ -144,14 +144,40 @@ that the byte budget had become binding.
    `export const` (151 -> 149, the hop evicts the declaration it was chasing a type
    for). Both are pinned by tests that say "on purpose".
 
-4. **Write a TRUTH entry the way the last three were, or not at all: named by a
+4. **The residual is a RANKING problem and adding chunks cannot fix it.** Every
+   symbol still missing on defines has a 66-to-225-byte declaration in its own
+   package; `zod:email`'s five misses each retrieve 17 to 38 chunks and 21.5 to 24 KB
+   without it. Three levers that FETCH one all lost, because
+   `enforceBudget([kept[0], ...hops, ...kept.slice(1)])` evicts a ranked chunk for
+   every chunk added:
+
+   ```
+   enforceBudget `break` -> `continue`         150/157 -> 149/157   p = 1.0000
+   alias hop reads `export const`              151/159 -> 149/159   p = 0.5000
+   definitionChunk for the query's symbols     151/159 -> 147/159   p = 0.2891
+   ```
+
+   **Promotion is the one direction that is not negative.** It reorders rather than
+   adds — a chunk declaring a query symbol sorts ahead of one that only uses it:
+
+   ```
+   159 pairs   151 -> 154   p = 0.5078
+   173 pairs   160 -> 165   p = 0.2266     npm 84/97 -> 90/97
+   ```
+
+   Not shipped at p = 0.2266, against a budget refused at 0.1360 tonight. More corpus
+   halved its p-value once and would again. Do NOT sort the promoted group
+   smallest-first — measured, 6 for 6, exactly nothing. What is untested is a bm25
+   rank ADJUSTED by declaration rather than partitioned on it.
+
+5. **Write a TRUTH entry the way the last four were, or not at all: named by a
    recorded query, declared by the published docs.** Reading the index for candidates
    is how a truth set stops being one. The member split was REJECTED at 125/128 and
    then shipped at p = 0.0005 on the same data, because `TRUTH` had no entry for a
    single package it repairs. `TruthEntry.named` exists for `Bun.file` vs
    `function file`; selection is whole-token since `queryAsks`.
 
-5. **Three live runs now say the same thing about ts, and it is not a docs defect.**
+6. **Three live runs now say the same thing about ts, and it is not a docs defect.**
    The tool named `z.email()` correctly in every run since the dead-major fix, and
    the code shipped `z.string().email()` twice and `z.string()` once. Nothing in
    retrieval or extraction is implicated. Defect 26's obligation check is what sees
