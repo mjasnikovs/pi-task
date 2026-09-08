@@ -393,7 +393,7 @@ describe('acquiring a crate', () => {
             })
         })
 
-        const result = await ECOSYSTEMS.cargo.acquire('tiny-crate', '0.1.0', io)
+        const result = await ECOSYSTEMS.cargo.acquire('tiny-crate', '0.1.0', process.cwd(), io)
         expect(result.success).toBe(true)
         const tar = argv.find(a => a.includes('-xzf'))
         expect(tar).toBeDefined()
@@ -441,7 +441,7 @@ describe('acquiring a crate', () => {
             spawn: fakeSpawnByPrompt(() => ({stdout: '', exitCode: 0}))
         })
 
-        const result = await ECOSYSTEMS.cargo.acquire('tokio_util', null, io)
+        const result = await ECOSYSTEMS.cargo.acquire('tokio_util', null, process.cwd(), io)
         expect(result.success).toBe(true)
         expect(urls).toContain('https://static.crates.io/crates/tokio-util/tokio-util-0.7.13.crate')
         fs.rmSync(modulesDir, {recursive: true, force: true})

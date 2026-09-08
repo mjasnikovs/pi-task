@@ -132,7 +132,7 @@ describe("cabal's own tarball cache", () => {
             })
         })
 
-        const result = await ECOSYSTEMS.hackage.acquire('tiny-hs', '0.1.0', io)
+        const result = await ECOSYSTEMS.hackage.acquire('tiny-hs', '0.1.0', process.cwd(), io)
         expect(result.success).toBe(true)
         const tar = argv.find(a => a.includes('-xzf'))
         expect(tar!.some(a => a.endsWith('tiny-hs-0.1.0.tar.gz'))).toBe(true)
@@ -155,7 +155,7 @@ describe("cabal's own tarball cache", () => {
             spawn: fakeSpawnByPrompt(() => ({stdout: '', exitCode: 0}))
         })
 
-        const result = await ECOSYSTEMS.hackage.acquire('tiny-hs', '0.1.0', io)
+        const result = await ECOSYSTEMS.hackage.acquire('tiny-hs', '0.1.0', process.cwd(), io)
         expect(result.success).toBe(true)
         expect(requested).toBe(hackageTarballUrl('tiny-hs', '0.1.0'))
         fs.rmSync(modulesDir, {recursive: true, force: true})

@@ -44,6 +44,14 @@ const FEATURES: Record<ProjectSpec['id'], string> = {
         + ' (2) expose an axum Router serving GET /config, which returns the config as JSON on success'
         + ' and HTTP 400 with a JSON error body when config.json fails to parse;'
         + ' (3) cover both responses in tests/config.rs, passing under `cargo test`.',
+    go:
+        'Build a config package in Go. It must:'
+        + ' (1) expose LoadConfig() that reads config.json from the module root and decodes it'
+        + ' into a Config struct holding a string Name, an int Port and a string AdminEmail;'
+        + ' (2) expose a gin Engine serving GET /config, which returns the config as JSON on'
+        + ' success and HTTP 400 with a JSON error body when config.json fails to decode;'
+        + ' (3) log both outcomes with a zap logger;'
+        + ' (4) cover both responses in config_test.go, passing under `go test ./...`.',
     hs:
         'Build a config module in Haskell. It must:'
         + ' (1) expose loadConfig that reads config.json from the project root and decodes it with'
@@ -126,6 +134,28 @@ function seedRs(root: string, pins: Record<string, string>): void {
     run('cargo', ['fetch'], root)
 }
 
+export function goManifest(pins: Record<string, string>): string {
+    return [
+        'module docs-live-go',
+        '',
+        'go 1.24',
+        '',
+        'require (',
+        ...Object.entries(pins).map(([mod, version]) => `\t${mod} ${version}`),
+        ')'
+    ].join('\n')
+}
+
+function seedGo(root: string, pins: Record<string, string>): void {
+    write(root, 'go.mod', goManifest(pins))
+    // `go mod tidy` refuses a module with no package, and it is what writes the
+    // indirect closure the docs row reads versions out of.
+    write(root, 'main.go', 'package main\n\nfunc main() {}\n')
+    write(root, 'config.json', CONFIG_JSON)
+    run('go', ['mod', 'tidy'], root)
+    run('go', ['mod', 'download'], root)
+}
+
 function seedHs(root: string, pins: Record<string, string>): void {
     write(
         root,
@@ -163,7 +193,8 @@ function seedHs(root: string, pins: Record<string, string>): void {
 const SEEDERS: Record<ProjectSpec['id'], (root: string, pins: Record<string, string>) => void> = {
     ts: seedTs,
     rs: seedRs,
-    hs: seedHs
+    hs: seedHs,
+    go: seedGo
 }
 
 /**
@@ -177,7 +208,9 @@ const SEEDERS: Record<ProjectSpec['id'], (root: string, pins: Record<string, str
 const BUILD_DIR: Record<string, string> = {
     npm: 'node_modules/',
     cargo: 'target/',
-    hackage: 'dist-newstyle/'
+    hackage: 'dist-newstyle/',
+    // Go builds into $GOCACHE, outside the tree, so there is nothing to ignore.
+    go: ''
 }
 
 export function writeGitignore(root: string, ecosystem: string): void {

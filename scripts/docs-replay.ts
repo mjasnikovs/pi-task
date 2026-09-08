@@ -71,7 +71,8 @@ export interface SkippedRecord {
 const REGISTRY_TO_ECOSYSTEM: Record<string, EcosystemId> = {
     npm: 'npm',
     'crates.io': 'cargo',
-    hackage: 'hackage'
+    hackage: 'hackage',
+    'proxy.golang.org': 'go'
 }
 
 /** Which corpus the recorded lookup read, named well enough to retrieve it again. */

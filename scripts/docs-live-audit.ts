@@ -347,6 +347,23 @@ function resolvedPins(root: string, spec: ProjectSpec): Record<string, string | 
                 out[pkg] = m?.[1] ?? null
             }
         }
+    } else if (spec.ecosystem === 'go') {
+        // go.mod after `go mod tidy` IS the lock: every version is resolved, and
+        // the require lines carry them whether direct or indirect.
+        const mod = path.join(root, 'go.mod')
+        if (fs.existsSync(mod)) {
+            const text = fs.readFileSync(mod, 'utf8')
+            // Split rather than matched: an import path is full of dots and
+            // slashes, and escaping it into a pattern reads worse than this.
+            const versions = new Map(
+                text
+                    .split('\n')
+                    .map(line => line.trim().split(/\s+/))
+                    .filter(parts => parts.length >= 2)
+                    .map(parts => [parts[0], parts[1]] as const)
+            )
+            for (const pkg of Object.keys(out)) out[pkg] = versions.get(pkg) ?? null
+        }
     } else {
         // Parsed, not pattern-matched. plan.json keys the version as a separate
         // `pkg-version` field, so a regex looking for `"<name>-<version>"` finds

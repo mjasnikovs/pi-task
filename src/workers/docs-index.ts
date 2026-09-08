@@ -103,7 +103,7 @@ function computeContentHash(
     // whenever the selection rule does, with nothing to remember to bump.
     hash.update(
         Buffer.from(
-            `${String(profile.isSurfaceFile)}\u0000${String(dropParallelDeclarations)}`
+            `${String(profile.isSurfaceFile)}\u0000${String(profile.selectFiles)}`
                 + `\u0000${String(dropDeadMajors)}`,
             'utf8'
         )
@@ -189,7 +189,7 @@ function walkSurface(root: string, profile: EcosystemProfile): string[] {
  * The sibling test, not a blanket ban on the extensions: a package shipping only
  * `.d.cts` still has to be readable, and all 123 of zod's had a `.d.ts` twin.
  */
-function dropParallelDeclarations(files: string[]): string[] {
+export function dropParallelDeclarations(files: readonly string[]): string[] {
     const esm = new Set(
         files.filter(f => f.endsWith('.d.ts')).map(f => f.slice(0, -'.d.ts'.length))
     )
@@ -229,7 +229,7 @@ function collectFiles(pkg: ResolvedPackage, profile: EcosystemProfile): Collecte
     const walked = walkSurface(pkg.root, profile)
     const surface = dropDeadMajors(walked, pkg.root, pkg.version)
     return {
-        surface: profile.id === 'npm' ? dropParallelDeclarations(surface) : surface,
+        surface: profile.selectFiles ? profile.selectFiles(surface) : surface,
         readme: pkg.readme
     }
 }

@@ -7,11 +7,11 @@
  * silently became a second measurement.
  */
 
-export type EcosystemId = 'npm' | 'cargo' | 'hackage'
+export type EcosystemId = 'npm' | 'cargo' | 'hackage' | 'go'
 
 export interface ProjectSpec {
     /** Directory name under the run root, and the label in every report. */
-    id: 'ts' | 'rs' | 'hs'
+    id: 'ts' | 'rs' | 'hs' | 'go'
     ecosystem: EcosystemId
     /** Packages the task must use, pinned to the major the model predates. */
     pins: Record<string, string>
@@ -86,6 +86,15 @@ export const PROJECTS: readonly ProjectSpec[] = [
         ecosystem: 'hackage',
         pins: {aeson: '2.2.5.1', scotty: '0.30'},
         testCommand: 'cabal build all && cabal test'
+    },
+    {
+        id: 'go',
+        ecosystem: 'go',
+        // Pinned as import paths, because that is what the tool is asked for and
+        // what go.mod requires. `net/http` is the standard library and is pinned
+        // by the toolchain rather than by a require line.
+        pins: {'github.com/gin-gonic/gin': 'v1.12.0', 'go.uber.org/zap': 'v1.28.0'},
+        testCommand: 'go build ./... && go test ./...'
     }
 ]
 
@@ -112,6 +121,13 @@ export const TRUTH: readonly TruthEntry[] = [
     {pkg: 'aeson', symbol: 'FromJSON', topic: 'the decoding class'},
     {pkg: 'scotty', symbol: 'scotty', topic: 'starting the server'},
     {pkg: 'scotty', symbol: 'ActionM', topic: 'the handler monad'},
+
+    // go
+    {pkg: 'github.com/gin-gonic/gin', symbol: 'Default', topic: 'creating an engine'},
+    {pkg: 'github.com/gin-gonic/gin', symbol: 'Context', topic: 'the handler argument'},
+    {pkg: 'github.com/gin-gonic/gin', symbol: 'ShouldBindJSON', topic: 'decoding a request body'},
+    {pkg: 'go.uber.org/zap', symbol: 'NewProduction', topic: 'building a logger'},
+    {pkg: 'go.uber.org/zap', symbol: 'SugaredLogger', topic: 'the printf-style logger'},
 
     // The Bun family and node builtins. NOT pinned in any project — both existing
     // consumers gate on `t.pkg in spec.pins`, so these reach `docs-defines` and

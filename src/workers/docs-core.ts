@@ -508,7 +508,7 @@ export async function acquirePackage(input: AcquireInput): Promise<AcquireOutcom
             declaredRange ?
                 {source: 'declared-range', range: declaredRange, asked}
             :   {source: 'npm-latest', asked}
-        const install = await profile.acquire(asked, declaredRange, io)
+        const install = await profile.acquire(asked, declaredRange, cwd, io)
         if (!install.success) {
             return {ok: false, stage: 'install', stderr: install.stderr, pin, asked}
         }

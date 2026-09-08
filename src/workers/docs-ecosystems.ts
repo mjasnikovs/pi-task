@@ -28,6 +28,7 @@ import {
 } from './docs-core.js'
 import {resolvePackage, isDtsFile, isValidModuleName, type ResolvedPackage} from './docs-resolve.js'
 import {DECL_SPLIT_RE, MEMBER_SPLIT_RE} from './docs-chunk.js'
+import {dropParallelDeclarations} from './docs-index.js'
 import {npmVersionLookup, type NpmVersionInfo} from './npm-version.js'
 import {
     resolveCrate,
@@ -69,10 +70,31 @@ import {
     HACKAGE_SKIP_DIRS,
     HACKAGE_MEMBER_SPLIT_RE
 } from './eco-hackage.js'
+import {
+    detectGo,
+    isValidImportPath,
+    resolveGoPackage,
+    acquireGoModule,
+    goDeclaredVersion,
+    goLatest,
+    goProjectName,
+    goDeclaredDeps,
+    goManifestDeps,
+    isGoFile,
+    selectBuildVariants,
+    defaultGoModCache,
+    goContentFingerprintParts
+} from './eco-go.js'
+import {
+    goSurface,
+    goContentFingerprint,
+    GO_DECL_SPLIT_RE,
+    GO_MEMBER_SPLIT_RE
+} from './go-surface.js'
 import {runChild, type SpawnFn} from '../shared/child-process.js'
 import type {ExportGap} from './export-gap.js'
 
-export type EcosystemId = 'npm' | 'cargo' | 'hackage'
+export type EcosystemId = 'npm' | 'cargo' | 'hackage' | 'go'
 
 /**
  * Is any of `names` present at `cwd` or above it?
@@ -126,6 +148,10 @@ export interface EcosystemIo {
     cargoHome: string
     /** Every directory cabal may have filed a downloaded tarball under. */
     cabalPackageDirs: readonly string[]
+    /** Root of the Go module cache — `GOMODCACHE`, or its default. */
+    goModCache: string
+    /** A local Go installation, whose `src/` is the standard library. */
+    goroot: string | undefined
     signal?: AbortSignal | undefined
 }
 
@@ -141,6 +167,8 @@ export function defaultEcosystemIo(overrides: Partial<EcosystemIo> = {}): Ecosys
         modulesDir: getDocsModulesDir(),
         cargoHome: process.env.CARGO_HOME?.trim() || path.join(os.homedir(), '.cargo'),
         cabalPackageDirs: defaultCabalPackageDirs(),
+        goModCache: defaultGoModCache(),
+        goroot: process.env.GOROOT?.trim() || undefined,
         ...overrides
     }
 }
@@ -186,8 +214,19 @@ export interface EcosystemProfile {
     resolve: (name: string, cwd: string, io: EcosystemIo) => ResolvedPackage
     /** The version range the project pins this package to, if it pins one. */
     declaredRange: (name: string, cwd: string) => string | null
-    /** Fetch a package that is not on disk into `io.modulesDir`. */
-    acquire: (name: string, range: string | null, io: EcosystemIo) => Promise<AcquireResult>
+    /**
+     * Fetch a package that is not on disk into `io.modulesDir`.
+     *
+     * `cwd` is the project, not the destination: Go reads its `go` directive to
+     * pick which toolchain's standard library an answer should describe, and to
+     * tell `net/http` from a dotless module's own `myapp/internal/db`.
+     */
+    acquire: (
+        name: string,
+        range: string | null,
+        cwd: string,
+        io: EcosystemIo
+    ) => Promise<AcquireResult>
     /**
      * A second resolution hop, for ecosystems where the package that ships the
      * documented surface is not the one that was asked for.
@@ -248,6 +287,15 @@ export interface EcosystemProfile {
 
     /** Directories the surface walk never descends into: tests, build output. */
     skipDirs: readonly string[]
+    /**
+     * Narrow the walked files to one copy of each declaration.
+     *
+     * Two ecosystems ship the same API twice in one package: npm as `.d.ts` and
+     * `.d.cts` twins, Go as build-tag variants of one file. Both cost the
+     * retrieval budget for text the reader already has, and neither is
+     * separable downstream — same identifiers, same package, same version.
+     */
+    selectFiles?: (files: readonly string[]) => string[]
     /** What this ecosystem's packages ship, for a "there is nothing to read" answer. */
     surfaceLabel: string
     /**
@@ -314,7 +362,7 @@ export function npmProfile(hooks: NpmProfileHooks = {}): EcosystemProfile {
 
         resolve: (name, cwd) => resolve(name, cwd),
         declaredRange: findDeclaredRange,
-        acquire: (name, range, io) =>
+        acquire: (name, range, _cwd, io) =>
             runAutoInstall(io.spawn, name, {
                 signal: io.signal,
                 versionRange: range ?? undefined
@@ -335,6 +383,7 @@ export function npmProfile(hooks: NpmProfileHooks = {}): EcosystemProfile {
         commentPrefix: '//',
         // A nested node_modules is another package's surface, never this one's.
         skipDirs: ['node_modules'],
+        selectFiles: dropParallelDeclarations,
         surfaceLabel: '.d.ts files or README',
         packageSubject: 'an npm package',
         projectGlobs: ['*.ts', '*.tsx'],
@@ -478,7 +527,7 @@ const cargoProfile: EcosystemProfile = {
         resolveCrate(name, cwd, {cargoHome: io.cargoHome, modulesDir: io.modulesDir}),
     // Cargo has already resolved every version; the lock IS the pin.
     declaredRange: (name, cwd) => lockedVersion(name, cwd),
-    acquire: async (name, range, io) => {
+    acquire: async (name, range, _cwd, io) => {
         // Asked even when the range is known: the download host wants the name as
         // PUBLISHED, and only the API knows whether that is `tokio-util` or
         // `tokio_util`. A null answer falls back to the caller's spelling.
@@ -512,7 +561,7 @@ const cargoProfile: EcosystemProfile = {
                 // Not unpacked here. `acquire` reads crates.io for the published
                 // spelling, so `tokio-util` and `tokio_util` both land.
             }
-            const got = await cargoProfile.acquire(c.name, c.version, io)
+            const got = await cargoProfile.acquire(c.name, c.version, cwd, io)
             if (!got.success) continue
             try {
                 out.push(
@@ -594,7 +643,7 @@ const hackageProfile: EcosystemProfile = {
 
     resolve: (name, cwd, io) => resolveHackage(name, cwd, {modulesDir: io.modulesDir}),
     declaredRange: (name, cwd) => hackageVersion(name, cwd),
-    acquire: async (name, range, io) => {
+    acquire: async (name, range, _cwd, io) => {
         const dir = hackageExtractDir(io.modulesDir)
         const version =
             range
@@ -649,7 +698,7 @@ const hackageProfile: EcosystemProfile = {
                 // Not unpacked yet. `acquire` prefers the tarball cabal already
                 // downloaded as a dependency, so this is local work, not a fetch.
             }
-            const got = await hackageProfile.acquire(c.name, c.version, io)
+            const got = await hackageProfile.acquire(c.name, c.version, cwd, io)
             if (!got.success) continue
             try {
                 out.push(resolveHackage(c.name, cwd, {modulesDir: io.modulesDir}))
@@ -697,10 +746,72 @@ function hasCabalManifest(cwd: string): boolean {
     }
 }
 
+/**
+ * A Go package's surface is cut out of `.go` source, and the row keeps `internal`
+ * out of it: Go's compiler enforces that no package outside the module may
+ * import one, so an `internal` tree is not API however exported its names are.
+ */
+const goProfile: EcosystemProfile = {
+    id: 'go',
+    why:
+        'A Go IMPORT PATH is not a module — gin/binding is served by gin, while '
+        + 'aws-sdk-go-v2/service/s3 is its own module — so the boundary is found by '
+        + 'asking the proxy for the longest prefix that resolves, longest first. '
+        + 'Versions come from go.mod, which since Go 1.17 IS the lockfile: its '
+        + 'indirect block is the resolved closure, so nothing walks a graph and '
+        + 'go.sum is never read. The standard library is not on the proxy at all, '
+        + 'and is read from a local GOROOT or sliced out of the toolchain archive.',
+    registryLabel: 'proxy.golang.org',
+    manifestLabel: 'go.mod',
+
+    detect: detectGo,
+    isValidName: isValidImportPath,
+    // Identity, because the module a path belongs to cannot be found without the
+    // network. Everything that needs the real module — resolve, acquire, latest —
+    // is handed `io` and works it out there.
+    parentPackage: name => name,
+
+    resolve: (name, cwd, io) =>
+        resolveGoPackage(name, cwd, {
+            goModCache: io.goModCache,
+            modulesDir: io.modulesDir,
+            goroot: io.goroot
+        }),
+    declaredRange: goDeclaredVersion,
+    acquire: (name, range, cwd, io) =>
+        acquireGoModule(
+            name,
+            range,
+            cwd,
+            {goModCache: io.goModCache, modulesDir: io.modulesDir, goroot: io.goroot},
+            io.fetch,
+            io.signal
+        ),
+    latest: (name, io) => goLatest(name, io.fetch, io.signal),
+
+    isSurfaceFile: isGoFile,
+    surface: content => goSurface(content),
+    contentFingerprint: () =>
+        [goContentFingerprint(), ...goContentFingerprintParts()].join('\u0000'),
+    declSplitRe: GO_DECL_SPLIT_RE,
+    memberSplitRe: GO_MEMBER_SPLIT_RE,
+    typeKeywords: ['type', 'struct', 'interface', 'func'],
+    commentPrefix: '//',
+    skipDirs: ['testdata', 'examples', 'vendor', 'internal', '.git'],
+    selectFiles: selectBuildVariants,
+    surfaceLabel: '.go source or README',
+    packageSubject: 'a Go package',
+    projectGlobs: ['*.go'],
+    projectName: goProjectName,
+    declaredDeps: goDeclaredDeps,
+    manifestDeps: goManifestDeps
+}
+
 export const ECOSYSTEMS = {
     npm: npmProfile(),
     cargo: cargoProfile,
-    hackage: hackageProfile
+    hackage: hackageProfile,
+    go: goProfile
 } as const satisfies Record<EcosystemId, EcosystemProfile>
 
 /** Which ecosystems `cwd` looks like a project of, in roster order. */

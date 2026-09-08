@@ -121,7 +121,7 @@ describe('the npm row', () => {
             argv.push([...args])
             return {stdout: '', exitCode: 0}
         })
-        const result = await npm.acquire('left-pad', '^1.3.0', io(spawn))
+        const result = await npm.acquire('left-pad', '^1.3.0', '/tmp', io(spawn))
         expect(result.success).toBe(true)
         const install = argv.find(a => a.includes('install'))
         expect(install).toContain('left-pad@^1.3.0')
@@ -134,7 +134,7 @@ describe('the npm row', () => {
             argv.push([...args])
             return {stdout: '', exitCode: 0}
         })
-        await npm.acquire('left-pad', null, io(spawn))
+        await npm.acquire('left-pad', null, '/tmp', io(spawn))
         const install = argv.find(a => a.includes('install'))
         expect(install).toContain('left-pad')
         expect(install?.some(a => a.includes('@^'))).toBe(false)

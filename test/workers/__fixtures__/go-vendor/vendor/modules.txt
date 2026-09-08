@@ -1,0 +1,7 @@
+# github.com/foo/tiny-go v0.1.0
+## explicit; go 1.24
+github.com/foo/tiny-go
+github.com/foo/tiny-go/inner
+# k8s.io/api v0.0.0 => ./staging/k8s.io/api
+## explicit; go 1.24
+k8s.io/api

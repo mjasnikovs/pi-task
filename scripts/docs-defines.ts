@@ -34,7 +34,10 @@ import {TRUTH, PROJECTS, type EcosystemId} from './docs-live-truth.js'
 const HEAD: Record<EcosystemId, RegExp> = {
     npm: /^[ \t]*(?:export\s+)?(?:declare\s+)?(?:default\s+)?(?:abstract\s+)?(?:async\s+)?(?:function|class|interface|type|namespace|const|let|var|enum)\s+([A-Za-z_$][\w$]*)/,
     cargo: /^[ \t]*(?:#\[[^\n]*\]\s*)*(?:pub(?:\s*\([^)]*\))?\s+)?(?:async\s+|unsafe\s+|const\s+|extern\s+)*(?:fn|struct|enum|union|trait|type|impl|mod|const|static)\s+([A-Za-z_][\w]*)/,
-    hackage: /^[ \t]*(?:([a-z_][\w']*)\s*::|(?:data|newtype|type|class)\s+([A-Z][\w']*))/
+    hackage: /^[ \t]*(?:([a-z_][\w']*)\s*::|(?:data|newtype|type|class)\s+([A-Z][\w']*))/,
+    // A method's name follows its receiver, so the optional group has to be
+    // consumed before the name is read: `func (c *Context) JSON` defines JSON.
+    go: /^[ \t]*(?:func\s*(?:\([^)]*\)\s*)?|(?:type|const|var)\s+)([A-Za-z_]\w*)/
 }
 
 /**
