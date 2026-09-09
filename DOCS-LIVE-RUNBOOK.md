@@ -1,6 +1,6 @@
 # Docs live run — runbook
 
-The full `/task-auto` loop across TypeScript, Rust and Haskell.
+The full `/task-auto` loop across TypeScript, Rust, Haskell and Go.
 Findings and open items live in `DOC_REGRESSINONS.md`; read that first — most
 open items are settled by `scripts/docs-replay.ts` and never need this.
 
@@ -13,7 +13,7 @@ Five scripts in `scripts/`, nothing runs on import:
 
 ```
 docs-live-truth.ts   pins, ground-truth symbols, stale-major markers (data only)
-docs-live-seed.ts    creates the three greenfield projects with deps installed
+docs-live-seed.ts    creates the four greenfield projects with deps installed
 docs-live-run.ts     drives one project through a real /task-auto in tmux
 docs-live-build.ts   records each project's build verdict where the toolchains are
 docs-live-audit.ts   scores the recorded answers and writes AUDIT.md
@@ -26,7 +26,7 @@ network, reaches the local model. Never on the host — runs write
 `~/.cache/pi-worker/docs.sqlite` and the container isolates your real cache free.
 
 ```bash
-docker exec mx5-n bash -lc 'for c in pi bun node cargo ghc cabal tmux; do
+docker exec mx5-n bash -lc 'for c in pi bun node cargo ghc cabal tmux go; do
   printf "%-6s %s\n" "$c" "$(command -v $c || echo MISSING)"; done'
 ```
 
@@ -34,6 +34,17 @@ Provisioning notes that cost time the first go: pi-task **must** match the tree
 under test (`npm install @mjasnikovs/pi-task@<version>` in `~/.pi/agent/npm`);
 ghcup must come from `raw.githubusercontent.com/haskell/ghcup-hs/...`, because
 `get-haskell.ghcup.haskell.org` does not resolve here; GHC is 15-25 min and ~3 GB.
+
+Go is not in the image and there is no root in the container, so it goes under
+`$HOME` and onto `PATH` the way cargo and bun already do. The seed writes
+`go 1.24`, so the toolchain has to be at least that.
+
+```bash
+docker exec mx5-n bash -lc 'curl -sSLo /tmp/go.tgz https://go.dev/dl/go1.27.1.linux-amd64.tar.gz
+  tar -C $HOME/.local -xzf /tmp/go.tgz && $HOME/.local/go/bin/go version'
+```
+
+Every command below that touches Go needs `$HOME/.local/go/bin` on `PATH`.
 
 ## Pins, then seed
 
@@ -44,7 +55,14 @@ Check the registries, not the table.
 curl -s https://registry.npmjs.org/zod | jq -r .\"dist-tags\".latest
 curl -s -H 'User-Agent: pi-task-live' https://crates.io/api/v1/crates/axum | jq -r .crate.max_stable_version
 curl -s -H 'Accept: application/json' https://hackage.haskell.org/package/scotty/preferred | jq -r '."normal-version"[0]'
+curl -s https://proxy.golang.org/github.com/gin-gonic/gin/@latest | jq -r .Version
+curl -s https://proxy.golang.org/go.uber.org/zap/@latest | jq -r .Version
 ```
+
+Go pins are **import paths**, not package names, because that is what `go.mod`
+requires and what the tool is asked for. `net/http` is the standard library: it is
+pinned by the toolchain, appears in no `require` line, and is sliced out of the
+toolchain archive rather than fetched from the proxy.
 
 Watch for solver conflicts. `scotty 0.30` caps `aeson < 2.3`, so the aeson pin is
 the newest scotty allows, not the newest that exists.
@@ -54,7 +72,7 @@ docker exec mx5-n bash -lc 'mkdir -p /home/agent/docs-live/scripts'
 for f in truth seed run build audit; do
   docker cp scripts/docs-live-$f.ts mx5-n:/home/agent/docs-live/scripts/
 done
-docker exec mx5-n bash -lc 'export PATH="$HOME/.bun/bin:$HOME/.cargo/bin:$PATH"; . ~/.ghcup/env
+docker exec mx5-n bash -lc 'export PATH="$HOME/.bun/bin:$HOME/.cargo/bin:$HOME/.local/go/bin:$PATH"; . ~/.ghcup/env
   cd /home/agent/docs-live && bun scripts/docs-live-seed.ts /home/agent/docs-live/run'
 ```
 
@@ -67,7 +85,10 @@ const {docsRaw} = await import(base + "/docs-core.js")
 for (const [cwd, pkg] of [
   ["/home/agent/docs-live/run/ts", "zod"], ["/home/agent/docs-live/run/ts", "hono"],
   ["/home/agent/docs-live/run/rs", "axum"], ["/home/agent/docs-live/run/rs", "serde_json"],
-  ["/home/agent/docs-live/run/hs", "aeson"], ["/home/agent/docs-live/run/hs", "scotty"]]) {
+  ["/home/agent/docs-live/run/hs", "aeson"], ["/home/agent/docs-live/run/hs", "scotty"],
+  ["/home/agent/docs-live/run/go", "github.com/gin-gonic/gin"],
+  ["/home/agent/docs-live/run/go", "go.uber.org/zap"],
+  ["/home/agent/docs-live/run/go", "net/http"]]) {
   const r = await docsRaw({pkg, query: "core API", cwd, npmVersionLookup: () => Promise.resolve(null)})
   console.log(r.kind === "ok"
     ? `ok    ${pkg} ${r.pkg.ecosystem} ${r.pkg.name}@${r.pkg.version} chunks=${r.chunks.length}`
@@ -79,6 +100,10 @@ XDG_CACHE_HOME=/home/agent/docs-live/cache node /tmp/probe.mjs'
 
 Every line `ok`, every version equal to its pin. A `FAIL` here is a fixture
 problem, not a finding.
+
+Go's three lines each exercise a different resolver path, so read them closely:
+`gin` is a plain module, `zap` is a vanity host that redirects, and `net/http`
+never touches the proxy at all.
 
 Then verify the scorer **in both directions**. Hand-write one tree using each stale
 marker and confirm HARD FAIL, then a correct tree and confirm PASS. A verify that
@@ -93,7 +118,7 @@ cannot fail is not a verify; a scorer that fails correct code is just as useless
 cat > /tmp/run.sh <<'SH'
 #!/bin/bash
 id="$1"; tmo="$2"
-export PATH="$HOME/.bun/bin:$PATH"
+export PATH="$HOME/.bun/bin:$HOME/.local/go/bin:$PATH"
 export PI_TASK_TYPEONLY_LOG=/home/agent/docs-live/$id.jsonl
 export PI_TASK_DEBUG_LOG=full
 cd /home/agent/docs-live
@@ -105,7 +130,7 @@ docker exec mx5-n bash -lc 'chmod +x /home/agent/docs-live/run.sh'
 
 # one at a time — one local model serves every child, so parallel runs contend
 docker exec -d mx5-n bash -lc 'setsid bash -c "
-  for id in ts rs hs; do
+  for id in ts rs hs go; do
     /home/agent/docs-live/run.sh \$id 180 > /tmp/run-\$id.log 2>&1
   done; echo SEQUENCE COMPLETE" > /tmp/chain.log 2>&1 < /dev/null'
 ```
@@ -131,11 +156,11 @@ The build runs where the toolchains are; the audit runs here. The audit never
 re-runs a lookup.
 
 ```bash
-docker exec mx5-n bash -lc 'export PATH="$HOME/.bun/bin:$HOME/.cargo/bin:$PATH"; . ~/.ghcup/env
+docker exec mx5-n bash -lc 'export PATH="$HOME/.bun/bin:$HOME/.cargo/bin:$HOME/.local/go/bin:$PATH"; . ~/.ghcup/env
   cd /home/agent/docs-live && bun scripts/docs-live-build.ts /home/agent/docs-live/run'
 
 RR=/tmp/liverun && mkdir -p $RR
-for id in ts rs hs; do
+for id in ts rs hs go; do
   docker cp mx5-n:/home/agent/docs-live/run/$id $RR/$id
   docker cp mx5-n:/home/agent/docs-live/$id.jsonl $RR/$id.jsonl
   docker cp mx5-n:/home/agent/docs-live/run/$id.build.json $RR/$id.build.json
@@ -216,6 +241,12 @@ The point of pinning these majors is that a wrong answer is greppable.
 | zod 4 | `.errors` on a ZodError | v4 renamed it `.issues` |
 | zod 4 | `z.string().email()` | v4 uses `z.email()` |
 | aeson 2 | `Data.HashMap.Strict` for object access | v1 shape; v2 uses `KeyMap` |
+
+**Go has no stale marker, and that is a gap rather than a decision.** Neither
+pinned module renamed anything across a major the model predates, so there is
+nothing greppable to write, and a guessed pattern is worse than none. Go's HARD
+FAIL surface is the build, the pins and one obligation — `zap` actually used —
+until a real rename turns up in the pinned sources instead of being invented here.
 
 A downgraded dependency counts as a failure too — reaching for the major the model
 already knows is the exact behaviour this test exists to catch.

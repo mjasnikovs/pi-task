@@ -309,8 +309,20 @@ export function webFollowsDocs(
     return out
 }
 
-/** Source files the run produced, for the stale-API sweep. */
-function sourceFiles(root: string): string[] {
+/**
+ * The comparable part of a version, with the leading non-digits off.
+ *
+ * Applied to BOTH sides. npm and hackage carry the range operator on the manifest
+ * side (`^4.5.4`) while Go carries a `v` on the PIN side, so stripping only what
+ * the manifest said read every correct Go version as moved — `v1.12.0 -> v1.12.0`,
+ * a HARD FAIL that no tree could clear.
+ */
+export function pinVersion(s: string): string {
+    return s.replace(/^[^\d]*/, '')
+}
+
+/** Source files the run produced, for the stale-API sweep and the obligations. */
+export function sourceFiles(root: string): string[] {
     const out: string[] = []
     const skip = new Set(['node_modules', '.git', 'target', 'dist', 'dist-newstyle', '.pi-tasks'])
     const walk = (dir: string): void => {
@@ -318,7 +330,7 @@ function sourceFiles(root: string): string[] {
             if (skip.has(e.name)) continue
             const full = path.join(dir, e.name)
             if (e.isDirectory()) walk(full)
-            else if (/\.(ts|tsx|js|mjs|rs|hs)$/.test(e.name)) out.push(full)
+            else if (/\.(ts|tsx|js|mjs|rs|hs|go)$/.test(e.name)) out.push(full)
         }
     }
     walk(root)
@@ -480,7 +492,7 @@ function auditProject(runRoot: string, spec: ProjectSpec, build: boolean): Proje
     const got = resolvedPins(root, spec)
     for (const [pkg, want] of Object.entries(spec.pins)) {
         const g = got[pkg]
-        rep.pins[pkg] = {want, got: g, ok: g !== null && g.replace(/^[^\d]*/, '') === want}
+        rep.pins[pkg] = {want, got: g, ok: g !== null && pinVersion(g) === pinVersion(want)}
     }
 
     // Stale-major sweep.

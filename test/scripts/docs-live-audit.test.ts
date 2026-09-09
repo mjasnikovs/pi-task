@@ -5,7 +5,9 @@ import {mkdirSync, writeFileSync} from 'node:fs'
 import {join} from 'node:path'
 import {
     inventedSymbols,
+    pinVersion,
     scoreRecall,
+    sourceFiles,
     taskProgress,
     webFollowsDocs
 } from '../../scripts/docs-live-audit.js'
@@ -212,6 +214,47 @@ test('a bare string does not meet it', () => {
 
 test('the field NAME alone does not meet it', () => {
     expect(tsEmail.pattern.test('const adminEmail = raw.adminEmail')).toBe(false)
+})
+
+// Go's obligation is the LOGGING clause, not the wire key. encoding/json matches a
+// field name case-insensitively, so `AdminEmail` decodes `adminEmail` with no tag at
+// all and a grep for the key would fail working code.
+const goZap = OBLIGATIONS.find(o => o.project === 'go')!
+
+test('a zap call meets the go obligation', () => {
+    expect(goZap.pattern.test('logger.Info("loaded"); zap.L().Error(err)')).toBe(true)
+})
+
+test('importing zap without calling it does not meet it', () => {
+    expect(goZap.pattern.test('import (\n\t_ "go.uber.org/zap"\n)')).toBe(false)
+})
+
+// Both sides get stripped. Go carries the `v` on the PIN, so stripping only the
+// manifest's side read `v1.12.0 -> v1.12.0` as a moved pin, and no Go tree could
+// have cleared the check.
+test('a go pin equals its own resolved version', () => {
+    expect(pinVersion('v1.12.0')).toBe(pinVersion('v1.12.0'))
+})
+
+test('a range operator still compares equal to the bare version', () => {
+    expect(pinVersion('^4.5.4')).toBe(pinVersion('4.5.4'))
+})
+
+test('a moved go pin still differs', () => {
+    expect(pinVersion('v1.11.0')).not.toBe(pinVersion('v1.12.0'))
+})
+
+// The stale sweep and the obligations both read this list, and it did not match
+// `.go` — so every Go clause read unmet and no Go source was ever swept.
+test('a go source file is collected', () => {
+    const root = tmpDir('audit-go-sources')
+    writeFileSync(join(root, 'config.go'), 'package config\n')
+    writeFileSync(join(root, 'config.ts'), 'export {}\n')
+    expect(
+        sourceFiles(root)
+            .map(f => f.split('/').pop())
+            .sort()
+    ).toEqual(['config.go', 'config.ts'])
 })
 
 // Re-run 7's hs planned three tasks, had ONE spec file written, and the runner's

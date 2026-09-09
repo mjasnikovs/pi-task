@@ -225,5 +225,14 @@ export const OBLIGATIONS: readonly Obligation[] = [
         project: 'hs',
         clause: 'maps the adminEmail wire key',
         pattern: /adminEmail/
+    },
+    // go: NOT the adminEmail key. encoding/json matches a field name
+    // case-insensitively, so `AdminEmail` decodes the wire key with no tag at all
+    // and a grep for it would fail working code. The logging clause is the one this
+    // feature states outright and the one a run can silently drop.
+    {
+        project: 'go',
+        clause: 'logs both outcomes with zap',
+        pattern: /\bzap\s*\./
     }
 ]

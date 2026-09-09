@@ -149,8 +149,19 @@ export function goManifest(pins: Record<string, string>): string {
 function seedGo(root: string, pins: Record<string, string>): void {
     write(root, 'go.mod', goManifest(pins))
     // `go mod tidy` refuses a module with no package, and it is what writes the
-    // indirect closure the docs row reads versions out of.
-    write(root, 'main.go', 'package main\n\nfunc main() {}\n')
+    // indirect closure the docs row reads versions out of. It also PRUNES a require
+    // nothing imports, so an empty placeholder leaves go.mod with no pins at all —
+    // and `goManifestDeps` skips indirect requires, so `go get` cannot put them
+    // back as declared. The blank imports are what makes both pins direct.
+    write(
+        root,
+        'main.go',
+        'package main\n\nimport (\n'
+            + Object.keys(pins)
+                .map(mod => `\t_ "${mod}"\n`)
+                .join('')
+            + ')\n\nfunc main() {}\n'
+    )
     write(root, 'config.json', CONFIG_JSON)
     run('go', ['mod', 'tidy'], root)
     run('go', ['mod', 'download'], root)
@@ -251,7 +262,7 @@ function seed(runRoot: string, only: ReadonlySet<string>): void {
 if (import.meta.main) {
     const [runRoot, ...ids] = process.argv.slice(2)
     if (!runRoot) {
-        console.error('usage: bun scripts/docs-live-seed.ts <run-root> [ts] [rs] [hs]')
+        console.error('usage: bun scripts/docs-live-seed.ts <run-root> [ts] [rs] [hs] [go]')
         process.exit(1)
     }
     seed(runRoot, new Set(ids))
