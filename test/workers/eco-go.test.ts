@@ -704,8 +704,8 @@ const NAME = 'github.com/foo/bar'
 
 test('a subpackage the root never imports is dropped', () => {
     const {root, paths} = goTree({
-        'bar.go': `package bar\n\nimport "${NAME}/render"\n`,
-        'render/render.go': 'package render\n',
+        'bar.go': `package bar\n\nimport "${NAME}/render"\n\nfunc New() *render.R { return nil }\n`,
+        'render/render.go': 'package render\n\ntype R struct{}\n',
         'ginS/gins.go': 'package ginS\n'
     })
     // path.relative emits backslashes on Windows; the expected literals use slashes.
@@ -734,9 +734,9 @@ test('a mismatching major goes even though the root imports it', () => {
     // at a different major — same `Marshal`, same `Unmarshal` — and half the
     // retrieval for the commonest decode question came back from it.
     const {root, paths} = goTree({
-        'json.go': `package json\n\nimport "${NAME}/v2"\nimport "${NAME}/jsontext"\n`,
-        'v2/json.go': 'package json\n',
-        'jsontext/text.go': 'package jsontext\n'
+        'json.go': `package json\n\nimport "${NAME}/v2"\nimport "${NAME}/jsontext"\n\nfunc Marshal(v any) ([]byte, error) { return v2.Marshal(v) }\n`,
+        'v2/json.go': 'package json\n\nfunc Marshal(v any) ([]byte, error) { return nil, nil }\n',
+        'jsontext/text.go': 'package jsontext\n\ntype Value []byte\n'
     })
     const kept = selectOwnPackage(paths, root, NAME, 'go1.25.14').map(f =>
         path.relative(root, f).replace(/\\/g, '/')
@@ -764,12 +764,50 @@ test('a module whose root is not a package keeps everything', () => {
 })
 
 test('a string that is not an import path does not reach a subpackage', () => {
+    // The literal is a bare import path, so only scoping the scan to the import
+    // declaration can tell it apart from an import.
     const {root, paths} = goTree({
-        'bar.go': `package bar\n\nconst doc = "${NAME}/render is a package"\n`,
-        'render/render.go': 'package render\n'
+        'bar.go': `package bar\n\nconst doc = "${NAME}/render"\n`,
+        'render/render.go': 'package render\n\ntype R struct{}\n'
     })
     const kept = selectOwnPackage(paths, root, NAME, 'v1.2.0').map(f =>
         path.relative(root, f).replace(/\\/g, '/')
     )
     expect(kept).toEqual(['bar.go'])
+})
+
+test('a doc-only root does not wipe the module', () => {
+    // cloud.google.com/go's root is a package clause and nothing else; the whole
+    // API is in subdirectories, and the closure alone keeps only `doc.go`.
+    const {root, paths} = goTree({
+        'doc.go': '// Package cloud is the root doc.\npackage cloud\n',
+        'storage/storage.go': 'package storage\n\nfunc NewClient() {}\n',
+        'bigquery/bq.go': 'package bigquery\n\ntype Client struct{}\n'
+    })
+    expect(selectOwnPackage(paths, root, NAME, 'v0.1.0').length).toBe(3)
+})
+
+test('a backtick import reaches its subpackage', () => {
+    // A Go ImportPath is a string_lit, so the raw-string form is legal.
+    const {root, paths} = goTree({
+        'bar.go': `package bar\n\nimport \`${NAME}/render\`\n\nfunc New() *render.R { return nil }\n`,
+        'render/render.go': 'package render\n\ntype R struct{}\n'
+    })
+    const kept = selectOwnPackage(paths, root, NAME, 'v1.2.0').map(f =>
+        path.relative(root, f).replace(/\\/g, '/')
+    )
+    expect(kept.sort()).toEqual(['bar.go', 'render/render.go'])
+})
+
+test('a grouped import block reaches every subpackage it names', () => {
+    const {root, paths} = goTree({
+        'bar.go': `package bar\n\nimport (\n\t"fmt"\n\t"${NAME}/render"\n\tb "${NAME}/binding"\n)\n\nvar _ = fmt.Sprint\n`,
+        'render/render.go': 'package render\n\ntype R struct{}\n',
+        'binding/binding.go': 'package binding\n\ntype B struct{}\n',
+        'ginS/gins.go': 'package ginS\n\ntype S struct{}\n'
+    })
+    const kept = selectOwnPackage(paths, root, NAME, 'v1.2.0').map(f =>
+        path.relative(root, f).replace(/\\/g, '/')
+    )
+    expect(kept.sort()).toEqual(['bar.go', 'binding/binding.go', 'render/render.go'])
 })

@@ -718,11 +718,20 @@ function holdsByDefault(src: string): boolean {
     return expr.split(/\s*&&\s*/).every(term => term.startsWith('!'))
 }
 
-/** The import paths a Go file's import block names. */
+/**
+ * The import paths a Go file's import block names.
+ *
+ * Scoped to the import declaration, not the file: a sibling's import path also
+ * occurs as a plain string constant, in an error message and in a `go:generate`
+ * line, and reading those keeps the very subpackage `selectOwnPackage` exists to
+ * drop. An `ImportPath` is a `string_lit`, so the backtick form is legal Go and
+ * dropping it silently drops everything reachable only through it.
+ */
 function importsOf(src: string): string[] {
     const out: string[] = []
-    for (const m of src.matchAll(/"([^"\n]+)"/g)) {
-        if (/^[a-zA-Z0-9_.-]+(?:\/[a-zA-Z0-9_.~-]+)*$/.test(m[1])) out.push(m[1])
+    for (const decl of src.matchAll(/^import\s*(?:\(([\s\S]*?)^\)|(.*))$/gm)) {
+        const body = decl[1] ?? decl[2] ?? ''
+        for (const m of body.matchAll(/"([^"\n]+)"|`([^`]+)`/g)) out.push(m[1] ?? m[2])
     }
     return out
 }
@@ -740,6 +749,11 @@ function goMajor(name: string, version: string): number {
     if (inPath) return Number(inPath[1])
     const inVersion = /^(?:v|go)?(\d+)\./.exec(version)
     return inVersion ? Number(inVersion[1]) : 1
+}
+
+/** Does this file declare anything a caller of the package could be handed? */
+function declaresApi(src: string): boolean {
+    return /^(?:func|type|var|const)\b/m.test(src)
 }
 
 /**
@@ -769,9 +783,11 @@ function goMajor(name: string, version: string): number {
  * cannot fire here because it reads the major with `/^(\d+)\./` and Go spells its
  * versions `v1.12.0` and `go1.25.14`.
  *
- * A module whose root holds no Go files is not a package at all — the aws-sdk shape
- * — and keeps everything, for the same reason `dropDeadMajors` keeps a package whose
- * whole surface lives under one `vN/`.
+ * A root that declares nothing is not the API — the aws-sdk shape holds no Go files
+ * at all, and `cloud.google.com/go` holds a `doc.go` with a package clause and no
+ * imports while its whole surface lives in subdirectories. Either keeps everything,
+ * for the same reason `dropDeadMajors` keeps a package whose whole surface lives
+ * under one `vN/`.
  */
 export function selectOwnPackage(
     files: readonly string[],
@@ -786,7 +802,7 @@ export function selectOwnPackage(
     }
     const byDir = new Map<string, string[]>()
     for (const f of files) byDir.set(dirOf(f), [...(byDir.get(dirOf(f)) ?? []), f])
-    if ((byDir.get('') ?? []).length === 0) return [...files]
+    if (!(byDir.get('') ?? []).some(f => declaresApi(safeRead(f) ?? ''))) return [...files]
 
     const major = goMajor(name, version)
     const reachable = new Set<string>([''])
@@ -818,6 +834,7 @@ export function goContentFingerprintParts(): string[] {
         String(holdsByDefault),
         String(isWantedEntry),
         String(selectOwnPackage),
+        String(declaresApi),
         String(goMajor),
         String(importsOf)
     ]

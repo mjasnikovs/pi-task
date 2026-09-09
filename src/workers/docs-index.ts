@@ -22,7 +22,7 @@ export interface IndexResult {
     contentHash: string
 }
 
-interface CollectedFiles {
+export interface CollectedFiles {
     surface: string[]
     readme: string | null
 }
@@ -225,7 +225,15 @@ function dropDeadMajors(files: string[], root: string, version: string): string[
     return kept.length > 0 ? kept : files
 }
 
-function collectFiles(pkg: ResolvedPackage, profile: EcosystemProfile): CollectedFiles {
+/**
+ * The files that make up a package's surface, after every selection rule.
+ *
+ * Exported because the uncached fallback assembles the same package by hand: a
+ * walk that skipped these rules put a Go module's whole subtree, and both halves
+ * of every parallel `.d.cts`, into the one degraded path where the budget is a
+ * single truncated blob.
+ */
+export function collectFiles(pkg: ResolvedPackage, profile: EcosystemProfile): CollectedFiles {
     const walked = walkSurface(pkg.root, profile)
     const surface = dropDeadMajors(walked, pkg.root, pkg.version)
     return {

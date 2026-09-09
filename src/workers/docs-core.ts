@@ -3,7 +3,11 @@ import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import {openCache as defaultOpenCache, type CacheHandle} from './docs-cache.js'
-import {ensureIndexed as defaultEnsureIndexed, type IndexResult} from './docs-index.js'
+import {
+    collectFiles,
+    ensureIndexed as defaultEnsureIndexed,
+    type IndexResult
+} from './docs-index.js'
 import {
     npmProfile,
     chooseEcosystem,
@@ -833,7 +837,7 @@ function docsRawUncached(
     autoInstalled: boolean
 ): DocsRawResult {
     const parts: string[] = []
-    const surfaceFiles = walkSurfaceAlpha(pkg.root, profile)
+    const surfaceFiles = collectFiles(pkg, profile).surface
     const entryFirst =
         pkg.entry ? [pkg.entry, ...surfaceFiles.filter(f => f !== pkg.entry)] : surfaceFiles
     for (const abs of entryFirst) {
@@ -878,27 +882,6 @@ function docsRawUncached(
         cacheError,
         autoInstalled: autoInstalled ? true : undefined
     }
-}
-
-function walkSurfaceAlpha(root: string, profile: EcosystemProfile): string[] {
-    const out: string[] = []
-    const stack: string[] = [root]
-    while (stack.length) {
-        const dir = stack.pop()!
-        let entries: fs.Dirent[]
-        try {
-            entries = fs.readdirSync(dir, {withFileTypes: true})
-        } catch {
-            continue
-        }
-        for (const entry of entries) {
-            if (profile.skipDirs.includes(entry.name)) continue
-            const full = path.join(dir, entry.name)
-            if (entry.isDirectory()) stack.push(full)
-            else if (entry.isFile() && profile.isSurfaceFile(entry.name)) out.push(full)
-        }
-    }
-    return out.sort()
 }
 
 function truncateHeadTail(s: string): string {

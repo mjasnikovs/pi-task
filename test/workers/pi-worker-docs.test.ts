@@ -518,3 +518,39 @@ test('naming the ecosystem scopes the cache key; letting the manifest decide doe
         'npm::zod::z object'
     )
 })
+
+test('the no-cache fallback applies the selection rules, not a raw walk', async () => {
+    // The uncached path assembles the package by hand into ONE truncated blob, so
+    // it is the path where a `.d.cts` twin costs the most.
+    const dir = tmpDir('docs-nocache-select-')
+    const pkg = path.join(dir, 'node_modules', 'twin-pkg')
+    fs.mkdirSync(pkg, {recursive: true})
+    fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({name: 'host'}))
+    fs.writeFileSync(
+        path.join(pkg, 'package.json'),
+        JSON.stringify({name: 'twin-pkg', version: '1.0.0', types: 'index.d.ts'})
+    )
+    fs.writeFileSync(path.join(pkg, 'index.d.ts'), 'export declare function esmOnly(): void\n')
+    fs.writeFileSync(path.join(pkg, 'index.d.cts'), 'export declare function cjsTwin(): void\n')
+    let promptSeen = ''
+    try {
+        await runTool(
+            {
+                openCache: () => {
+                    throw new Error('disk full')
+                },
+                npmVersionLookup: async () => null,
+                spawn: fakeSpawnByPrompt(args => {
+                    promptSeen = args[args.length - 1]
+                    return {stdout: '<answer>ok</answer>\n<excerpt>esmOnly</excerpt>'}
+                })
+            },
+            {module: 'twin-pkg', query: 'esmOnly'},
+            dir
+        )
+        expect(promptSeen).toContain('index.d.ts')
+        expect(promptSeen).not.toContain('index.d.cts')
+    } finally {
+        fs.rmSync(dir, {recursive: true, force: true})
+    }
+})
