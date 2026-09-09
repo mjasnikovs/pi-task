@@ -2,7 +2,7 @@ import {test, expect} from 'bun:test'
 import {tmpDir} from '../test-utils/tmp-dir.js'
 import {OBLIGATIONS} from '../../scripts/docs-live-truth.js'
 import {mkdirSync, writeFileSync} from 'node:fs'
-import {join} from 'node:path'
+import {basename, join} from 'node:path'
 import {
     inventedSymbols,
     pinVersion,
@@ -275,7 +275,7 @@ test('a go source file is collected', () => {
     writeFileSync(join(root, 'config.ts'), 'export {}\n')
     expect(
         sourceFiles(root)
-            .map(f => f.split('/').pop())
+            .map(f => basename(f))
             .sort()
     ).toEqual(['config.go', 'config.ts'])
 })

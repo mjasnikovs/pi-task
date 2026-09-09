@@ -708,7 +708,10 @@ test('a subpackage the root never imports is dropped', () => {
         'render/render.go': 'package render\n',
         'ginS/gins.go': 'package ginS\n'
     })
-    const kept = selectOwnPackage(paths, root, NAME, 'v1.2.0').map(f => path.relative(root, f))
+    // path.relative emits backslashes on Windows; the expected literals use slashes.
+    const kept = selectOwnPackage(paths, root, NAME, 'v1.2.0').map(f =>
+        path.relative(root, f).replace(/\\/g, '/')
+    )
     expect(kept).toEqual(['bar.go', 'render/render.go'])
 })
 
@@ -720,7 +723,9 @@ test('the import closure is followed, so an alias hop survives', () => {
         'buffer/buffer.go': 'package buffer\n',
         'zapgrpc/grpc.go': 'package zapgrpc\n'
     })
-    const kept = selectOwnPackage(paths, root, NAME, 'v1.28.0').map(f => path.relative(root, f))
+    const kept = selectOwnPackage(paths, root, NAME, 'v1.28.0').map(f =>
+        path.relative(root, f).replace(/\\/g, '/')
+    )
     expect(kept.sort()).toEqual(['buffer/buffer.go', 'zap.go', 'zapcore/core.go'])
 })
 
@@ -733,7 +738,9 @@ test('a mismatching major goes even though the root imports it', () => {
         'v2/json.go': 'package json\n',
         'jsontext/text.go': 'package jsontext\n'
     })
-    const kept = selectOwnPackage(paths, root, NAME, 'go1.25.14').map(f => path.relative(root, f))
+    const kept = selectOwnPackage(paths, root, NAME, 'go1.25.14').map(f =>
+        path.relative(root, f).replace(/\\/g, '/')
+    )
     expect(kept.sort()).toEqual(['json.go', 'jsontext/text.go'])
 })
 
@@ -742,7 +749,9 @@ test('a vN directory matching the package major is kept', () => {
         'bar.go': `package bar\n\nimport "${NAME}/v1"\n`,
         'v1/impl.go': 'package v1\n'
     })
-    const kept = selectOwnPackage(paths, root, NAME, 'v1.2.0').map(f => path.relative(root, f))
+    const kept = selectOwnPackage(paths, root, NAME, 'v1.2.0').map(f =>
+        path.relative(root, f).replace(/\\/g, '/')
+    )
     expect(kept.sort()).toEqual(['bar.go', 'v1/impl.go'])
 })
 
@@ -759,6 +768,8 @@ test('a string that is not an import path does not reach a subpackage', () => {
         'bar.go': `package bar\n\nconst doc = "${NAME}/render is a package"\n`,
         'render/render.go': 'package render\n'
     })
-    const kept = selectOwnPackage(paths, root, NAME, 'v1.2.0').map(f => path.relative(root, f))
+    const kept = selectOwnPackage(paths, root, NAME, 'v1.2.0').map(f =>
+        path.relative(root, f).replace(/\\/g, '/')
+    )
     expect(kept).toEqual(['bar.go'])
 })
