@@ -18,6 +18,7 @@ import {
     isStdlibImport,
     isProjectStdlib,
     isGoFile,
+    selectOwnPackage,
     escapeModulePath,
     unescapeModulePath,
     modulePrefixes,
@@ -629,12 +630,15 @@ describe('end to end', () => {
             // header must not reach the index.
             expect(text).not.toContain('func hidden')
             expect(text).not.toContain('All rights reserved')
-            // A subpackage is part of what the module offers, so it is INDEXED
-            // even when this query does not retrieve it.
+            // A subpackage the root never imports is a DIFFERENT package that this
+            // one cannot hand you, so it is not indexed under this name. It used to
+            // be, and re-run 9 measured the cost: 10 of gin's 51 retrieved chunks
+            // came from `ginS`. A caller who wants it asks for the path, which
+            // resolves on its own.
             const deep = cache.db
                 .prepare("SELECT count(*) AS c FROM chunks WHERE content LIKE '%Deep%'")
                 .get() as {c: number}
-            expect(deep.c).toBeGreaterThan(0)
+            expect(deep.c).toBe(0)
 
             const npmRows = cache.db
                 .prepare("SELECT count(*) AS c FROM chunks WHERE ecosystem = 'npm'")
@@ -678,4 +682,83 @@ describe('end to end', () => {
             cache.close()
         }
     })
+})
+
+// A Go subdirectory is a DIFFERENT importable package. Walking a module's whole
+// tree filed every one of them under the parent's name: on re-run 9's cache 71% of
+// `encoding/json`'s chunks, 54% of zap's and 34% of gin's, and it reached retrieval
+// — a question about registering a gin route came back with 10 `ginS` chunks of 51.
+function goTree(files: Record<string, string>): {root: string; paths: string[]} {
+    const root = tmpDir('go-own-package')
+    const paths: string[] = []
+    for (const [rel, src] of Object.entries(files)) {
+        const abs = path.join(root, rel)
+        fs.mkdirSync(path.dirname(abs), {recursive: true})
+        fs.writeFileSync(abs, src)
+        paths.push(abs)
+    }
+    return {root, paths}
+}
+
+const NAME = 'github.com/foo/bar'
+
+test('a subpackage the root never imports is dropped', () => {
+    const {root, paths} = goTree({
+        'bar.go': `package bar\n\nimport "${NAME}/render"\n`,
+        'render/render.go': 'package render\n',
+        'ginS/gins.go': 'package ginS\n'
+    })
+    const kept = selectOwnPackage(paths, root, NAME, 'v1.2.0').map(f => path.relative(root, f))
+    expect(kept).toEqual(['bar.go', 'render/render.go'])
+})
+
+test('the import closure is followed, so an alias hop survives', () => {
+    // zap's `Field` is `= zapcore.Field`, and zapcore in turn reaches `buffer`.
+    const {root, paths} = goTree({
+        'zap.go': `package zap\n\nimport "${NAME}/zapcore"\n\ntype Field = zapcore.Field\n`,
+        'zapcore/core.go': `package zapcore\n\nimport "${NAME}/buffer"\n`,
+        'buffer/buffer.go': 'package buffer\n',
+        'zapgrpc/grpc.go': 'package zapgrpc\n'
+    })
+    const kept = selectOwnPackage(paths, root, NAME, 'v1.28.0').map(f => path.relative(root, f))
+    expect(kept.sort()).toEqual(['buffer/buffer.go', 'zap.go', 'zapcore/core.go'])
+})
+
+test('a mismatching major goes even though the root imports it', () => {
+    // encoding/json is BUILT on encoding/json/v2 and imports it. v2 is the same API
+    // at a different major — same `Marshal`, same `Unmarshal` — and half the
+    // retrieval for the commonest decode question came back from it.
+    const {root, paths} = goTree({
+        'json.go': `package json\n\nimport "${NAME}/v2"\nimport "${NAME}/jsontext"\n`,
+        'v2/json.go': 'package json\n',
+        'jsontext/text.go': 'package jsontext\n'
+    })
+    const kept = selectOwnPackage(paths, root, NAME, 'go1.25.14').map(f => path.relative(root, f))
+    expect(kept.sort()).toEqual(['json.go', 'jsontext/text.go'])
+})
+
+test('a vN directory matching the package major is kept', () => {
+    const {root, paths} = goTree({
+        'bar.go': `package bar\n\nimport "${NAME}/v1"\n`,
+        'v1/impl.go': 'package v1\n'
+    })
+    const kept = selectOwnPackage(paths, root, NAME, 'v1.2.0').map(f => path.relative(root, f))
+    expect(kept.sort()).toEqual(['bar.go', 'v1/impl.go'])
+})
+
+test('a module whose root is not a package keeps everything', () => {
+    const {root, paths} = goTree({
+        'service/s3/api.go': 'package s3\n',
+        'service/sqs/api.go': 'package sqs\n'
+    })
+    expect(selectOwnPackage(paths, root, NAME, 'v1.0.0').length).toBe(2)
+})
+
+test('a string that is not an import path does not reach a subpackage', () => {
+    const {root, paths} = goTree({
+        'bar.go': `package bar\n\nconst doc = "${NAME}/render is a package"\n`,
+        'render/render.go': 'package render\n'
+    })
+    const kept = selectOwnPackage(paths, root, NAME, 'v1.2.0').map(f => path.relative(root, f))
+    expect(kept).toEqual(['bar.go'])
 })

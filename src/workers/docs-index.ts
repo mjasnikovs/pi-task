@@ -229,7 +229,7 @@ function collectFiles(pkg: ResolvedPackage, profile: EcosystemProfile): Collecte
     const walked = walkSurface(pkg.root, profile)
     const surface = dropDeadMajors(walked, pkg.root, pkg.version)
     return {
-        surface: profile.selectFiles ? profile.selectFiles(surface) : surface,
+        surface: profile.selectFiles ? profile.selectFiles(surface, pkg) : surface,
         readme: pkg.readme
     }
 }

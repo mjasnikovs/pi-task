@@ -4051,8 +4051,43 @@ defect 5 — zod's `v3/` — in Go clothing, and the existing guard is inert her
 it reads the major with `/^(\d+)\./`, while Go versions spell themselves `v1.12.0`
 and `go1.25.14`.
 
-Both are FILED, not fixed. Neither has been measured on `docs-defines` yet, and the
-run that found them is n=1.
+### Both are FIXED, and one rule closes them — measured on re-run 9's own corpus
+
+`selectOwnPackage` keeps the package the caller asked for plus the subpackages its
+own root IMPORTS, closed over. The gate is the import block and not a name-shaped
+grep: `codec/json` looked "named in the root" 4 times, and every one was
+`encoding/json`'s `json.` selector.
+
+The closure is load-bearing. zap's `Field` is `= zapcore.Field` and zapcore in turn
+reaches `buffer`, so a blunt own-directory rule would break the alias hop defect 3
+exists to serve. What it drops is what the parent cannot hand you at all.
+
+A mismatching top-level `vN/` goes whatever the imports say, which is what defect 38
+needed: `encoding/json` is built ON `encoding/json/v2` and imports it, so the import
+rule alone would have kept it.
+
+Retrieval on the four packages, same queries, two caches, same package set:
+
+```
+                         BEFORE                          AFTER
+encoding/json   15 chunks   v2 7,  root 8      34 chunks   jsontext 5, root 29
+net/http        45 chunks   foreign 9          40 chunks   foreign 0
+gin             51 chunks   ginS 6, binding 1  50 chunks   binding 2
+zap             50 chunks   zapgrpc 3, core 3  50 chunks   zapcore 3
+```
+
+Every foreign directory that survives is one the root imports. `encoding/json` is
+the largest move: the budget that was going to v2's colliding `Marshal`/`Unmarshal`
+now buys the real API, 8 root chunks to 29.
+
+On the four recorded run-9 queries, foreign chunks fall **48/199 (24%) -> 13/200
+(7%)** and nothing is lost: declaration heads for the queried symbols read
+**14/14 in both arms**.
+
+The scorer for that number was rewritten before it was believed. The first one was a
+template-literal regex whose `\\s` reached `RegExp` as a literal backslash, and it
+read **0/9 in both arms** — a clean, symmetric, entirely false result. It is a line
+scan now.
 
 
 # Run history

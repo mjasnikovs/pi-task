@@ -718,10 +718,107 @@ function holdsByDefault(src: string): boolean {
     return expr.split(/\s*&&\s*/).every(term => term.startsWith('!'))
 }
 
+/** The import paths a Go file's import block names. */
+function importsOf(src: string): string[] {
+    const out: string[] = []
+    for (const m of src.matchAll(/"([^"\n]+)"/g)) {
+        if (/^[a-zA-Z0-9_.-]+(?:\/[a-zA-Z0-9_.~-]+)*$/.test(m[1])) out.push(m[1])
+    }
+    return out
+}
+
+/**
+ * The package's own major, as Go spells it.
+ *
+ * v2 and up put the major in the module PATH, and the version agrees with it, so
+ * either reads the same answer. The standard library has neither and is 1: it is
+ * `go1.25.14`, and `encoding/json/v2` is a separate experimental package rather
+ * than a newer major of this one.
+ */
+function goMajor(name: string, version: string): number {
+    const inPath = /\/v(\d+)$/.exec(name)
+    if (inPath) return Number(inPath[1])
+    const inVersion = /^(?:v|go)?(\d+)\./.exec(version)
+    return inVersion ? Number(inVersion[1]) : 1
+}
+
+/**
+ * Keep the package the caller asked for, and only the subpackages it can reach.
+ *
+ * A Go subdirectory is a DIFFERENT importable package — `zapcore` is not reachable
+ * as `zap.X` and `ginS` is not `gin` — so walking a module's whole tree files every
+ * one of them under the parent's name and its version banner. Measured on re-run 9's
+ * cache: 71% of `encoding/json`'s chunks, 54% of zap's and 34% of gin's belonged to
+ * a package nobody asked about, and it reached retrieval — a question about
+ * registering a gin route came back with 10 `ginS` chunks of 51, in a corpus already
+ * spending 19,941 of its 24,000 bytes.
+ *
+ * The gate is the ROOT'S OWN IMPORTS, closed over: zap's `Field` is
+ * `= zapcore.Field`, so dropping `zapcore` would break the alias hop that defect 3
+ * exists to serve, and zapcore in turn reaches `buffer`. What that keeps is what a
+ * caller of this package can actually be handed; `zapgrpc`, `zaptest`, `ginS`,
+ * `httputil` and `net/http/pprof` are reachable only by importing them directly,
+ * which the tool already resolves on its own — `github.com/gin-gonic/gin/binding`
+ * asked for by path reads 0% foreign.
+ *
+ * A mismatching top-level `vN/` goes whatever the imports say. `encoding/json` is
+ * built ON `encoding/json/v2` and imports it, but v2 is a different major of the
+ * same API with the same identifiers — `Marshal`, `Unmarshal` — and half the
+ * retrieval for the commonest decode question came back from it under a
+ * `Per encoding/json@go1.25.14` header. That is `dropDeadMajors`' case, which
+ * cannot fire here because it reads the major with `/^(\d+)\./` and Go spells its
+ * versions `v1.12.0` and `go1.25.14`.
+ *
+ * A module whose root holds no Go files is not a package at all — the aws-sdk shape
+ * — and keeps everything, for the same reason `dropDeadMajors` keeps a package whose
+ * whole surface lives under one `vN/`.
+ */
+export function selectOwnPackage(
+    files: readonly string[],
+    root: string,
+    name: string,
+    version: string
+): string[] {
+    const rel = (f: string): string => path.relative(root, f).replace(/\\/g, '/')
+    const dirOf = (f: string): string => {
+        const parts = rel(f).split('/')
+        return parts.slice(0, -1).join('/')
+    }
+    const byDir = new Map<string, string[]>()
+    for (const f of files) byDir.set(dirOf(f), [...(byDir.get(dirOf(f)) ?? []), f])
+    if ((byDir.get('') ?? []).length === 0) return [...files]
+
+    const major = goMajor(name, version)
+    const reachable = new Set<string>([''])
+    const queue: string[] = ['']
+    while (queue.length > 0) {
+        const dir = queue.shift() as string
+        for (const f of byDir.get(dir) ?? []) {
+            for (const imp of importsOf(safeRead(f) ?? '')) {
+                if (!imp.startsWith(`${name}/`)) continue
+                const sub = imp.slice(name.length + 1)
+                const top = /^v(\d+)$/.exec(sub.split('/')[0])
+                if (top && Number(top[1]) !== major) continue
+                if (reachable.has(sub) || !byDir.has(sub)) continue
+                reachable.add(sub)
+                queue.push(sub)
+            }
+        }
+    }
+    return files.filter(f => reachable.has(dirOf(f)))
+}
+
 /**
  * Everything below `goSurface` and the file-selection rule that feeds it, by
  * source, so a fix to either re-indexes rather than being masked by a cache hit.
  */
 export function goContentFingerprintParts(): string[] {
-    return [String(selectBuildVariants), String(holdsByDefault), String(isWantedEntry)]
+    return [
+        String(selectBuildVariants),
+        String(holdsByDefault),
+        String(isWantedEntry),
+        String(selectOwnPackage),
+        String(goMajor),
+        String(importsOf)
+    ]
 }

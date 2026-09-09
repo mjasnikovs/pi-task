@@ -82,6 +82,7 @@ import {
     goManifestDeps,
     isGoFile,
     selectBuildVariants,
+    selectOwnPackage,
     defaultGoModCache,
     goContentFingerprintParts
 } from './eco-go.js'
@@ -295,7 +296,7 @@ export interface EcosystemProfile {
      * retrieval budget for text the reader already has, and neither is
      * separable downstream — same identifiers, same package, same version.
      */
-    selectFiles?: (files: readonly string[]) => string[]
+    selectFiles?: (files: readonly string[], pkg: ResolvedPackage) => string[]
     /** What this ecosystem's packages ship, for a "there is nothing to read" answer. */
     surfaceLabel: string
     /**
@@ -798,7 +799,8 @@ const goProfile: EcosystemProfile = {
     typeKeywords: ['type', 'struct', 'interface', 'func'],
     commentPrefix: '//',
     skipDirs: ['testdata', 'examples', 'vendor', 'internal', '.git'],
-    selectFiles: selectBuildVariants,
+    selectFiles: (files, pkg) =>
+        selectBuildVariants(selectOwnPackage(files, pkg.root, pkg.name, pkg.version)),
     surfaceLabel: '.go source or README',
     packageSubject: 'a Go package',
     projectGlobs: ['*.go'],
