@@ -9,6 +9,7 @@ import {
     scoreRecall,
     sourceFiles,
     taskProgress,
+    truthKey,
     webFollowsDocs
 } from '../../scripts/docs-live-audit.js'
 import type {TypeOnlyLogRecord} from '../../src/workers/typeonly-log.js'
@@ -242,6 +243,28 @@ test('a range operator still compares equal to the bare version', () => {
 
 test('a moved go pin still differs', () => {
     expect(pinVersion('v1.11.0')).not.toBe(pinVersion('v1.12.0'))
+})
+
+// Everything before the first slash turned `github.com/gin-gonic/gin` into
+// `github.com`, which no truth entry can match — so the first Go run scored
+// recall 0/0 and still printed PASS. Re-keyed it reads 3/3, and no ts, rs or hs
+// record in the 234 recorded before it changes bucket.
+const GO_PINS = {'github.com/gin-gonic/gin': 'v1.12.0', 'go.uber.org/zap': 'v1.28.0'}
+
+test('an import path keys to its own pin, not its host', () => {
+    expect(truthKey('github.com/gin-gonic/gin', GO_PINS)).toBe('github.com/gin-gonic/gin')
+})
+
+test('a subpackage counts toward the module that serves it', () => {
+    expect(truthKey('github.com/gin-gonic/gin/binding', GO_PINS)).toBe('github.com/gin-gonic/gin')
+})
+
+test('an unpinned import path keeps the old first-segment rule', () => {
+    expect(truthKey('golang.org/x/net/html', GO_PINS)).toBe('golang.org')
+})
+
+test('an npm subpath still folds onto its package', () => {
+    expect(truthKey('hono/client', {hono: '4.13.7'})).toBe('hono')
 })
 
 // The stale sweep and the obligations both read this list, and it did not match

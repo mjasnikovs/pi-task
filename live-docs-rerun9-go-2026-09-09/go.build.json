@@ -1,0 +1,5 @@
+{
+  "ok": true,
+  "cmd": "go build ./... && go test ./...",
+  "output": "ok  \tdocs-live-go\t(cached)\n?   \tdocs-live-go/config\t[no test files]\n"
+}

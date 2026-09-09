@@ -310,6 +310,28 @@ export function webFollowsDocs(
 }
 
 /**
+ * The pinned package a recorded module belongs to.
+ *
+ * The pins are consulted FIRST because a Go import path is full of slashes and
+ * the old rule — everything before the first one — turned
+ * `github.com/gin-gonic/gin` into `github.com`. No truth entry could match that,
+ * so Go's recall read 0/0 and the run still printed PASS. A metric that cannot
+ * fire is worse than one that fails.
+ *
+ * Longest pin wins, so `github.com/gin-gonic/gin/binding` counts toward gin.
+ * The fallback is the old rule, which is what npm needs: `hono/client` is a
+ * subpath of a package whose name has no slash in it.
+ */
+export function truthKey(module: string, pins: Readonly<Record<string, string>>): string {
+    let best: string | null = null
+    for (const pin of Object.keys(pins)) {
+        if (module !== pin && !module.startsWith(`${pin}/`)) continue
+        if (best === null || pin.length > best.length) best = pin
+    }
+    return best ?? module.replace(/^@?([^/]+).*$/, '$1')
+}
+
+/**
  * The comparable part of a version, with the leading non-digits off.
  *
  * Applied to BOTH sides. npm and hackage carry the range operator on the manifest
@@ -461,7 +483,7 @@ function auditProject(runRoot: string, spec: ProjectSpec, build: boolean): Proje
     // Recall and fidelity, per truth entry that this run actually asked about.
     const byPkg = new Map<string, TypeOnlyLogRecord[]>()
     for (const r of records) {
-        const key = r.module.replace(/^@?([^/]+).*$/, '$1')
+        const key = truthKey(r.module, spec.pins)
         byPkg.set(key, [...(byPkg.get(key) ?? []), r])
     }
     rep.recall = scoreRecall(TRUTH, spec.pins, byPkg)

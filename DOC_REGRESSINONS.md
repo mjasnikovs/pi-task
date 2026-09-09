@@ -3957,6 +3957,104 @@ silent where it used to announce itself.
 
 ---
 
+## Re-run 9 — the first Go run, and four instrument defects stood between it and a verdict
+
+Artifacts in `live-docs-rerun9-go-2026-09-09/`. Launched on 0.40.29, the published
+build that carries the Go row.
+
+```
+go   PASS   4 records   0 abstained  0%   recall 3/3   4/4 clean   go build && go test green
+```
+
+**Nothing could have run it.** The runbook loops `for id in ts rs hs` and the image
+has no Go toolchain, so the row shipped with a seed, a truth entry and an audit
+branch that no instrument reached. Adding Go to both found four defects, and every
+one of them is in the MEASUREMENT rather than the tool — the fifth month running
+that the instruments are where the defects are.
+
+```
+33  `go mod tidy` pruned both pins out of the seeded go.mod   project pinned to NOTHING
+34  `sourceFiles` matched ts|rs|hs, not .go                   every Go clause read unmet
+35  the pin check stripped `^` off the manifest side only     v1.12.0 -> v1.12.0, HARD FAIL
+36  the recall key took everything before the first slash     github.com, recall 0/0 and PASS
+```
+
+Defect 33 is the one that would have wasted the three hours. `go mod tidy` removes
+a require nothing imports, and the seed's placeholder `main.go` imported nothing, so
+go.mod came back with `module docs-live-go` and no `require` block at all. `go get`
+cannot put them back either: `goManifestDeps` skips indirect requires, so the tool
+would then have read gin as an undeclared transitive dependency. The blank imports
+are what make both pins direct.
+
+Defect 36 is the familiar shape — a metric that cannot fire reads clean. Go's recall
+scored 0/0 and the audit printed **PASS** on it. Re-keyed against the pins it reads
+3/3, and none of the 234 ts/rs/hs records recorded before it changes bucket.
+
+The scorer was verified in both directions before the run, on hand-written trees:
+a correct tree PASSes, one that drops the zap clause HARD FAILs on that clause
+alone, and a downgraded gin HARD FAILs on the pin.
+
+### The tool answered well and the code did not take the bait
+
+Four questions, four answers, no abstention — against ts 16%, cargo 22% and hackage
+41% pooled. Every signature was right, and one answer corrected the query's own
+false premise (`NewProduction` returns `(*Logger, error)`, not `*zap.Logger`).
+
+The shipped code uses `engine.GET`, drives it through `httptest` + `ServeHTTP`, logs
+both outcomes with zap and tests both responses. This is the first ecosystem whose
+first run shipped what it was asked for.
+
+## Defect 37. A Go subpackage's surface is served under its PARENT's import path
+
+In Go the import path IS the package: a declaration in `zapcore/` is not reachable
+as `zap.X`, and `ginS` is a different package from `gin`. `walkSurface` recurses, so
+every subdirectory of a module lands in the parent's chunk table under a
+`Per <parent>@<version>` header.
+
+Measured on the run's own cache, share of each package's chunks that belong to a
+DIFFERENT importable package:
+
+```
+encoding/json   71%   jsontext 101, v2 63
+go.uber.org/zap 54%   zapcore 156, zaptest 23, zapgrpc 22
+gin             34%   render 76, binding 34, ginS 26
+net/http        32%   httputil 35, httptest 25, cgi 9
+```
+
+And it reaches RETRIEVAL, not just the index:
+
+```
+encoding/json  "Marshal/Unmarshal signatures, struct tags"   16 chunks, 8 from v2/
+gin            "registering a GET route on an engine"        51 chunks, 10 from ginS/
+zap            "SugaredLogger printf-style logging"          50 chunks, 6 foreign
+```
+
+The live gin answer is the visible cost: it offered
+`Handle(httpMethod, relativePath string, handlers ...gin.HandlerFunc)` and
+`gin.GET(relativePath, handlers)` as route registration, which is `ginS`'s
+package-level API and does not compile against `github.com/gin-gonic/gin`.
+
+**Stated honestly: the mechanism is proven, the damage is not.** The run's own code
+wrote `engine.GET` and compiled. n=1.
+
+`inventedSymbols` cannot see this class at all — the symbol IS in `retrievedText`.
+
+The seam is `walkSurface(pkg.root, profile)` in `docs-index.ts`. The tool already
+resolves `github.com/gin-gonic/gin/binding` on its own, and that row reads **0%**
+foreign, so a caller who wants the subpackage can ask for it by path.
+
+### Defect 38. `dropDeadMajors` cannot fire on Go
+
+`encoding/json/v2` is the experimental v2 API and takes half the retrieval budget of
+the commonest Go decode question, under `Per encoding/json@go1.25.14`. That is
+defect 5 — zod's `v3/` — in Go clothing, and the existing guard is inert here:
+it reads the major with `/^(\d+)\./`, while Go versions spell themselves `v1.12.0`
+and `go1.25.14`.
+
+Both are FILED, not fixed. Neither has been measured on `docs-defines` yet, and the
+run that found them is n=1.
+
+
 # Run history
 
 Artifacts in `live-docs-run-2026-09-05/`, `live-docs-rerun-2026-09-05/`,
@@ -3973,6 +4071,10 @@ Artifacts in `live-docs-run-2026-09-05/`, `live-docs-rerun-2026-09-05/`,
 | re-run 6, 09-06 | 0.40.14 | **HARD FAIL**, 10% | **HARD FAIL**, 17% | killed at task 1 |
 | re-run 7, 09-07 | 0.40.16 | **HARD FAIL**, 15% | **PASS**, 20% | no verdict — defect 31 |
 | hs alone, 09-07 | 0.40.16 + 0.40.24 harness | — | — | **PASS**, 5%, 4/4 tasks |
+| go alone, 09-09 | 0.40.29 | — | — | — |
+
+Go has a column of its own only in re-run 9's section above: **PASS**, 0% abstention,
+recall 3/3, 3/3 tasks, `go build && go test` green.
 
 **Re-run 5 is the best result any run has had on the hard half**: rs and hs both
 PASS, and hs has passed twice in five runs. ts HARD FAILs on `bun test`'s
