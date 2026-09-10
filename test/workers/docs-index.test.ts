@@ -709,17 +709,6 @@ function walkOutOfProcess(root: string, timeout?: number): {surface: string; ms:
     return {surface: run.stdout.toString().trim(), ms}
 }
 
-test('a directory symlink pointing at an ancestor terminates the walk', () => {
-    const root = symlinkRoot('docs-symlink-loop-')
-    if (!canSymlink(root)) return
-    fs.mkdirSync(path.join(root, 'sub'), {recursive: true})
-    fs.writeFileSync(path.join(root, 'a.d.ts'), 'export declare const a: number\n')
-    const control = walkOutOfProcess(root)
-    expect(control.surface).toBe('1')
-    fs.symlinkSync(root, path.join(root, 'sub', 'up'), 'dir')
-    expect(walkOutOfProcess(root, control.ms * LOOP_BOUND).surface).toBe('1')
-})
-
 /**
  * A package root, realpath'd.
  *
@@ -734,17 +723,33 @@ function symlinkRoot(prefix: string): string {
     return root
 }
 
-/** Whether this host lets an unprivileged process create a symlink at all. */
-function canSymlink(root: string): boolean {
-    const probe = path.join(root, '.symlink-probe')
+/**
+ * Does this host let an unprivileged process create a directory symlink?
+ *
+ * Windows needs SeCreateSymbolicLinkPrivilege, so a developer machine with
+ * Developer Mode off cannot run these at all. Probed once and reported as a
+ * SKIP, not swallowed: a guard that returns early prints as a pass, which is
+ * the same "held for the wrong reason" these tests exist to catch.
+ */
+const CAN_SYMLINK = ((): boolean => {
+    const root = symlinkRoot('docs-symlink-probe-')
     try {
-        fs.symlinkSync(root, probe, 'dir')
-        fs.unlinkSync(probe)
+        fs.symlinkSync(root, path.join(root, 'probe'), 'dir')
         return true
     } catch {
         return false
     }
-}
+})()
+
+test.skipIf(!CAN_SYMLINK)('a directory symlink pointing at an ancestor terminates the walk', () => {
+    const root = symlinkRoot('docs-symlink-loop-')
+    fs.mkdirSync(path.join(root, 'sub'), {recursive: true})
+    fs.writeFileSync(path.join(root, 'a.d.ts'), 'export declare const a: number\n')
+    const control = walkOutOfProcess(root)
+    expect(control.surface).toBe('1')
+    fs.symlinkSync(root, path.join(root, 'sub', 'up'), 'dir')
+    expect(walkOutOfProcess(root, control.ms * LOOP_BOUND).surface).toBe('1')
+})
 
 const npmPkg = (root: string): ResolvedPackage => ({
     ecosystem: 'npm',
@@ -758,43 +763,46 @@ const npmPkg = (root: string): ResolvedPackage => ({
 const relSurface = (root: string, profile = ECOSYSTEMS.npm): string[] =>
     collectFiles(npmPkg(root), profile).surface.map(f => path.relative(root, f).replace(/\\/g, '/'))
 
-test('a symlink is judged by where it POINTS, so it cannot smuggle in a skipped tree', () => {
-    // `skipDirs` is what keeps another package's declarations from being filed
-    // under this one's name and version banner. Testing only the link's own name
-    // lets `deps -> node_modules` walk straight past it.
-    const root = symlinkRoot('docs-symlink-skipdir-')
-    if (!canSymlink(root)) return
-    fs.mkdirSync(path.join(root, 'node_modules', 'dep'), {recursive: true})
-    fs.writeFileSync(path.join(root, 'a.d.ts'), 'export declare const a: number\n')
-    fs.writeFileSync(
-        path.join(root, 'node_modules', 'dep', 'other.d.ts'),
-        'export declare const other: number\n'
-    )
-    fs.symlinkSync(path.join(root, 'node_modules'), path.join(root, 'deps'), 'dir')
-    expect(relSurface(root)).toEqual(['a.d.ts'])
-})
+test.skipIf(!CAN_SYMLINK)(
+    'a symlink is judged by where it POINTS, so it cannot smuggle in a skipped tree',
+    () => {
+        // `skipDirs` is what keeps another package's declarations from being filed
+        // under this one's name and version banner. Testing only the link's own name
+        // lets `deps -> node_modules` walk straight past it.
+        const root = symlinkRoot('docs-symlink-skipdir-')
+        fs.mkdirSync(path.join(root, 'node_modules', 'dep'), {recursive: true})
+        fs.writeFileSync(path.join(root, 'a.d.ts'), 'export declare const a: number\n')
+        fs.writeFileSync(
+            path.join(root, 'node_modules', 'dep', 'other.d.ts'),
+            'export declare const other: number\n'
+        )
+        fs.symlinkSync(path.join(root, 'node_modules'), path.join(root, 'deps'), 'dir')
+        expect(relSurface(root)).toEqual(['a.d.ts'])
+    }
+)
 
-test('a file reached twice is listed once', () => {
+test.skipIf(!CAN_SYMLINK)('a file reached twice is listed once', () => {
     // The uncached fallback prints the surface into ONE truncated blob, so a
     // second copy of a file spends the budget it is shortest on.
     const root = symlinkRoot('docs-symlink-dup-')
-    if (!canSymlink(root)) return
     fs.writeFileSync(path.join(root, 'a.d.ts'), 'export declare const a: number\n')
     fs.symlinkSync(path.join(root, 'a.d.ts'), path.join(root, 'b.d.ts'), 'file')
     expect(relSurface(root)).toEqual(['a.d.ts'])
 })
 
-test('surface-ness is judged on the name the walk saw, not the target it resolves to', () => {
-    // `index.d.ts -> src/impl.ts` is the name a consumer imports; asking the
-    // target instead dropped the declaration file entirely.
-    const root = symlinkRoot('docs-symlink-name-')
-    if (!canSymlink(root)) return
-    fs.mkdirSync(path.join(root, 'src'), {recursive: true})
-    fs.writeFileSync(path.join(root, 'keep.d.ts'), 'export declare const k: number\n')
-    fs.writeFileSync(path.join(root, 'src', 'impl.ts'), 'export const impl = 1\n')
-    fs.symlinkSync(path.join(root, 'src', 'impl.ts'), path.join(root, 'index.d.ts'), 'file')
-    expect(relSurface(root)).toEqual(['keep.d.ts', 'src/impl.ts'])
-})
+test.skipIf(!CAN_SYMLINK)(
+    'surface-ness is judged on the name the walk saw, not the target it resolves to',
+    () => {
+        // `index.d.ts -> src/impl.ts` is the name a consumer imports; asking the
+        // target instead dropped the declaration file entirely.
+        const root = symlinkRoot('docs-symlink-name-')
+        fs.mkdirSync(path.join(root, 'src'), {recursive: true})
+        fs.writeFileSync(path.join(root, 'keep.d.ts'), 'export declare const k: number\n')
+        fs.writeFileSync(path.join(root, 'src', 'impl.ts'), 'export const impl = 1\n')
+        fs.symlinkSync(path.join(root, 'src', 'impl.ts'), path.join(root, 'index.d.ts'), 'file')
+        expect(relSurface(root)).toEqual(['keep.d.ts', 'src/impl.ts'])
+    }
+)
 
 test('the content hash moves when the walk rule does', () => {
     // Every other rule in the pipeline is hashed by source. `walkSurface` and
