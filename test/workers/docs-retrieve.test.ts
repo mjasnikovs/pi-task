@@ -180,7 +180,7 @@ test('retrieveChunks returns empty when package not indexed at all', () => {
     }
 })
 
-// Live run 2026-09-05 (DOC_REGRESSINONS.md section 3). Three hono lookups, three
+// Live run 2026-09-05. Three hono lookups, three
 // abstentions. hono declares every verb as a property typed by an interface
 // alias — `get: HandlerInterface<E, 'get', S, BasePath, CurrentPath>` in
 // hono-base.d.ts — while the call signatures live in `HandlerInterface`, in one
@@ -214,7 +214,7 @@ test('retrieveChunks follows a member type alias to its definition', () => {
     }
 })
 
-// Live run 2026-09-05 (DOC_REGRESSINONS.md section 6). The Haskell run asked
+// Live run 2026-09-05. The Haskell run asked
 // scotty for `json`'s type and the definitions of ScottyM / ActionM seven times.
 // Four outright non-answers, three partials, and the signature never appeared —
 // while `type ActionM = ActionT IO` sat in the index the whole time, in one chunk

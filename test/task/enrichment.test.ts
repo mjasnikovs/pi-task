@@ -175,8 +175,8 @@ describe('extractEnrichTargets — services', () => {
 describe('extractEnrichTargets — declared-dependency gate', () => {
     // Live run 2026-09-05 installed and indexed ten packages nobody asked for:
     // config.ts, app.ts, tsconfig.json, config.json, name, port, lib, fetch. Each
-    // is a real, unrelated package on the public registry. See DOC_REGRESSINONS.md
-    // section 5 for the cache timestamps that place them inside the runs.
+    // is a real, unrelated package on the public registry, and each one's cache
+    // timestamp falls inside a run.
     const SPEC = [
         'GOAL',
         '  Build a config module in TypeScript.',

@@ -374,8 +374,9 @@ function ingestBody(
         }
     }
     // A facade package indexes to a table of contents: `hspec` is 14 chunks of
-    // export lists and every signature is in `hspec-core`. Fill only the holes —
-    // see DEFECT-12-STOPPING-RULE.md for the boundary and why it stops here.
+    // export lists and every signature is in `hspec-core`. Fill only the holes,
+    // and only one hop out: after one hop hspec has zero unresolved names left,
+    // and no package measured had anything for a second hop to fetch.
     const found = supplements.length > 0 ? (profile.exportGap?.(pkg.root) ?? null) : null
     const gap = found !== null && !found.empty ? found : null
     for (const sup of gap === null ? [] : supplements) {

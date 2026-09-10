@@ -923,7 +923,7 @@ export function manifestCrates(cwd: string): Set<string> | undefined {
     return out
 }
 
-// ── the facade gap (DEFECT-12-STOPPING-RULE.md, cargo half) ─────────────────
+// ── the facade gap, cargo half ──────────────────────────────────────────────
 
 /** A `pub use …;` statement, attributes and line breaks included. */
 const PUB_USE_RE = /\bpub\s+use\s+([^;]+);/g
@@ -1043,7 +1043,7 @@ function moduleOfPath(relPath: string): string {
  * The trigger is the hole, with no threshold — measured, and for the same reason
  * as hackage: across twenty-two crates the unresolved fraction reads 100% on a
  * crate with one re-export and 0% on a crate with none, so a ratio separates
- * nothing. See "Defect 16" in DOC_REGRESSINONS.md for the sweep.
+ * nothing.
  */
 export function cargoExportGap(root: string): ExportGap {
     const deps = runtimeDeps(root)

@@ -154,7 +154,7 @@ export function verifyExcerpt(excerpt: string, content: string): ExcerptVerifica
  * fabrication. An excerpt assembled from several real spans is a stitched quote,
  * which is what the extraction prompt produces — and calling that a possible
  * hallucination was wrong on 21 of 21 measured cases, on a fifth of every run's
- * answers. See "Defect 18" in DOC_REGRESSINONS.md.
+ * answers.
  */
 export function formatResultText(
     header: string,

@@ -4,8 +4,8 @@
  * `hspec` indexes to a table of contents and every signature is in `hspec-core`;
  * `axum` re-exports `IntoResponse` and the trait lives in `axum-core`. Both are
  * the same failure — a query retrieves the package's own chunks and not one of
- * them defines the thing asked about — and DEFECT-12-STOPPING-RULE.md fixes the
- * boundary for following the re-export.
+ * them defines the thing asked about — so the re-export is followed exactly one
+ * hop, to a dependency the package's own name prefixes.
  *
  * The boundary is shared; the parsing is not. Haskell states the gap in an export
  * list, Rust in `pub use`, so each ecosystem answers the same three questions in

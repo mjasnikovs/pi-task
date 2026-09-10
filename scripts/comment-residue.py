@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Report banned tokens that appear inside COMMENTS, ignoring code and strings.
 
-The rules are in comment-rules.md. A comment that cites a past run, a private
-corpus, a statistic or a wall-clock number is one a new reader cannot check.
+A comment that cites a past run, a private corpus, a statistic or a wall-clock
+number is one a new reader cannot check.
 
     python3 scripts/comment-residue.py $(git ls-files '*.ts')
 

@@ -1,13 +1,12 @@
 # Docs live run — runbook
 
-The full `/task-auto` loop across TypeScript, Rust, Haskell and Go.
-Findings and open items live in `DOC_REGRESSINONS.md`; read that first — most
-open items are settled by `scripts/docs-replay.ts` and never need this.
+The full `/task-auto` loop across TypeScript, Rust, Haskell and Go. Budget 3-4
+hours.
 
-
-Only defect 14 and the abstention-rate metric require this. Budget 3-4 hours.
-Everything else the docs worker does is a subagent, and `scripts/docs-replay.ts`
-exercises it in minutes. Reach for this file only when that one cannot answer.
+This is the only instrument that DISCOVERS a defect. Everything else the docs
+worker does is a subagent, and `scripts/docs-replay.ts` exercises those in
+minutes on a recorded corpus. Reach for this file only when replay cannot
+answer the question.
 
 Five scripts in `scripts/`, nothing runs on import:
 

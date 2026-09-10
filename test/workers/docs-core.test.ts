@@ -616,7 +616,7 @@ describe('docsFocused', () => {
 })
 
 describe('buildVersionBanner — resolvable but not declared', () => {
-    // Live run 2026-09-05, the Rust HARD FAIL (DOC_REGRESSINONS.md section 4).
+    // Live run 2026-09-05, the Rust HARD FAIL.
     // `tower 0.5.3` is in Cargo.lock, pulled in transitively by axum, and absent
     // from [dependencies]. The tool answered `tower::util::ServiceExt` in full
     // confidence, the model wrote that import, and the crate did not compile:

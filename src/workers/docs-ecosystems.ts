@@ -241,7 +241,7 @@ export interface EcosystemProfile {
     /**
      * Packages whose declarations belong in THIS package's index, because this
      * package exports names it does not declare — `hspec`/`hspec-core`,
-     * `axum`/`axum-core`; see DEFECT-12-STOPPING-RULE.md.
+     * `axum`/`axum-core`.
      */
     supplements?: (pkg: ResolvedPackage, cwd: string, io: EcosystemIo) => Promise<ResolvedPackage[]>
     /**

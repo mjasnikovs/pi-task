@@ -1,5 +1,5 @@
 /**
- * Defect 16 — the cargo half of DEFECT-12-STOPPING-RULE.md, on axum's real shape.
+ * The facade gap, cargo half, on axum's real shape.
  *
  * `pub trait IntoResponse` is declared in `axum-core`; `axum` only `pub use`s it,
  * so a query for it retrieves eight chunks and none of them define anything. The

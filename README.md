@@ -268,7 +268,7 @@ bun run lint       # prettier + eslint + tsc --noEmit
 bun run build      # tsc → dist/
 ```
 
-Built with [Bun](https://bun.sh), TypeScript (strict), and [TypeBox](https://github.com/sinclairzx81/typebox) for tool schemas. Design plans live in [`plans/`](./plans).
+Built with [Bun](https://bun.sh), TypeScript (strict), and [TypeBox](https://github.com/sinclairzx81/typebox) for tool schemas.
 
 ## License
 

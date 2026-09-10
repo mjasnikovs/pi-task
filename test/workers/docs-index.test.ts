@@ -348,7 +348,7 @@ describe('one name, two registries', () => {
 })
 
 describe('parallel ESM/CJS declarations index once', () => {
-    // Live run 2026-09-05 (DOC_REGRESSINONS.md section 2). zod: 2565 chunks,
+    // Live run 2026-09-05. zod: 2565 chunks,
     // 1215 distinct BODIES, 1280 of them from `.d.cts`. hono ships no `.d.cts`
     // and has 704/708 distinct, which is what makes the cause unambiguous.
     // The cost is the top-8 retrieval budget: a package indexed twice can spend
@@ -411,7 +411,7 @@ describe('parallel ESM/CJS declarations index once', () => {
 })
 
 describe('a back-compat major directory is not indexed', () => {
-    // Live run 2026-09-05 (DOC_REGRESSINONS.md section 1). zod@4.5.4 ships a
+    // Live run 2026-09-05. zod@4.5.4 ships a
     // `v3/` directory for back-compat and 414 of its 2565 chunks came from it.
     // BM25 cannot tell them apart — same identifiers, same package, and the path
     // is not a ranking signal. An answer shipped v3's
@@ -505,7 +505,8 @@ describe('a facade package reaches its implementation', () => {
     // hspec indexes to 14 chunks of export lists. `it`, `describe` and `shouldBe`
     // are in the corpus as bare names; every signature is in hspec-core, and the
     // child abstained three times because the tool returned everything it had.
-    // DEFECT-12-STOPPING-RULE.md carries the boundary and the measurement.
+    // The boundary: a `build-depends` entry sharing the package's name prefix,
+    // only the declarations matching an unresolved name, and one hop only.
     const facade = () => resolveHackage('tiny-facade', HS_MODULES, {modulesDir: HS_MODULES})
     const core = () => resolveHackage('tiny-facade-core', HS_MODULES, {modulesDir: HS_MODULES})
     const expect_ = () => resolveHackage('tiny-facade-expect', HS_MODULES, {modulesDir: HS_MODULES})

@@ -472,7 +472,7 @@ describe('enrichment is gated on the project manifest', () => {
 })
 
 describe('the research binding fetches no package docs', () => {
-    // Evidence, live run 2026-09-05 (DOC_REGRESSINONS.md sections 5 and below):
+    // Evidence, live run 2026-09-05:
     //  - the docs query was `refined.split('\n')[0]`, which is the literal word
     //    "GOAL" for every refined spec these runs produce;
     //  - hs TASK_0002 spent all three ENRICH_CAP slots on `config.json`, `name`
