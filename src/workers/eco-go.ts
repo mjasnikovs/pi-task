@@ -26,7 +26,7 @@ import * as os from 'node:os'
 import * as path from 'node:path'
 import {ResolveError, type ResolvedPackage} from './docs-resolve.js'
 import {findAtOrAbove} from './eco-cargo.js'
-import {buildConstraint, splitGoItems} from './go-surface.js'
+import {buildConstraint, codeOnly, splitGoItems} from './go-surface.js'
 import {readZip, readEntry, isUnsafeEntryName} from '../shared/zip.js'
 import {acquireStdlibPackage, findInGoroot, findSliced} from './go-stdlib.js'
 import type {NpmVersionInfo} from './npm-version.js'
@@ -726,15 +726,21 @@ function holdsByDefault(src: string): boolean {
  * line, and reading those keeps the very subpackage `selectOwnPackage` exists to
  * drop. A regex cannot draw that line — a column-0 `import (` also sits inside a
  * generator template's raw string and inside a doc comment's example — so the
- * split is the surface scanner's, which already skips comments and literals.
+ * split is the surface scanner's. That split strips only the comments BETWEEN
+ * declarations, and a commented-out import line inside the block is ordinary Go,
+ * so the item's own comments come off too.
  * An `ImportPath` is a `string_lit`, so the backtick form is legal Go and
  * dropping it silently drops everything reachable only through it.
  */
 function importsOf(src: string): string[] {
     const out: string[] = []
     for (const item of splitGoItems(src)) {
-        if (!/^import\b/.test(item.text)) continue
-        for (const m of item.text.matchAll(/"([^"\n]+)"|`([^`]+)`/g)) out.push(m[1] ?? m[2])
+        if (/^package\b/.test(item.text)) continue
+        // Go puts every import declaration before every other one, so the first
+        // item that is not an import ends the search.
+        if (!/^import\b/.test(item.text)) break
+        for (const m of codeOnly(item.text).matchAll(/"([^"\n]+)"|`([^`]+)`/g))
+            out.push(m[1] ?? m[2])
     }
     return out
 }
@@ -854,6 +860,7 @@ export function goContentFingerprintParts(): string[] {
         String(selectOwnPackage),
         String(declaresApi),
         String(goMajor),
-        String(importsOf)
+        String(importsOf),
+        String(codeOnly)
     ]
 }

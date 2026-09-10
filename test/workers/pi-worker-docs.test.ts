@@ -519,75 +519,87 @@ test('naming the ecosystem scopes the cache key; letting the manifest decide doe
     )
 })
 
-test('the no-cache fallback applies the selection rules, not a raw walk', async () => {
-    // The uncached path assembles the package by hand into ONE truncated blob, so
-    // it is the path where a `.d.cts` twin costs the most.
-    const dir = tmpDir('docs-nocache-select-')
-    const pkg = path.join(dir, 'node_modules', 'twin-pkg')
-    fs.mkdirSync(pkg, {recursive: true})
-    fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({name: 'host'}))
-    fs.writeFileSync(
-        path.join(pkg, 'package.json'),
-        JSON.stringify({name: 'twin-pkg', version: '1.0.0', types: 'index.d.ts'})
-    )
-    fs.writeFileSync(path.join(pkg, 'index.d.ts'), 'export declare function esmOnly(): void\n')
-    fs.writeFileSync(path.join(pkg, 'index.d.cts'), 'export declare function cjsTwin(): void\n')
-    let promptSeen = ''
-    try {
-        await runTool(
-            {
-                openCache: () => {
-                    throw new Error('disk full')
-                },
-                npmVersionLookup: async () => null,
-                spawn: fakeSpawnByPrompt(args => {
-                    promptSeen = args[args.length - 1]
-                    return {stdout: '<answer>ok</answer>\n<excerpt>esmOnly</excerpt>'}
-                })
-            },
-            {module: 'twin-pkg', query: 'esmOnly'},
-            dir
+// Two regressions on one fixture. The fallback assembles the package by hand
+// into ONE truncated blob, so a `.d.cts` twin costs the most there: a raw walk
+// kept both halves, and prepending `pkg.entry` blind put the twin back at the
+// head whenever a CJS-first package named it in `types`.
+for (const types of ['index.d.ts', 'index.d.cts'] as const) {
+    test(`the no-cache fallback drops the .d.cts twin, types: ${types}`, async () => {
+        const dir = tmpDir('docs-nocache-twin-')
+        const pkg = path.join(dir, 'node_modules', 'twin-pkg')
+        fs.mkdirSync(pkg, {recursive: true})
+        fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({name: 'host'}))
+        fs.writeFileSync(
+            path.join(pkg, 'package.json'),
+            JSON.stringify({name: 'twin-pkg', version: '1.0.0', types})
         )
-        expect(promptSeen).toContain('index.d.ts')
-        expect(promptSeen).not.toContain('index.d.cts')
-    } finally {
-        fs.rmSync(dir, {recursive: true, force: true})
-    }
-})
+        fs.writeFileSync(path.join(pkg, 'index.d.ts'), 'export declare function esmOnly(): void\n')
+        fs.writeFileSync(path.join(pkg, 'index.d.cts'), 'export declare function cjsTwin(): void\n')
+        let promptSeen = ''
+        try {
+            await runTool(
+                {
+                    openCache: () => {
+                        throw new Error('disk full')
+                    },
+                    npmVersionLookup: async () => null,
+                    spawn: fakeSpawnByPrompt(args => {
+                        promptSeen = args[args.length - 1]
+                        return {stdout: '<answer>ok</answer>\n<excerpt>esmOnly</excerpt>'}
+                    })
+                },
+                {module: 'twin-pkg', query: 'esmOnly'},
+                dir
+            )
+            expect(promptSeen).toContain('index.d.ts')
+            expect(promptSeen).not.toContain('index.d.cts')
+        } finally {
+            fs.rmSync(dir, {recursive: true, force: true})
+        }
+    })
+}
 
-test('the no-cache fallback does not put the entry back after a rule dropped it', async () => {
-    // A CJS-first package names its `.d.cts` in `types`, so the entry IS the twin
-    // that `dropParallelDeclarations` removes. Prepending it unconditionally put
-    // it back, and put it at the HEAD of the one truncated blob.
-    const dir = tmpDir('docs-nocache-entry-')
-    const pkg = path.join(dir, 'node_modules', 'cjs-first')
-    fs.mkdirSync(pkg, {recursive: true})
-    fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({name: 'host'}))
-    fs.writeFileSync(
-        path.join(pkg, 'package.json'),
-        JSON.stringify({name: 'cjs-first', version: '1.0.0', types: 'index.d.cts'})
-    )
-    fs.writeFileSync(path.join(pkg, 'index.d.ts'), 'export declare function esmOnly(): void\n')
-    fs.writeFileSync(path.join(pkg, 'index.d.cts'), 'export declare function cjsTwin(): void\n')
-    let promptSeen = ''
-    try {
-        await runTool(
-            {
-                openCache: () => {
-                    throw new Error('disk full')
-                },
-                npmVersionLookup: async () => null,
-                spawn: fakeSpawnByPrompt(args => {
-                    promptSeen = args[args.length - 1]
-                    return {stdout: '<answer>ok</answer>\n<excerpt>esmOnly</excerpt>'}
-                })
-            },
-            {module: 'cjs-first', query: 'esmOnly'},
-            dir
+// A package naming a `.ts` in `types` was never a surface-file candidate, so the
+// walk cannot have "dropped" it — but the entry gate could not tell that from a
+// twin a rule removed, and answered as if the package had no declarations.
+for (const path_ of ['src/index.ts', 'index.d.ts'] as const) {
+    test(`a package whose types names ${path_} is read`, async () => {
+        const dir = tmpDir('docs-entry-kind-')
+        const pkg = path.join(dir, 'node_modules', 'entry-kind')
+        fs.mkdirSync(path.join(pkg, 'src'), {recursive: true})
+        fs.writeFileSync(
+            path.join(dir, 'package.json'),
+            JSON.stringify({name: 'host', dependencies: {'entry-kind': '^1.0.0'}})
         )
-        expect(promptSeen).toContain('index.d.ts')
-        expect(promptSeen).not.toContain('index.d.cts')
-    } finally {
+        fs.writeFileSync(
+            path.join(pkg, 'package.json'),
+            JSON.stringify({name: 'entry-kind', version: '1.0.0', types: path_})
+        )
+        fs.writeFileSync(path.join(pkg, path_), 'export declare function onlyHere(): void\n')
+        for (const openCacheFn of [
+            () => openCache(':memory:'),
+            () => {
+                throw new Error('disk full')
+            }
+        ]) {
+            let promptSeen = ''
+            const result = await runTool(
+                {
+                    openCache: openCacheFn,
+                    npmVersionLookup: async () => null,
+                    spawn: fakeSpawnByPrompt(args => {
+                        promptSeen = args[args.length - 1]
+                        return {stdout: '<answer>ok</answer>\n<excerpt>onlyHere</excerpt>'}
+                    })
+                },
+                {module: 'entry-kind', query: 'onlyHere'},
+                dir
+            )
+            expect(promptSeen).toContain('onlyHere')
+            expect((result.content[0] as {type: 'text'; text: string}).text).toContain(
+                'Per entry-kind@1.0.0:'
+            )
+        }
         fs.rmSync(dir, {recursive: true, force: true})
-    }
-})
+    })
+}

@@ -776,16 +776,28 @@ test('a string that is not an import path does not reach a subpackage', () => {
     expect(kept).toEqual(['bar.go'])
 })
 
-test('a doc-only root does not wipe the module', () => {
-    // cloud.google.com/go's root is a package clause and nothing else; the whole
-    // API is in subdirectories, and the closure alone keeps only `doc.go`.
-    const {root, paths} = goTree({
-        'doc.go': '// Package cloud is the root doc.\npackage cloud\n',
-        'storage/storage.go': 'package storage\n\nfunc NewClient() {}\n',
-        'bigquery/bq.go': 'package bigquery\n\ntype Client struct{}\n'
+// cloud.google.com/go's root is a doc and nothing else, and its whole API is in
+// subdirectories. The closure alone keeps only `doc.go`; a wrapped prose line
+// beginning `type ` at column 0 then made the root look like the API instead.
+for (const [shape, doc] of [
+    ['a line comment', '// Package cloud is the root doc.\npackage cloud\n'],
+    [
+        'prose in a block comment',
+        '/*\nPackage cloud is the root doc.\n\nThe returned\ntype implements the Stringer interface.\n*/\npackage cloud\n'
+    ]
+] as const) {
+    test(`a doc-only root of ${shape} does not wipe the module`, () => {
+        const {root, paths} = goTree({
+            'doc.go': doc,
+            'storage/storage.go': 'package storage\n\nfunc NewClient() {}\n',
+            'bigquery/bq.go': 'package bigquery\n\ntype Client struct{}\n'
+        })
+        const kept = selectOwnPackage(paths, root, NAME, 'v0.1.0').map(f =>
+            path.relative(root, f).replace(/\\/g, '/')
+        )
+        expect(kept.sort()).toEqual(['bigquery/bq.go', 'doc.go', 'storage/storage.go'])
     })
-    expect(selectOwnPackage(paths, root, NAME, 'v0.1.0').length).toBe(3)
-})
+}
 
 test('a backtick import reaches its subpackage', () => {
     // A Go ImportPath is a string_lit, so the raw-string form is legal.
@@ -812,19 +824,6 @@ test('a grouped import block reaches every subpackage it names', () => {
     expect(kept.sort()).toEqual(['bar.go', 'binding/binding.go', 'render/render.go'])
 })
 
-test('prose in a doc comment is not a declaration', () => {
-    // cloud.google.com/go's doc.go is one block comment. A wrapped sentence
-    // beginning `type ` sits at column 0 and read as a declaration, which made the
-    // root look like the API and dropped every subdirectory — the whole module.
-    const {root, paths} = goTree({
-        'doc.go':
-            '/*\nPackage cloud is the root doc.\n\nThe returned\ntype implements the Stringer interface.\n*/\npackage cloud\n',
-        'storage/storage.go': 'package storage\n\nfunc NewClient() {}\n',
-        'bigquery/bq.go': 'package bigquery\n\ntype Client struct{}\n'
-    })
-    expect(selectOwnPackage(paths, root, NAME, 'v0.1.0').length).toBe(3)
-})
-
 test('an import block inside a raw string does not reach a subpackage', () => {
     // A code-generator template holds a whole import block at column 0.
     const {root, paths} = goTree({
@@ -847,3 +846,32 @@ test('an import block inside a block comment does not reach a subpackage', () =>
     )
     expect(kept).toEqual(['bar.go'])
 })
+
+// A commented-out import is one of the commonest shapes in real Go source, and
+// `splitGoItems` only strips comments BETWEEN declarations — one inside or
+// trailing an import block stays in the item's own text.
+for (const [shape, barGo] of [
+    [
+        'a line comment inside the block',
+        `package bar\n\nimport (\n\t"fmt"\n\t// deprecated, use "${NAME}/ginS"\n)\n\nvar _ = fmt.Sprint\n`
+    ],
+    [
+        'a comment trailing the import',
+        `package bar\n\nimport "fmt" // see "${NAME}/ginS"\n\nvar _ = fmt.Sprint\n`
+    ],
+    [
+        'a block comment inside the block',
+        `package bar\n\nimport (\n\t"fmt"\n\t/* was "${NAME}/ginS" */\n)\n\nvar _ = fmt.Sprint\n`
+    ]
+] as const) {
+    test(`${shape} does not reach a subpackage`, () => {
+        const {root, paths} = goTree({
+            'bar.go': barGo,
+            'ginS/gins.go': 'package ginS\n\ntype S struct{}\n'
+        })
+        const kept = selectOwnPackage(paths, root, NAME, 'v1.2.0').map(f =>
+            path.relative(root, f).replace(/\\/g, '/')
+        )
+        expect(kept).toEqual(['bar.go'])
+    })
+}

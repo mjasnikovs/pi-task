@@ -100,11 +100,16 @@ function computeContentHash(
     hash.update(Buffer.from(chunkerFingerprint(), 'utf8'))
     hash.update(ZERO_SEP)
     // Source text, the same trick as `declSplitRe.source`: the fingerprint moves
-    // whenever the selection rule does, with nothing to remember to bump.
+    // whenever the selection rule does, with nothing to remember to bump. The
+    // walker is here because it decides which files EXIST to be selected, and it
+    // sits one level below `String(ingestBody)` — the level three earlier fixes
+    // hid in.
     hash.update(
         Buffer.from(
             `${String(profile.isSurfaceFile)}\u0000${String(profile.selectFiles)}`
-                + `\u0000${String(dropDeadMajors)}`,
+                + `\u0000${String(dropDeadMajors)}\u0000${String(walkSurface)}`
+                + `\u0000${String(withinPackage)}\u0000${String(entryFirst)}`
+                + `\u0000${profile.skipDirs.join(',')}`,
             'utf8'
         )
     )
@@ -143,7 +148,9 @@ function computeContentHash(
 }
 
 function walkSurface(root: string, profile: EcosystemProfile): string[] {
-    const out: string[] = []
+    // A set, not a list: two links to one file are one file, and the uncached
+    // path prints this list into a single already-truncated blob.
+    const out = new Set<string>()
     const stack: string[] = [root]
     // A directory symlink is followed by its resolved target, so one pointing at
     // an ancestor inside `root` walks the same subtree forever without this.
@@ -168,23 +175,38 @@ function walkSurface(root: string, profile: EcosystemProfile): string[] {
                 } catch {
                     continue
                 }
-                const relReal = path.relative(root, realPath)
-                if (relReal.startsWith('..')) continue
+                if (!withinPackage(root, realPath, profile)) continue
                 if (stat.isDirectory()) {
                     if (walked.has(realPath)) continue
                     walked.add(realPath)
                     stack.push(realPath)
-                } else if (stat.isFile() && profile.isSurfaceFile(realPath)) out.push(realPath)
+                    // Surface-ness is the visible name's, identity is the target's:
+                    // `index.d.ts -> src/impl.ts` is what a consumer imports, and
+                    // `helpers_test.go -> helpers.go` is still a test file.
+                } else if (stat.isFile() && profile.isSurfaceFile(entry.name)) out.add(realPath)
                 continue
             }
             if (entry.isDirectory()) {
                 if (walked.has(full)) continue
                 walked.add(full)
                 stack.push(full)
-            } else if (entry.isFile() && profile.isSurfaceFile(entry.name)) out.push(full)
+            } else if (entry.isFile() && profile.isSurfaceFile(entry.name)) out.add(full)
         }
     }
-    return out.sort()
+    return [...out].sort()
+}
+
+/**
+ * Is this symlink target part of the package, by the same rules its own tree obeys?
+ *
+ * The link's NAME cleared `skipDirs`; the path it resolves to has to as well, or
+ * `deps -> node_modules` files another package's declarations under this one's
+ * name and version banner.
+ */
+function withinPackage(root: string, realPath: string, profile: EcosystemProfile): boolean {
+    const rel = path.relative(root, realPath)
+    if (rel.startsWith('..')) return false
+    return !rel.split(path.sep).some(seg => profile.skipDirs.includes(seg))
 }
 
 /**
@@ -246,10 +268,50 @@ function dropDeadMajors(files: string[], root: string, version: string): string[
 export function collectFiles(pkg: ResolvedPackage, profile: EcosystemProfile): CollectedFiles {
     const walked = walkSurface(pkg.root, profile)
     const surface = dropDeadMajors(walked, pkg.root, pkg.version)
-    return {
-        surface: profile.selectFiles ? profile.selectFiles(surface, pkg) : surface,
-        readme: pkg.readme
+    const selected = profile.selectFiles ? profile.selectFiles(surface, pkg) : surface
+    return {surface: entryFirst(selected, walked, pkg), readme: pkg.readme}
+}
+
+/** The list's own spelling of `entry`, resolving links only if the plain compare misses. */
+function sameFile(files: readonly string[], entry: string): string | null {
+    const direct = files.find(f => f === entry)
+    if (direct !== undefined) return direct
+    const real = realpathOr(entry)
+    return files.find(f => f === real || realpathOr(f) === real) ?? null
+}
+
+function realpathOr(file: string): string {
+    try {
+        return fs.realpathSync(file)
+    } catch {
+        return file
     }
+}
+
+/**
+ * The manifest's entry at the head, and back in the list when the walk never
+ * offered it.
+ *
+ * Two different questions, and membership alone cannot tell them apart. A rule
+ * that DROPPED the entry is doing its job — a CJS-first package names the
+ * `.d.cts` twin `dropParallelDeclarations` removes, and putting it back blind
+ * put it at the head of the truncated blob. A package naming a `src/index.ts`
+ * in `types` was never a surface-file candidate at all, and answering "has no
+ * .d.ts files" for it is not the same as answering without one file.
+ *
+ * The head matters on the uncached path, which prints this list into one
+ * truncated blob and nothing else.
+ */
+function entryFirst(
+    selected: readonly string[],
+    walked: readonly string[],
+    pkg: ResolvedPackage
+): string[] {
+    if (pkg.entry === null) return [...selected]
+    const kept = sameFile(selected, pkg.entry)
+    if (kept !== null) return [kept, ...selected.filter(f => f !== kept)]
+    if (sameFile(walked, pkg.entry) !== null) return [...selected]
+    return fs.existsSync(pkg.entry) ? [pkg.entry, ...selected] : [...selected]
 }
 
 function ingestBody(

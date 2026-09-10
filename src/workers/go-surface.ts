@@ -187,6 +187,37 @@ function endsStatement(word: string, lastChar: string): boolean {
 }
 
 /**
+ * A declaration's text with its comments removed and its literals intact.
+ *
+ * `splitGoItems` strips only what sits BETWEEN declarations. A comment inside an
+ * import block, or trailing one, stays in the item's own text, so a caller
+ * reading string literals out of a declaration reads the commented-out ones too
+ * — and a commented-out import is one of the commonest shapes in Go source.
+ */
+export function codeOnly(text: string): string {
+    let out = ''
+    let i = 0
+    while (i < text.length) {
+        const c = text[i]
+        if (c === '/' && text[i + 1] === '/') {
+            const nl = text.indexOf('\n', i)
+            i = nl < 0 ? text.length : nl
+        } else if (c === '/' && text[i + 1] === '*') {
+            const close = text.indexOf('*/', i + 2)
+            i = close < 0 ? text.length : close + 2
+        } else if (c === '"' || c === "'" || c === '`') {
+            const end = skipLiteral(text, i)
+            out += text.slice(i, end)
+            i = end
+        } else {
+            out += c
+            i++
+        }
+    }
+    return out
+}
+
+/**
  * Split source into declarations. Works unchanged on a struct body or a const
  * group, whose members obey the same semicolon rule with no keyword in front.
  */
@@ -562,6 +593,7 @@ export function goContentFingerprint(): string {
         endsStatement,
         skipToCode,
         skipLiteral,
+        codeOnly,
         trailingGroup,
         splitBody,
         buildConstraint,

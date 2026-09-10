@@ -837,14 +837,11 @@ function docsRawUncached(
     autoInstalled: boolean
 ): DocsRawResult {
     const parts: string[] = []
+    // Already entry-first, and already past the selection rules: assembling that
+    // order here needed the entry compared against a list the walker spells with
+    // its own resolved paths, and a miss read as "a rule dropped it".
     const surfaceFiles = collectFiles(pkg, profile).surface
-    // Only an entry the rules KEPT goes first. A CJS-first package names its
-    // `.d.cts` in `types`, so the entry is exactly the twin `collectFiles` drops,
-    // and prepending it blind put it back at the head of the truncated blob.
-    const entry = pkg.entry !== null && surfaceFiles.includes(pkg.entry) ? pkg.entry : null
-    const entryFirst =
-        entry === null ? surfaceFiles : [entry, ...surfaceFiles.filter(f => f !== entry)]
-    for (const abs of entryFirst) {
+    for (const abs of surfaceFiles) {
         let raw: string
         try {
             raw = fs.readFileSync(abs, 'utf8')

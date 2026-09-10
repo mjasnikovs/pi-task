@@ -4,7 +4,7 @@ import {splitAtMatches, chunkDeclarations} from '../../src/workers/docs-chunk.js
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 import {openCache} from '../../src/workers/docs-cache.js'
-import {ensureIndexed, chunkerFingerprint} from '../../src/workers/docs-index.js'
+import {ensureIndexed, chunkerFingerprint, collectFiles} from '../../src/workers/docs-index.js'
 import {ECOSYSTEMS} from '../../src/workers/docs-ecosystems.js'
 import {retrieveChunks} from '../../src/workers/docs-retrieve.js'
 import {resolvePackage, type ResolvedPackage} from '../../src/workers/docs-resolve.js'
@@ -679,27 +679,141 @@ describe('a cargo facade reaches its implementation', () => {
     })
 })
 
+/**
+ * How much slower than a MEASURED control counts as "did not finish".
+ *
+ * The control is the same script over the same tree with the symlink removed, so
+ * it already carries this host's bun start-up and this module graph's transpile.
+ * A walk that loops has no finishing time to be a multiple of; the only job of
+ * the factor is to leave a loaded second run room to be slow.
+ */
+const LOOP_BOUND = 20
+
+/** Walk `root` in a child process, because a regression here never returns. */
+function walkOutOfProcess(root: string, timeout?: number): {surface: string; ms: number} {
+    const indexMod = path.resolve(__dirname, '../../src/workers/docs-index.ts')
+    const ecoMod = path.resolve(__dirname, '../../src/workers/docs-ecosystems.ts')
+    const script = [
+        `const {collectFiles} = await import(${JSON.stringify(indexMod)})`,
+        `const {ECOSYSTEMS} = await import(${JSON.stringify(ecoMod)})`,
+        `const pkg = {ecosystem:'npm',name:'p',version:'1.0.0',root:${JSON.stringify(root)},entry:null,readme:null}`,
+        `console.log(collectFiles(pkg, ECOSYSTEMS.npm).surface.length)`
+    ].join('\n')
+    const started = Date.now()
+    // The bun running this suite, not whichever one PATH happens to resolve to.
+    const run = Bun.spawnSync([process.execPath, '-e', script], timeout ? {timeout} : {})
+    const ms = Date.now() - started
+    if (run.exitCode !== 0) {
+        throw new Error(`exit ${run.exitCode} after ${ms}ms\n${run.stderr.toString()}`)
+    }
+    return {surface: run.stdout.toString().trim(), ms}
+}
+
 test('a directory symlink pointing at an ancestor terminates the walk', () => {
-    // Run out-of-process: a regression here is an infinite SYNCHRONOUS loop, which
-    // no in-process test timeout can interrupt.
-    const dir = tmpDir('docs-symlink-loop-')
+    const root = symlinkRoot('docs-symlink-loop-')
+    if (!canSymlink(root)) return
+    fs.mkdirSync(path.join(root, 'sub'), {recursive: true})
+    fs.writeFileSync(path.join(root, 'a.d.ts'), 'export declare const a: number\n')
+    const control = walkOutOfProcess(root)
+    expect(control.surface).toBe('1')
+    fs.symlinkSync(root, path.join(root, 'sub', 'up'), 'dir')
+    expect(walkOutOfProcess(root, control.ms * LOOP_BOUND).surface).toBe('1')
+})
+
+/**
+ * A package root, realpath'd.
+ *
+ * `os.tmpdir()` is a symlink on macOS and an 8.3 short path on Windows, so a
+ * `realpathSync` inside the walker returns a path that `path.relative` reads as
+ * escaping the root. The walker then skips the symlink for a reason that has
+ * nothing to do with the rule under test, and the assertion holds either way.
+ */
+function symlinkRoot(prefix: string): string {
+    const root = path.join(fs.realpathSync(tmpDir(prefix)), 'pkg')
+    fs.mkdirSync(root, {recursive: true})
+    return root
+}
+
+/** Whether this host lets an unprivileged process create a symlink at all. */
+function canSymlink(root: string): boolean {
+    const probe = path.join(root, '.symlink-probe')
     try {
-        const pkg = path.join(dir, 'pkg')
-        fs.mkdirSync(path.join(pkg, 'sub'), {recursive: true})
-        fs.writeFileSync(path.join(pkg, 'a.d.ts'), 'export declare const a: number\n')
-        fs.symlinkSync(pkg, path.join(pkg, 'sub', 'up'), 'dir')
-        const indexMod = path.resolve(__dirname, '../../src/workers/docs-index.ts')
-        const ecoMod = path.resolve(__dirname, '../../src/workers/docs-ecosystems.ts')
-        const script = [
-            `const {collectFiles} = await import(${JSON.stringify(indexMod)})`,
-            `const {ECOSYSTEMS} = await import(${JSON.stringify(ecoMod)})`,
-            `const pkg = {ecosystem:'npm',name:'p',version:'1.0.0',root:${JSON.stringify(pkg)},entry:null,readme:null}`,
-            `console.log(collectFiles(pkg, ECOSYSTEMS.npm).surface.length)`
-        ].join('\n')
-        const run = Bun.spawnSync(['bun', '-e', script], {timeout: 20_000})
-        expect(run.exitCode).toBe(0)
-        expect(run.stdout.toString().trim()).toBe('1')
+        fs.symlinkSync(root, probe, 'dir')
+        fs.unlinkSync(probe)
+        return true
+    } catch {
+        return false
+    }
+}
+
+const npmPkg = (root: string): ResolvedPackage => ({
+    ecosystem: 'npm',
+    name: 'p',
+    version: '1.0.0',
+    root,
+    entry: null,
+    readme: null
+})
+
+const relSurface = (root: string, profile = ECOSYSTEMS.npm): string[] =>
+    collectFiles(npmPkg(root), profile).surface.map(f => path.relative(root, f).replace(/\\/g, '/'))
+
+test('a symlink is judged by where it POINTS, so it cannot smuggle in a skipped tree', () => {
+    // `skipDirs` is what keeps another package's declarations from being filed
+    // under this one's name and version banner. Testing only the link's own name
+    // lets `deps -> node_modules` walk straight past it.
+    const root = symlinkRoot('docs-symlink-skipdir-')
+    if (!canSymlink(root)) return
+    fs.mkdirSync(path.join(root, 'node_modules', 'dep'), {recursive: true})
+    fs.writeFileSync(path.join(root, 'a.d.ts'), 'export declare const a: number\n')
+    fs.writeFileSync(
+        path.join(root, 'node_modules', 'dep', 'other.d.ts'),
+        'export declare const other: number\n'
+    )
+    fs.symlinkSync(path.join(root, 'node_modules'), path.join(root, 'deps'), 'dir')
+    expect(relSurface(root)).toEqual(['a.d.ts'])
+})
+
+test('a file reached twice is listed once', () => {
+    // The uncached fallback prints the surface into ONE truncated blob, so a
+    // second copy of a file spends the budget it is shortest on.
+    const root = symlinkRoot('docs-symlink-dup-')
+    if (!canSymlink(root)) return
+    fs.writeFileSync(path.join(root, 'a.d.ts'), 'export declare const a: number\n')
+    fs.symlinkSync(path.join(root, 'a.d.ts'), path.join(root, 'b.d.ts'), 'file')
+    expect(relSurface(root)).toEqual(['a.d.ts'])
+})
+
+test('surface-ness is judged on the name the walk saw, not the target it resolves to', () => {
+    // `index.d.ts -> src/impl.ts` is the name a consumer imports; asking the
+    // target instead dropped the declaration file entirely.
+    const root = symlinkRoot('docs-symlink-name-')
+    if (!canSymlink(root)) return
+    fs.mkdirSync(path.join(root, 'src'), {recursive: true})
+    fs.writeFileSync(path.join(root, 'keep.d.ts'), 'export declare const k: number\n')
+    fs.writeFileSync(path.join(root, 'src', 'impl.ts'), 'export const impl = 1\n')
+    fs.symlinkSync(path.join(root, 'src', 'impl.ts'), path.join(root, 'index.d.ts'), 'file')
+    expect(relSurface(root)).toEqual(['keep.d.ts', 'src/impl.ts'])
+})
+
+test('the content hash moves when the walk rule does', () => {
+    // Every other rule in the pipeline is hashed by source. `walkSurface` and
+    // `skipDirs` decide which files exist at all, and a change to either used to
+    // leave every cached package holding the rows the old rule chose.
+    const root = symlinkRoot('docs-hash-skipdirs-')
+    fs.mkdirSync(path.join(root, 'extras'), {recursive: true})
+    fs.writeFileSync(path.join(root, 'a.d.ts'), 'export declare const a: number\n')
+    fs.writeFileSync(path.join(root, 'extras', 'b.d.ts'), 'export declare const b: number\n')
+    const cache = openCache(':memory:')
+    try {
+        const wide = ensureIndexed(cache, npmPkg(root), ECOSYSTEMS.npm)
+        const narrow = ensureIndexed(cache, npmPkg(root), {
+            ...ECOSYSTEMS.npm,
+            skipDirs: [...ECOSYSTEMS.npm.skipDirs, 'extras']
+        })
+        expect(narrow.contentHash).not.toBe(wide.contentHash)
+        expect(narrow.hitCache).toBe(false)
     } finally {
-        fs.rmSync(dir, {recursive: true, force: true})
+        cache.close()
     }
 })
