@@ -37,9 +37,8 @@ that says "do not stop" enforces nothing on a session that has already stopped.
 /loop 10m Continue the docs loop in DOC_REGRESSINONS.md …
 ```
 
-The full line is step 0 of `NEXT-SESSION-PROMPT.md`. It re-enters this loop every
-ten minutes, so an item closing no longer ends the session. It is session-only, so
-it is armed fresh each time.
+It re-enters this loop every ten minutes, so an item closing no longer ends the
+session. It is session-only, so it is armed fresh each time.
 
 **An empty "Still open" is not the end either.** Replay and retrieval VERIFY; they
 cannot discover. When nothing is left to verify, run the full loop in

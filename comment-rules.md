@@ -28,7 +28,8 @@ Checked on 2026-08-29, not assumed:
 
 ONE FILE AT A TIME. ONE COMMENT AT A TIME. ONE CLAIM AT A TIME.
 
-Take the first row in `comment-leg.md` whose `verified` column is `false`.
+Run `node scripts/comment-ledger.mjs`, then take the first row in the
+`comment-leg.md` it writes whose `verified` column is `false`.
 Open that file. Read every comment in it, top to bottom. For each claim:
 
 1. **Name the claim.** Write it as one sentence. A comment usually makes
