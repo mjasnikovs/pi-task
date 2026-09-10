@@ -467,7 +467,6 @@ interface TrackedRequest {
     status: number | null
     mimeType: string | null
     failed: boolean
-    at: number
 }
 
 /** Minimal DevTools-protocol client: request/response ids over one socket, plus
@@ -846,8 +845,7 @@ export async function driveSession(
             type: String(p.type ?? ''),
             status: null,
             mimeType: null,
-            failed: false,
-            at: Date.now()
+            failed: false
         })
         lastActivity = Date.now()
     })
@@ -917,24 +915,31 @@ export async function driveSession(
         isData(r) ? 'xhr'
         : r.type === 'Document' ? 'document'
         : 'other'
-    /** The same-origin request log, phased against the sign-in request. `authAt` is
-     *  Infinity before the submit, so every request so far is 'pre'. */
-    const sessionLog = (authId: string | null, authAt: number): SessionRequest[] => {
+    /** The same-origin request log, phased against the sign-in request. Phase comes
+     *  from EVENT ORDER — the `requests` Map iterates in requestWillBeSent arrival
+     *  order — not wall-clock timestamps: a request batch can straddle a millisecond
+     *  boundary on a loaded host, so timestamp comparison mis-classes the order.
+     *  `authIdx` is the last index that is still 'pre', so Infinity before the
+     *  submit makes every request so far 'pre'. */
+    const sessionLog = (authId: string | null, authIdx: number): SessionRequest[] => {
         const out: SessionRequest[] = []
+        let idx = 0
         for (const [id, r] of requests) {
-            if (!sameOrigin(r)) continue
-            out.push({
-                method: r.method,
-                path: pathOf(r.url),
-                status: r.status,
-                mimeType: r.mimeType,
-                failed: r.failed,
-                initiator: initiatorOf(r),
-                phase:
-                    id === authId ? 'auth'
-                    : r.at >= authAt ? 'post'
-                    : 'pre'
-            })
+            if (sameOrigin(r)) {
+                out.push({
+                    method: r.method,
+                    path: pathOf(r.url),
+                    status: r.status,
+                    mimeType: r.mimeType,
+                    failed: r.failed,
+                    initiator: initiatorOf(r),
+                    phase:
+                        id === authId ? 'auth'
+                        : idx > authIdx ? 'post'
+                        : 'pre'
+                })
+            }
+            idx++
         }
         return out
     }
@@ -957,7 +962,9 @@ export async function driveSession(
 
     if (!before.hasPassword || credentials === null) return judge(unsubmitted({}))
 
-    const submitMark = Date.now()
+    // Requests already observed are 'pre'; everything after this index belongs to
+    // the submit. Event order, not timestamps: see sessionLog.
+    const submitSeq = requests.size
     const filled = await evaluate<{ok: boolean; reason?: string}>(
         fillExpr(credentials.identifier, credentials.password)
     )
@@ -974,16 +981,19 @@ export async function driveSession(
     // own 2xx is the precondition for judging anything, and it is EXCLUDED from the
     // data evidence — a broken build satisfies "at least one same-origin 2xx" with
     // exactly this request and nothing else.
-    const after = new Map([...requests].filter(([, r]) => r.at >= submitMark))
     let authId: string | null = null
-    for (const [id, r] of after) {
+    // No sign-in request found leaves the submit itself as the boundary, so the
+    // requests that preceded it are still 'pre'.
+    let authIdx = submitSeq - 1
+    for (const [idx, [id, r]] of [...requests].entries()) {
+        if (idx < submitSeq) continue
         if (sameOrigin(r) && r.method !== 'GET') {
             authId = id
+            authIdx = idx
             break
         }
     }
-    const authReq = authId !== null ? after.get(authId)! : null
-    const authAt = authReq?.at ?? submitMark
+    const authReq = authId === null ? null : requests.get(authId)!
     const now = await evaluate<{hasPassword: boolean; url: string; pathname: string; html: string}>(
         INSPECT_EXPR
     )
@@ -1009,7 +1019,7 @@ export async function driveSession(
         await settle(() => lastActivity, RE_NAV_CAP_MS, quietMs)
     }
     return judge(
-        facts(sessionLog(authId, authAt), {
+        facts(sessionLog(authId, authIdx), {
             submitted: true,
             foreignOriginFailures: foreignOriginFailures(),
             leftAuthWall,

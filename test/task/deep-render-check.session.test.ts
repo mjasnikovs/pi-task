@@ -323,6 +323,21 @@ describe('driveSession: signing in', () => {
         expect(facts.postAuthData2xx).toBe(1)
     })
 
+    test('with no non-GET after submit, requests made BEFORE the submit stay pre', async () => {
+        const {facts} = await run({
+            navigations: [landing, []],
+            onSubmit: [
+                {url: `${BASE}/api/track`, type: 'XHR', status: 200, mimeType: 'application/json'}
+            ],
+            inspect: [wall('/login'), inside('/home')]
+        })
+        expect(facts.authRequest).toBeNull()
+        expect(facts.sessionRequests?.map(s => `${s.phase}:${s.path}`)).toEqual([
+            'pre:/',
+            'post:/api/track'
+        ])
+    })
+
     test('the sign-in request is the FIRST same-origin non-GET after submit; GETs before it are not it', async () => {
         const {facts} = await run({
             navigations: [landing, []],
@@ -335,9 +350,10 @@ describe('driveSession: signing in', () => {
         })
         expect(facts.authRequest?.path).toBe('/api/session')
         expect(facts.authRequest?.method).toBe('PUT')
+        // csrf arrives before the PUT → 'pre' by event order; the PUT is the sign-in, not this GET
         expect(facts.sessionRequests?.map(s => `${s.phase}:${s.path}`)).toEqual([
             'pre:/',
-            'post:/api/csrf',
+            'pre:/api/csrf',
             'auth:/api/session',
             'post:/api/audit'
         ])
