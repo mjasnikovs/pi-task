@@ -678,3 +678,28 @@ describe('a cargo facade reaches its implementation', () => {
         }
     })
 })
+
+test('a directory symlink pointing at an ancestor terminates the walk', () => {
+    // Run out-of-process: a regression here is an infinite SYNCHRONOUS loop, which
+    // no in-process test timeout can interrupt.
+    const dir = tmpDir('docs-symlink-loop-')
+    try {
+        const pkg = path.join(dir, 'pkg')
+        fs.mkdirSync(path.join(pkg, 'sub'), {recursive: true})
+        fs.writeFileSync(path.join(pkg, 'a.d.ts'), 'export declare const a: number\n')
+        fs.symlinkSync(pkg, path.join(pkg, 'sub', 'up'), 'dir')
+        const indexMod = path.resolve(__dirname, '../../src/workers/docs-index.ts')
+        const ecoMod = path.resolve(__dirname, '../../src/workers/docs-ecosystems.ts')
+        const script = [
+            `const {collectFiles} = await import(${JSON.stringify(indexMod)})`,
+            `const {ECOSYSTEMS} = await import(${JSON.stringify(ecoMod)})`,
+            `const pkg = {ecosystem:'npm',name:'p',version:'1.0.0',root:${JSON.stringify(pkg)},entry:null,readme:null}`,
+            `console.log(collectFiles(pkg, ECOSYSTEMS.npm).surface.length)`
+        ].join('\n')
+        const run = Bun.spawnSync(['bun', '-e', script], {timeout: 20_000})
+        expect(run.exitCode).toBe(0)
+        expect(run.stdout.toString().trim()).toBe('1')
+    } finally {
+        fs.rmSync(dir, {recursive: true, force: true})
+    }
+})

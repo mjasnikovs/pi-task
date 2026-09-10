@@ -26,7 +26,7 @@ import * as os from 'node:os'
 import * as path from 'node:path'
 import {ResolveError, type ResolvedPackage} from './docs-resolve.js'
 import {findAtOrAbove} from './eco-cargo.js'
-import {buildConstraint} from './go-surface.js'
+import {buildConstraint, splitGoItems} from './go-surface.js'
 import {readZip, readEntry, isUnsafeEntryName} from '../shared/zip.js'
 import {acquireStdlibPackage, findInGoroot, findSliced} from './go-stdlib.js'
 import type {NpmVersionInfo} from './npm-version.js'
@@ -721,17 +721,20 @@ function holdsByDefault(src: string): boolean {
 /**
  * The import paths a Go file's import block names.
  *
- * Scoped to the import declaration, not the file: a sibling's import path also
+ * Scoped to the import DECLARATION, not the file: a sibling's import path also
  * occurs as a plain string constant, in an error message and in a `go:generate`
  * line, and reading those keeps the very subpackage `selectOwnPackage` exists to
- * drop. An `ImportPath` is a `string_lit`, so the backtick form is legal Go and
+ * drop. A regex cannot draw that line — a column-0 `import (` also sits inside a
+ * generator template's raw string and inside a doc comment's example — so the
+ * split is the surface scanner's, which already skips comments and literals.
+ * An `ImportPath` is a `string_lit`, so the backtick form is legal Go and
  * dropping it silently drops everything reachable only through it.
  */
 function importsOf(src: string): string[] {
     const out: string[] = []
-    for (const decl of src.matchAll(/^import\s*(?:\(([\s\S]*?)^\)|(.*))$/gm)) {
-        const body = decl[1] ?? decl[2] ?? ''
-        for (const m of body.matchAll(/"([^"\n]+)"|`([^`]+)`/g)) out.push(m[1] ?? m[2])
+    for (const item of splitGoItems(src)) {
+        if (!/^import\b/.test(item.text)) continue
+        for (const m of item.text.matchAll(/"([^"\n]+)"|`([^`]+)`/g)) out.push(m[1] ?? m[2])
     }
     return out
 }
@@ -751,9 +754,16 @@ function goMajor(name: string, version: string): number {
     return inVersion ? Number(inVersion[1]) : 1
 }
 
-/** Does this file declare anything a caller of the package could be handed? */
+/**
+ * Does this file declare anything a caller of the package could be handed?
+ *
+ * Read from the scanned declarations, not the raw text. `cloud.google.com/go`'s
+ * doc.go is one block comment, and a wrapped sentence beginning `type ` sits at
+ * column 0 — enough for a multiline regex to call the root the API and drop the
+ * subdirectories that hold all of it.
+ */
 function declaresApi(src: string): boolean {
-    return /^(?:func|type|var|const)\b/m.test(src)
+    return splitGoItems(src).some(item => /^(?:func|type|var|const)\b/.test(item.text))
 }
 
 /**
@@ -802,7 +812,15 @@ export function selectOwnPackage(
     }
     const byDir = new Map<string, string[]>()
     for (const f of files) byDir.set(dirOf(f), [...(byDir.get(dirOf(f)) ?? []), f])
-    if (!(byDir.get('') ?? []).some(f => declaresApi(safeRead(f) ?? ''))) return [...files]
+    const sources = new Map<string, string>()
+    const sourceOf = (f: string): string => {
+        const seen = sources.get(f)
+        if (seen !== undefined) return seen
+        const text = safeRead(f) ?? ''
+        sources.set(f, text)
+        return text
+    }
+    if (!(byDir.get('') ?? []).some(f => declaresApi(sourceOf(f)))) return [...files]
 
     const major = goMajor(name, version)
     const reachable = new Set<string>([''])
@@ -810,7 +828,7 @@ export function selectOwnPackage(
     while (queue.length > 0) {
         const dir = queue.shift() as string
         for (const f of byDir.get(dir) ?? []) {
-            for (const imp of importsOf(safeRead(f) ?? '')) {
+            for (const imp of importsOf(sourceOf(f))) {
                 if (!imp.startsWith(`${name}/`)) continue
                 const sub = imp.slice(name.length + 1)
                 const top = /^v(\d+)$/.exec(sub.split('/')[0])

@@ -145,6 +145,9 @@ function computeContentHash(
 function walkSurface(root: string, profile: EcosystemProfile): string[] {
     const out: string[] = []
     const stack: string[] = [root]
+    // A directory symlink is followed by its resolved target, so one pointing at
+    // an ancestor inside `root` walks the same subtree forever without this.
+    const walked = new Set<string>([root])
     while (stack.length) {
         const dir = stack.pop()!
         let entries: fs.Dirent[]
@@ -157,21 +160,28 @@ function walkSurface(root: string, profile: EcosystemProfile): string[] {
             if (profile.skipDirs.includes(entry.name)) continue
             const full = path.join(dir, entry.name)
             if (entry.isSymbolicLink()) {
+                let stat: fs.Stats
                 let realPath: string
                 try {
                     realPath = fs.realpathSync(full)
+                    stat = fs.statSync(realPath)
                 } catch {
                     continue
                 }
                 const relReal = path.relative(root, realPath)
                 if (relReal.startsWith('..')) continue
-                const stat = fs.statSync(realPath)
-                if (stat.isDirectory()) stack.push(realPath)
-                else if (stat.isFile() && profile.isSurfaceFile(realPath)) out.push(realPath)
+                if (stat.isDirectory()) {
+                    if (walked.has(realPath)) continue
+                    walked.add(realPath)
+                    stack.push(realPath)
+                } else if (stat.isFile() && profile.isSurfaceFile(realPath)) out.push(realPath)
                 continue
             }
-            if (entry.isDirectory()) stack.push(full)
-            else if (entry.isFile() && profile.isSurfaceFile(entry.name)) out.push(full)
+            if (entry.isDirectory()) {
+                if (walked.has(full)) continue
+                walked.add(full)
+                stack.push(full)
+            } else if (entry.isFile() && profile.isSurfaceFile(entry.name)) out.push(full)
         }
     }
     return out.sort()

@@ -554,3 +554,40 @@ test('the no-cache fallback applies the selection rules, not a raw walk', async 
         fs.rmSync(dir, {recursive: true, force: true})
     }
 })
+
+test('the no-cache fallback does not put the entry back after a rule dropped it', async () => {
+    // A CJS-first package names its `.d.cts` in `types`, so the entry IS the twin
+    // that `dropParallelDeclarations` removes. Prepending it unconditionally put
+    // it back, and put it at the HEAD of the one truncated blob.
+    const dir = tmpDir('docs-nocache-entry-')
+    const pkg = path.join(dir, 'node_modules', 'cjs-first')
+    fs.mkdirSync(pkg, {recursive: true})
+    fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({name: 'host'}))
+    fs.writeFileSync(
+        path.join(pkg, 'package.json'),
+        JSON.stringify({name: 'cjs-first', version: '1.0.0', types: 'index.d.cts'})
+    )
+    fs.writeFileSync(path.join(pkg, 'index.d.ts'), 'export declare function esmOnly(): void\n')
+    fs.writeFileSync(path.join(pkg, 'index.d.cts'), 'export declare function cjsTwin(): void\n')
+    let promptSeen = ''
+    try {
+        await runTool(
+            {
+                openCache: () => {
+                    throw new Error('disk full')
+                },
+                npmVersionLookup: async () => null,
+                spawn: fakeSpawnByPrompt(args => {
+                    promptSeen = args[args.length - 1]
+                    return {stdout: '<answer>ok</answer>\n<excerpt>esmOnly</excerpt>'}
+                })
+            },
+            {module: 'cjs-first', query: 'esmOnly'},
+            dir
+        )
+        expect(promptSeen).toContain('index.d.ts')
+        expect(promptSeen).not.toContain('index.d.cts')
+    } finally {
+        fs.rmSync(dir, {recursive: true, force: true})
+    }
+})

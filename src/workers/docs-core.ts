@@ -838,8 +838,12 @@ function docsRawUncached(
 ): DocsRawResult {
     const parts: string[] = []
     const surfaceFiles = collectFiles(pkg, profile).surface
+    // Only an entry the rules KEPT goes first. A CJS-first package names its
+    // `.d.cts` in `types`, so the entry is exactly the twin `collectFiles` drops,
+    // and prepending it blind put it back at the head of the truncated blob.
+    const entry = pkg.entry !== null && surfaceFiles.includes(pkg.entry) ? pkg.entry : null
     const entryFirst =
-        pkg.entry ? [pkg.entry, ...surfaceFiles.filter(f => f !== pkg.entry)] : surfaceFiles
+        entry === null ? surfaceFiles : [entry, ...surfaceFiles.filter(f => f !== entry)]
     for (const abs of entryFirst) {
         let raw: string
         try {
