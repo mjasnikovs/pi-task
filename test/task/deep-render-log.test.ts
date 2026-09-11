@@ -24,6 +24,7 @@ const req = (over: Partial<SessionRequest>): SessionRequest => ({
     mimeType: 'application/json',
     failed: false,
     initiator: 'xhr',
+    redirected: false,
     phase: 'post',
     ...over
 })

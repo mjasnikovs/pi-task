@@ -58,6 +58,54 @@ describe('runChild text mode', () => {
     })
 })
 
+describe('runChild stdin delivery', () => {
+    /** A child whose stdin pipe breaks on write, the way a killed child's does. */
+    function fakeSpawnBrokenStdin(exitCode: number, killedByUs = false): SpawnFn {
+        return (() => {
+            const p = makeProc()
+            let onError: ((e: unknown) => void) | undefined
+            p.stdin = {
+                write: () => {
+                    queueMicrotask(() => onError?.(new Error('write EPIPE')))
+                    return false
+                },
+                end: () => {},
+                on: (_e: 'error', l: (e: unknown) => void) => (onError = l)
+            }
+            queueMicrotask(() => {
+                queueMicrotask(() => {
+                    if (killedByUs) p.kill('SIGTERM')
+                    p.emit('close', exitCode)
+                })
+            })
+            return p
+        }) as unknown as SpawnFn
+    }
+
+    test('a broken stdin does not take the host down and fails the run', async () => {
+        const result = await runChild(
+            fakeSpawnBrokenStdin(0),
+            {...noopInvocation, stdin: 'the prompt'},
+            '/tmp',
+            undefined,
+            {mode: 'text'}
+        )
+        expect(result.exitCode).not.toBe(0)
+        expect(result.stderr).toContain('prompt delivery failed')
+    })
+
+    test("a broken stdin keeps the child's own non-zero exit", async () => {
+        const result = await runChild(
+            fakeSpawnBrokenStdin(42),
+            {...noopInvocation, stdin: 'the prompt'},
+            '/tmp',
+            undefined,
+            {mode: 'text'}
+        )
+        expect(result.exitCode).toBe(42)
+    })
+})
+
 describe('runChild json-events mode', () => {
     test('returns final assistant text from agent_end', async () => {
         const spawn = fakeSpawnSimple(

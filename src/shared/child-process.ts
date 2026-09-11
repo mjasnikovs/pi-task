@@ -428,6 +428,7 @@ export function runChild(
         let stdout = ''
         let stderr = ''
         let kill: ChildKill | undefined
+        let stdinError: Error | undefined
         const discardStdout = opts?.mode === 'text' && opts.discardStdout === true
 
         // Deliver the prompt on stdin, not argv. A large prompt — an inlined design
@@ -452,9 +453,13 @@ export function runChild(
 
         if (usesStdin) {
             // A child killed before it read the prompt leaves the pipe broken, and an
-            // unhandled EPIPE on stdin takes the whole process down. The child's own
-            // exit is what reports that run; this write has nothing left to say.
-            proc.stdin?.on?.('error', () => {})
+            // unhandled EPIPE on stdin takes the whole process down. Recorded rather
+            // than dropped: a child WE killed reports itself through `kill`, but one
+            // that read a truncated prompt and exited 0 would otherwise pass off an
+            // answer to half a spec as a clean run.
+            proc.stdin?.on?.('error', (e: unknown) => {
+                stdinError ??= e instanceof Error ? e : new Error(String(e))
+            })
             // pi reads the prompt from stdin and waits for EOF, so write then end.
             proc.stdin?.write(invocation.stdin as string)
             proc.stdin?.end()
@@ -620,10 +625,15 @@ export function runChild(
             }
             if (sink) sink.flush()
             const text = sink ? sink.text : undefined
+            // pi waits for EOF before it runs, so a stdin error on a child nobody
+            // killed means it ran on a prompt that never finished arriving. Its own
+            // exit describes that half-spec, so it cannot stand as the verdict.
+            const truncated = kill === undefined ? stdinError : undefined
             settle({
                 stdout,
-                stderr,
-                exitCode: code ?? 0,
+                stderr:
+                    truncated ? `${stderr}\nprompt delivery failed: ${truncated.message}` : stderr,
+                exitCode: truncated ? (code ?? 0) || 1 : (code ?? 0),
                 aborted: kill !== undefined,
                 ...(kill ? {kill} : {}),
                 text,

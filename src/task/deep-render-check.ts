@@ -236,8 +236,11 @@ export interface SessionRequest {
     failed: boolean
     /** CDP resource type, collapsed: what ISSUED this request. */
     initiator: 'xhr' | 'document' | 'other'
-    /** Before the submit, the sign-in request itself, or issued at or after the
-     *  submit. */
+    /** The chain redirected, so `status` and `mimeType` above describe a hop this
+     *  entry does not name. Any rule that reads a status AS A FACT ABOUT `path`
+     *  must skip these. */
+    redirected: boolean
+    /** Before the sign-in request, the sign-in request itself, or after it. */
     phase: 'pre' | 'auth' | 'post'
 }
 
@@ -256,10 +259,14 @@ export interface DeepSessionFacts {
     /** The sign-in request the SUBMIT issued, when one was issued at all.
      *  Derived: the `sessionRequests` entry in phase 'auth'. */
     authRequest: {method: string; path: string; status: number | null; failed: boolean} | null
-    /** Same-origin XHR/fetch requests issued at or after the submit, excluding the
-     *  sign-in request itself. Derived: `sessionRequests` in phase 'post'. */
+    /** Same-origin XHR/fetch requests issued at or after the sign-in request,
+     *  excluding that request itself. Derived: `sessionRequests` in phase 'post'. */
     postAuthDataAttempted: number
     postAuthData2xx: number
+    /** The origin the sign-in left for, when the submit addressed this app and the
+     *  chain ended somewhere else — an external identity provider, which no
+     *  declared credential pair can drive. Optional: absent means "not recorded". */
+    signInLeftOrigin?: string | null
     /** Origins the client called that are not the app's own, whose requests failed
      *  (a bundle pinned to a build-time base URL that is not the port under test). */
     foreignOriginFailures: string[]
@@ -274,11 +281,8 @@ export interface DeepSessionFacts {
 
 /**
  * The three request-shaped facts, computed from the log and from nothing else. The
- * driver records `sessionRequests` and calls this; the values are exactly what the
- * pre-log driver computed by filtering the same map (the sign-in request is the
- * first same-origin non-GET issued at or after the submit; the data requests are
- * the same-origin XHR/fetch issued at or after the sign-in request, that request
- * itself excluded).
+ * driver records `sessionRequests` and calls this; the phases carry the whole
+ * derivation, so this reads them and decides nothing of its own.
  */
 export function deriveLegacyFacts(
     log: SessionRequest[]
@@ -346,6 +350,15 @@ export function judgeDeepSession(f: DeepSessionFacts): DeepRenderOutcome {
         }
     }
     if (f.authRequest === null) {
+        if (f.signInLeftOrigin) {
+            return {
+                outcome: 'skip',
+                note:
+                    `signing in leaves this app for ${f.signInLeftOrigin} — an external identity `
+                    + 'provider cannot be driven with a declared credential pair, so the '
+                    + 'authenticated half of the app was NOT observed'
+            }
+        }
         const pinned =
             f.foreignOriginFailures.length > 0 ?
                 ` — the client calls ${f.foreignOriginFailures.join(', ')}, not the origin under test (a base URL baked in at build time)`
@@ -361,30 +374,31 @@ export function judgeDeepSession(f: DeepSessionFacts): DeepRenderOutcome {
     // password, a missing permission — the app working), 5xx is the server failing,
     // and both keep their existing behaviour. Only "no such route" is here.
     const missingRoute = (f.sessionRequests ?? []).find(
-        r => r.initiator === 'xhr' && r.status !== null && MISSING_ROUTE_STATUS.has(r.status)
+        r =>
+            r.initiator === 'xhr'
+            && !r.redirected
+            && r.status !== null
+            && MISSING_ROUTE_STATUS.has(r.status)
     )
     if (missingRoute) {
         return {
             outcome: 'fail',
             detail:
                 `\`${missingRoute.method} ${missingRoute.path}\` → ${String(missingRoute.status)}: `
-                + 'the client sent this to a path the server does not route. The credentials were '
-                + 'never evaluated. This is a dead client call — a base URL joined twice, a renamed '
-                + 'route, a wrong method. No type or mock can produce a route that is not mounted.'
+                + 'the client sent this to a path the server does not route. This is a dead client '
+                + 'call — a base URL joined twice, a renamed route, a wrong method. No type or mock '
+                + 'can produce a route that is not mounted.'
         }
     }
     // Rule B — the SPA catch-all answering an API call. Any server with a
     // `GET /*` → index.html fallback returns 200 for a route it does not have, so
     // the status is healthy and the body is the app shell. A document navigation
     // answered with HTML is normal; an XHR asking for data and getting HTML is a
-    // call that reached nothing. The sign-in request is exempt: it keeps the first
-    // hop but carries the LAST hop's mime, so a fetch login that 302s to a page
-    // reads as HTML here while being a sign-in that worked.
+    // call that reached nothing. A redirected request is exempt because the mime
+    // came from the hop it ended on: a fetch login that 302s to a page reads as
+    // HTML while being a sign-in that worked.
     const swallowed = (f.sessionRequests ?? []).find(
-        r =>
-            r.initiator === 'xhr'
-            && r.phase !== 'auth'
-            && (r.mimeType ?? '').startsWith('text/html')
+        r => r.initiator === 'xhr' && !r.redirected && (r.mimeType ?? '').startsWith('text/html')
     )
     if (swallowed) {
         return {
@@ -836,7 +850,7 @@ export interface DriveSessionOptions {
 /**
  * The session over an already-connected browser: navigate, inspect, sign in if the
  * landing is a wall and credentials exist, settle, phase the same-origin request
- * log against the submit, re-enter once the sign-in was accepted, and
+ * log against the sign-in request, re-enter once the sign-in was accepted, and
  * hand the facts to `judge`. Pure protocol logic — no process, no filesystem, no
  * socket — so every branch is testable against a fake `CdpLike`.
  *
@@ -925,16 +939,16 @@ export async function driveSession(
 
     const sameOrigin = (r: TrackedRequest): boolean =>
         r.finalUrl.startsWith(`${origin}/`) || r.finalUrl === origin
+    /** Which origin the client ASKED for — the first hop, before any redirect. */
+    const addressedOrigin = (r: TrackedRequest): boolean =>
+        r.url.startsWith(`${origin}/`) || r.url === origin
     const isData = (r: TrackedRequest): boolean => r.type === 'XHR' || r.type === 'Fetch'
     const foreignOriginFailures = (): string[] => {
         const out = new Set<string>()
         for (const r of requests.values()) {
             if (sameOrigin(r) || !r.failed || !r.finalUrl.startsWith('http')) continue
-            try {
-                out.add(new URL(r.finalUrl).origin)
-            } catch {
-                // unparseable url — nothing to name
-            }
+            const o = originOf(r.finalUrl)
+            if (o) out.add(o)
         }
         return [...out]
     }
@@ -947,21 +961,26 @@ export async function driveSession(
      *  'pre'; the sign-in request itself is 'auth', not 'post'. The boundary is the
      *  sign-in request, not the submit: a CSRF token or a beacon the submit fires
      *  BEFORE the login is not evidence about the authenticated client. */
-    const sessionLog = (authId: string | null, postSeq: number): SessionRequest[] =>
-        [...requests]
-            .filter(([, r]) => sameOrigin(r))
-            .map(([id, r]) => ({
+    const sessionLog = (authId: string | null, postSeq: number): SessionRequest[] => {
+        const out: SessionRequest[] = []
+        for (const [id, r] of requests) {
+            if (!sameOrigin(r)) continue
+            out.push({
                 method: r.method,
                 path: pathOf(r.url),
                 status: r.status,
                 mimeType: r.mimeType,
                 failed: r.failed,
                 initiator: initiatorOf(r),
+                redirected: r.finalUrl !== r.url,
                 phase:
                     id === authId ? 'auth'
                     : r.seq >= postSeq ? 'post'
                     : 'pre'
-            }))
+            })
+        }
+        return out
+    }
     const facts = (log: SessionRequest[], over: Partial<DeepSessionFacts>): DeepSessionFacts => ({
         sessionRequests: log,
         ...deriveLegacyFacts(log),
@@ -969,6 +988,7 @@ export async function driveSession(
         credentialsFound: credentials !== null,
         submitted: false,
         foreignOriginFailures: foreignOriginFailures(),
+        signInLeftOrigin: null,
         leftAuthWall: false,
         urlBefore: before.url,
         urlAfter: before.url,
@@ -997,29 +1017,39 @@ export async function driveSession(
     lastActivity = Date.now()
     await settle(() => lastActivity, POST_SUBMIT_CAP_MS, quietMs)
 
+    const firstRequest = (pred: (r: TrackedRequest) => boolean): string | null => {
+        for (const [id, r] of requests) if (pred(r)) return id
+        return null
+    }
     // The sign-in request: the first same-origin non-GET issued by the submit. Its
     // own 2xx is the precondition for judging anything, and it is EXCLUDED from the
     // data evidence — a broken build satisfies "at least one same-origin 2xx" with
     // exactly this request and nothing else.
-    let authId: string | null = null
-    for (const [id, r] of requests) {
-        if (r.seq >= submitSeq && sameOrigin(r) && r.method !== 'GET') {
-            authId = id
-            break
-        }
-    }
-    // Nothing after the submit: a form that submits from the fill's own input
-    // events already sent it. Only a NAVIGATION qualifies here — a form submission
-    // is one, and the background traffic the fill races (beacons, telemetry) is
-    // XHR or fetch, never a document.
-    if (authId === null) {
-        for (const [id, r] of requests) {
-            if (r.seq >= fillSeq && sameOrigin(r) && r.method !== 'GET' && r.type === 'Document') {
-                authId = id
-                break
-            }
-        }
-    }
+    //
+    // The fallback covers a form that submits from the fill's own input events, so
+    // nothing arrives after the submit at all. Only a NAVIGATION qualifies there —
+    // the background traffic the fill races (beacons, telemetry) is XHR or fetch,
+    // never a document. The two windows overlap; the predicates carry the
+    // distinction.
+    const authId =
+        firstRequest(r => r.seq >= submitSeq && sameOrigin(r) && r.method !== 'GET')
+        ?? firstRequest(
+            r => r.seq >= fillSeq && sameOrigin(r) && r.method !== 'GET' && r.type === 'Document'
+        )
+    // An SSO sign-in addresses this app and ends on the provider, so it is absent
+    // from the same-origin log above and "no request to our own origin" would
+    // misname it.
+    const offsiteSignIn =
+        authId !== null ? null : (
+            firstRequest(
+                r =>
+                    r.seq >= fillSeq
+                    && r.method !== 'GET'
+                    && addressedOrigin(r)
+                    && !sameOrigin(r)
+                    && r.finalUrl.startsWith('http')
+            )
+        )
     const authReq = authId === null ? null : requests.get(authId)!
     const now = await evaluate<{hasPassword: boolean; url: string; pathname: string; html: string}>(
         INSPECT_EXPR
@@ -1048,7 +1078,7 @@ export async function driveSession(
     return judge(
         facts(sessionLog(authId, authReq?.seq ?? submitSeq), {
             submitted: true,
-            foreignOriginFailures: foreignOriginFailures(),
+            signInLeftOrigin: offsiteSignIn && originOf(requests.get(offsiteSignIn)!.finalUrl),
             leftAuthWall,
             urlAfter: now?.url ?? before.url,
             postAuthDomOk: domJudgment.ok,
@@ -1062,5 +1092,13 @@ function pathOf(url: string): string {
         return new URL(url).pathname
     } catch {
         return url
+    }
+}
+
+function originOf(url: string): string | null {
+    try {
+        return new URL(url).origin
+    } catch {
+        return null
     }
 }

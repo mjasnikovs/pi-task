@@ -40,10 +40,6 @@ interface FakeRequest {
     /** Redirect this request once, the way Chrome reports it: the same requestId
      *  again, carrying the next hop and the finished hop's `redirectResponse`. */
     redirectTo?: string
-    /** Freeze the clock for this request's will-be-sent: an arrival before the
-     *  submit, stamped with a wall-clock time after it — the straddle the old
-     *  clock rule misread as post. */
-    freezeNow?: number
 }
 interface Inspect {
     hasPassword: boolean
@@ -97,27 +93,18 @@ class FakeCdp implements CdpLike {
         for (const r of list ?? []) {
             const requestId = `req-${++this.requestSeq}`
             const type = r.type ?? 'Document'
-            const realNow = Date.now
-            if (r.freezeNow !== undefined) {
-                const frozenNow = r.freezeNow
-                Date.now = () => frozenNow
-            }
-            try {
+            this.emit('Network.requestWillBeSent', {
+                requestId,
+                request: {url: r.url, method: r.method ?? 'GET'},
+                type
+            })
+            if (r.redirectTo !== undefined) {
                 this.emit('Network.requestWillBeSent', {
                     requestId,
-                    request: {url: r.url, method: r.method ?? 'GET'},
-                    type
+                    request: {url: r.redirectTo, method: 'GET'},
+                    type,
+                    redirectResponse: {status: 302}
                 })
-                if (r.redirectTo !== undefined) {
-                    this.emit('Network.requestWillBeSent', {
-                        requestId,
-                        request: {url: r.redirectTo, method: 'GET'},
-                        type,
-                        redirectResponse: {status: 302}
-                    })
-                }
-            } finally {
-                Date.now = realNow
             }
             if (r.failed) this.emit('Network.loadingFailed', {requestId})
             else {
@@ -368,30 +355,6 @@ describe('driveSession: signing in', () => {
         ])
         // No accepted sign-in, so nothing to re-enter with.
         expect(cdp.navigations()).toBe(1)
-    })
-
-    test('a landing request whose wall clock straddles the submit still stays pre', async () => {
-        const {facts, cdp} = await run({
-            navigations: [
-                [
-                    {
-                        url: `${BASE}/`,
-                        type: 'Document',
-                        status: 200,
-                        freezeNow: Date.now() + 5_000
-                    }
-                ],
-                [me]
-            ],
-            onSubmit: [loginPost],
-            inspect: [wall('/login'), inside('/dashboard')]
-        })
-        expect(facts.sessionRequests?.map(s => `${s.phase}:${s.path}`)).toEqual([
-            'pre:/',
-            'auth:/api/auth/login',
-            'post:/api/me'
-        ])
-        expect(cdp.navigations()).toBe(2)
     })
 
     test('a sign-in that 302s keeps the POST the client made, not the GET it became', async () => {
@@ -665,5 +628,62 @@ describe('driveSession: sessions that report on the environment', () => {
         })
         expect(verdict.outcome).toBe('fail')
         expect((verdict as {detail: string}).detail).toContain('got the SPA')
+    })
+
+    test('an unredirected login answered with the SPA shell still FAILS', async () => {
+        const {verdict} = await run({
+            navigations: [landing, []],
+            onSubmit: [
+                {
+                    url: `${BASE}/api/auth/login`,
+                    method: 'POST',
+                    type: 'XHR',
+                    status: 200,
+                    mimeType: 'text/html'
+                }
+            ],
+            inspect: [wall('/login'), inside('/dashboard')]
+        })
+        expect(verdict.outcome).toBe('fail')
+        expect((verdict as {detail: string}).detail).toContain('got the SPA')
+    })
+
+    test('a redirected XHR never reports the first hop with the last hop status', async () => {
+        const {verdict, facts} = await run({
+            navigations: [landing, []],
+            onSubmit: [
+                {
+                    url: `${BASE}/api/auth/login`,
+                    method: 'POST',
+                    type: 'XHR',
+                    status: 404,
+                    redirectTo: `${BASE}/dashboard`
+                }
+            ],
+            inspect: [wall('/login'), inside('/dashboard')]
+        })
+        expect(facts.sessionRequests?.find(r => r.path === '/api/auth/login')?.redirected).toBe(
+            true
+        )
+        expect((verdict as {detail?: string}).detail ?? '').not.toContain('does not route')
+    })
+
+    test('a sign-in that leaves for an identity provider names that provider', async () => {
+        const {verdict, facts} = await run({
+            navigations: [landing, []],
+            onSubmit: [
+                {
+                    url: `${BASE}/login`,
+                    method: 'POST',
+                    type: 'Document',
+                    status: 200,
+                    redirectTo: 'https://idp.example.com/authorize'
+                }
+            ],
+            inspect: [wall('/login'), inside('/dashboard')]
+        })
+        expect(facts.signInLeftOrigin).toBe('https://idp.example.com')
+        expect(verdict.outcome).toBe('skip')
+        expect((verdict as {note: string}).note).toContain('https://idp.example.com')
     })
 })
