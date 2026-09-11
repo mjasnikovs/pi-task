@@ -417,6 +417,25 @@ describe('driveSession: signing in', () => {
         expect(cdp.navigations()).toBe(2)
     })
 
+    test('a fetch sign-in that 302s to a page is not read as the SPA catch-all', async () => {
+        const {verdict, facts} = await run({
+            navigations: [landing, [me]],
+            onSubmit: [
+                {
+                    url: `${BASE}/login`,
+                    method: 'POST',
+                    type: 'XHR',
+                    redirectTo: `${BASE}/dashboard`,
+                    status: 200,
+                    mimeType: 'text/html'
+                }
+            ],
+            inspect: [wall('/login'), inside('/dashboard')]
+        })
+        expect(facts.authRequest?.path).toBe('/login')
+        expect(verdict.outcome).toBe('pass')
+    })
+
     test('a beacon fired while the form is being filled is not the sign-in request', async () => {
         const {facts} = await run({
             navigations: [landing, [me]],

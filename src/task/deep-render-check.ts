@@ -377,9 +377,14 @@ export function judgeDeepSession(f: DeepSessionFacts): DeepRenderOutcome {
     // `GET /*` → index.html fallback returns 200 for a route it does not have, so
     // the status is healthy and the body is the app shell. A document navigation
     // answered with HTML is normal; an XHR asking for data and getting HTML is a
-    // call that reached nothing.
+    // call that reached nothing. The sign-in request is exempt: it keeps the first
+    // hop but carries the LAST hop's mime, so a fetch login that 302s to a page
+    // reads as HTML here while being a sign-in that worked.
     const swallowed = (f.sessionRequests ?? []).find(
-        r => r.initiator === 'xhr' && (r.mimeType ?? '').startsWith('text/html')
+        r =>
+            r.initiator === 'xhr'
+            && r.phase !== 'auth'
+            && (r.mimeType ?? '').startsWith('text/html')
     )
     if (swallowed) {
         return {
