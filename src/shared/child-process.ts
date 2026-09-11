@@ -25,6 +25,8 @@ export const CHILD_BASE_ARGS = [
 export interface WritableLike {
     write(chunk: string): boolean
     end(): void
+    /** Optional so a mock stdin stays two methods; a real pipe always has it. */
+    on?(event: 'error', listener: (err: unknown) => void): unknown
 }
 
 export interface ProcLike extends EventEmitter {
@@ -449,6 +451,10 @@ export function runChild(
         })
 
         if (usesStdin) {
+            // A child killed before it read the prompt leaves the pipe broken, and an
+            // unhandled EPIPE on stdin takes the whole process down. The child's own
+            // exit is what reports that run; this write has nothing left to say.
+            proc.stdin?.on?.('error', () => {})
             // pi reads the prompt from stdin and waits for EOF, so write then end.
             proc.stdin?.write(invocation.stdin as string)
             proc.stdin?.end()
