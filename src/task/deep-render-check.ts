@@ -236,7 +236,8 @@ export interface SessionRequest {
     failed: boolean
     /** CDP resource type, collapsed: what ISSUED this request. */
     initiator: 'xhr' | 'document' | 'other'
-    /** Relative to the sign-in request: before it, it, or after it. */
+    /** Before the submit, the sign-in request itself, or issued at or after the
+     *  submit. */
     phase: 'pre' | 'auth' | 'post'
 }
 
@@ -255,8 +256,8 @@ export interface DeepSessionFacts {
     /** The sign-in request the SUBMIT issued, when one was issued at all.
      *  Derived: the `sessionRequests` entry in phase 'auth'. */
     authRequest: {method: string; path: string; status: number | null; failed: boolean} | null
-    /** Same-origin XHR/fetch requests issued AFTER the sign-in response, excluding
-     *  the sign-in request itself. Derived: `sessionRequests` in phase 'post'. */
+    /** Same-origin XHR/fetch requests issued at or after the submit, excluding the
+     *  sign-in request itself. Derived: `sessionRequests` in phase 'post'. */
     postAuthDataAttempted: number
     postAuthData2xx: number
     /** Origins the client called that are not the app's own, whose requests failed
@@ -275,8 +276,9 @@ export interface DeepSessionFacts {
  * The three request-shaped facts, computed from the log and from nothing else. The
  * driver records `sessionRequests` and calls this; the values are exactly what the
  * pre-log driver computed by filtering the same map (the sign-in request is the
- * first same-origin non-GET after submit; the data requests are the same-origin
- * XHR/fetch issued at or after it, itself excluded).
+ * first same-origin non-GET issued at or after the submit; the data requests are the
+ * same-origin
+ * XHR/fetch issued at or after the submit, the sign-in request itself excluded).
  */
 export function deriveLegacyFacts(
     log: SessionRequest[]
@@ -467,6 +469,9 @@ interface TrackedRequest {
     status: number | null
     mimeType: string | null
     failed: boolean
+    /** Arrival order of this request's first requestWillBeSent. Phases compare this
+     *  and never a clock: a batch can straddle a millisecond on a loaded host. */
+    seq: number
 }
 
 /** Minimal DevTools-protocol client: request/response ids over one socket, plus
@@ -823,7 +828,7 @@ export interface DriveSessionOptions {
 /**
  * The session over an already-connected browser: navigate, inspect, sign in if the
  * landing is a wall and credentials exist, settle, phase the same-origin request
- * log against the sign-in request, re-enter once the sign-in was accepted, and
+ * log against the submit, re-enter once the sign-in was accepted, and
  * hand the facts to `judge`. Pure protocol logic — no process, no filesystem, no
  * socket — so every branch is testable against a fake `CdpLike`.
  *
@@ -836,17 +841,27 @@ export async function driveSession(
     const origin = new URL(url).origin
 
     const requests = new Map<string, TrackedRequest>()
+    let nextSeq = 0
     let lastActivity = Date.now()
     cdp.on('Network.requestWillBeSent', p => {
-        const req = p.request as {url?: string; method?: string} | undefined
-        requests.set(String(p.requestId), {
-            url: String(req?.url ?? ''),
-            method: String(req?.method ?? 'GET'),
-            type: String(p.type ?? ''),
-            status: null,
-            mimeType: null,
-            failed: false
-        })
+        const id = String(p.requestId)
+        // A redirect hop reuses the requestId, carrying the NEXT hop's method and
+        // url. The request the client made is the first hop and the status that
+        // judges it is the chain's last, so the first hop stays and the eventual
+        // response lands on it. Overwriting reads a POST that 302s as a GET, and
+        // then no sign-in request is ever found.
+        if (p.redirectResponse === undefined || !requests.has(id)) {
+            const req = p.request as {url?: string; method?: string} | undefined
+            requests.set(id, {
+                url: String(req?.url ?? ''),
+                method: String(req?.method ?? 'GET'),
+                type: String(p.type ?? ''),
+                status: null,
+                mimeType: null,
+                failed: false,
+                seq: nextSeq++
+            })
+        }
         lastActivity = Date.now()
     })
     cdp.on('Network.responseReceived', p => {
@@ -915,34 +930,25 @@ export async function driveSession(
         isData(r) ? 'xhr'
         : r.type === 'Document' ? 'document'
         : 'other'
-    /** The same-origin request log, phased against the sign-in request. Phase comes
-     *  from EVENT ORDER — the `requests` Map iterates in requestWillBeSent arrival
-     *  order — not wall-clock timestamps: a request batch can straddle a millisecond
-     *  boundary on a loaded host, so timestamp comparison mis-classes the order.
-     *  `authIdx` is the last index that is still 'pre', so Infinity before the
-     *  submit makes every request so far 'pre'. */
-    const sessionLog = (authId: string | null, authIdx: number): SessionRequest[] => {
-        const out: SessionRequest[] = []
-        let idx = 0
-        for (const [id, r] of requests) {
-            if (sameOrigin(r)) {
-                out.push({
-                    method: r.method,
-                    path: pathOf(r.url),
-                    status: r.status,
-                    mimeType: r.mimeType,
-                    failed: r.failed,
-                    initiator: initiatorOf(r),
-                    phase:
-                        id === authId ? 'auth'
-                        : idx > authIdx ? 'post'
-                        : 'pre'
-                })
-            }
-            idx++
-        }
-        return out
-    }
+    /** The same-origin request log, phased against the submit. `postSeq` is the
+     *  first `seq` the submit could issue — Infinity while no submit has happened —
+     *  so before a submit every request so far is 'pre'; the sign-in request sits at
+     *  or after the boundary but is 'auth', not 'post'. */
+    const sessionLog = (authId: string | null, postSeq: number): SessionRequest[] =>
+        [...requests]
+            .filter(([, r]) => sameOrigin(r))
+            .map(([id, r]) => ({
+                method: r.method,
+                path: pathOf(r.url),
+                status: r.status,
+                mimeType: r.mimeType,
+                failed: r.failed,
+                initiator: initiatorOf(r),
+                phase:
+                    id === authId ? 'auth'
+                    : r.seq >= postSeq ? 'post'
+                    : 'pre'
+            }))
     const facts = (log: SessionRequest[], over: Partial<DeepSessionFacts>): DeepSessionFacts => ({
         sessionRequests: log,
         ...deriveLegacyFacts(log),
@@ -962,9 +968,6 @@ export async function driveSession(
 
     if (!before.hasPassword || credentials === null) return judge(unsubmitted({}))
 
-    // Requests already observed are 'pre'; everything after this index belongs to
-    // the submit. Event order, not timestamps: see sessionLog.
-    const submitSeq = requests.size
     const filled = await evaluate<{ok: boolean; reason?: string}>(
         fillExpr(credentials.identifier, credentials.password)
     )
@@ -972,6 +975,9 @@ export async function driveSession(
     // Separate turn: the fill's input events schedule framework state updates that
     // the submit handler must already see.
     await sleep(300)
+    // Captured after the fill: background traffic before the submit must not be
+    // eligible as the sign-in request.
+    const submitSeq = nextSeq
     const submitted = await evaluate<{ok: boolean; reason?: string}>(SUBMIT_EXPR)
     if (!submitted?.ok) return judge(unsubmitted({submitted: false}))
     lastActivity = Date.now()
@@ -982,14 +988,9 @@ export async function driveSession(
     // data evidence — a broken build satisfies "at least one same-origin 2xx" with
     // exactly this request and nothing else.
     let authId: string | null = null
-    // No sign-in request found leaves the submit itself as the boundary, so the
-    // requests that preceded it are still 'pre'.
-    let authIdx = submitSeq - 1
-    for (const [idx, [id, r]] of [...requests].entries()) {
-        if (idx < submitSeq) continue
-        if (sameOrigin(r) && r.method !== 'GET') {
+    for (const [id, r] of requests) {
+        if (r.seq >= submitSeq && sameOrigin(r) && r.method !== 'GET') {
             authId = id
-            authIdx = idx
             break
         }
     }
@@ -1019,7 +1020,7 @@ export async function driveSession(
         await settle(() => lastActivity, RE_NAV_CAP_MS, quietMs)
     }
     return judge(
-        facts(sessionLog(authId, authIdx), {
+        facts(sessionLog(authId, submitSeq), {
             submitted: true,
             foreignOriginFailures: foreignOriginFailures(),
             leftAuthWall,

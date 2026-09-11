@@ -8,7 +8,7 @@
  * the branch table for what happens once the browser is connected. The rules the
  * scenarios reproduce are the driver's own: a landing is a WALL when a visible
  * password input exists; the sign-in request is the first same-origin non-GET
- * issued after the submit; the wall is LEFT when the password input is gone OR
+ * issued at or after the submit; the wall is LEFT when the password input is gone OR
  * the pathname changed; re-entry happens only after an accepted (2xx) sign-in
  * that left the wall. The verdict those facts feed is `judgeDeepSession`, covered
  * in deep-render-check.test.ts and used as the oracle here.
@@ -37,6 +37,13 @@ interface FakeRequest {
     status?: number
     mimeType?: string
     failed?: boolean
+    /** Redirect this request once, the way Chrome reports it: the same requestId
+     *  again, carrying the next hop and the finished hop's `redirectResponse`. */
+    redirectTo?: string
+    /** Freeze the clock for this request's will-be-sent: an arrival before the
+     *  submit, stamped with a wall-clock time after it — the straddle the old
+     *  clock rule misread as post. */
+    freezeNow?: number
 }
 interface Inspect {
     hasPassword: boolean
@@ -47,6 +54,9 @@ interface Inspect {
 interface Scenario {
     /** Requests to emit on each Page.navigate, in call order. */
     navigations?: FakeRequest[][]
+    /** Requests to emit when the fill expression is evaluated — a page's own
+     *  background traffic, racing the sign-in the submit is about to issue. */
+    onFill?: FakeRequest[]
     /** Requests to emit when the submit expression is evaluated. */
     onSubmit?: FakeRequest[]
     /** Sequential answers to the page-inspect expression (last one repeats).
@@ -87,11 +97,28 @@ class FakeCdp implements CdpLike {
         for (const r of list ?? []) {
             const requestId = `req-${++this.requestSeq}`
             const type = r.type ?? 'Document'
-            this.emit('Network.requestWillBeSent', {
-                requestId,
-                request: {url: r.url, method: r.method ?? 'GET'},
-                type
-            })
+            const realNow = Date.now
+            if (r.freezeNow !== undefined) {
+                const frozenNow = r.freezeNow
+                Date.now = () => frozenNow
+            }
+            try {
+                this.emit('Network.requestWillBeSent', {
+                    requestId,
+                    request: {url: r.url, method: r.method ?? 'GET'},
+                    type
+                })
+                if (r.redirectTo !== undefined) {
+                    this.emit('Network.requestWillBeSent', {
+                        requestId,
+                        request: {url: r.redirectTo, method: 'GET'},
+                        type,
+                        redirectResponse: {status: 302}
+                    })
+                }
+            } finally {
+                Date.now = realNow
+            }
             if (r.failed) this.emit('Network.loadingFailed', {requestId})
             else {
                 this.emit('Network.responseReceived', {
@@ -122,7 +149,10 @@ class FakeCdp implements CdpLike {
         }
         if (method === 'Runtime.evaluate') {
             const expr = String(params.expression)
-            if (expr.includes('setValue')) return {result: {value: S.fill ?? {ok: true}}}
+            if (expr.includes('setValue')) {
+                this.fire(S.onFill)
+                return {result: {value: S.fill ?? {ok: true}}}
+            }
             if (expr.includes('requestSubmit')) {
                 this.fire(S.onSubmit)
                 return {result: {value: S.submit ?? {ok: true}}}
@@ -324,8 +354,8 @@ describe('driveSession: signing in', () => {
     })
 
     test('with no non-GET after submit, requests made BEFORE the submit stay pre', async () => {
-        const {facts} = await run({
-            navigations: [landing, []],
+        const {facts, cdp} = await run({
+            navigations: [landing],
             onSubmit: [
                 {url: `${BASE}/api/track`, type: 'XHR', status: 200, mimeType: 'application/json'}
             ],
@@ -336,9 +366,92 @@ describe('driveSession: signing in', () => {
             'pre:/',
             'post:/api/track'
         ])
+        // No accepted sign-in, so nothing to re-enter with.
+        expect(cdp.navigations()).toBe(1)
     })
 
-    test('the sign-in request is the FIRST same-origin non-GET after submit; GETs before it are not it', async () => {
+    test('a landing request whose wall clock straddles the submit still stays pre', async () => {
+        const {facts, cdp} = await run({
+            navigations: [
+                [
+                    {
+                        url: `${BASE}/`,
+                        type: 'Document',
+                        status: 200,
+                        freezeNow: Date.now() + 5_000
+                    }
+                ],
+                [me]
+            ],
+            onSubmit: [loginPost],
+            inspect: [wall('/login'), inside('/dashboard')]
+        })
+        expect(facts.sessionRequests?.map(s => `${s.phase}:${s.path}`)).toEqual([
+            'pre:/',
+            'auth:/api/auth/login',
+            'post:/api/me'
+        ])
+        expect(cdp.navigations()).toBe(2)
+    })
+
+    test('a sign-in that 302s keeps the POST the client made, not the GET it became', async () => {
+        const {verdict, facts, cdp} = await run({
+            navigations: [landing, [me]],
+            onSubmit: [
+                {
+                    url: `${BASE}/login`,
+                    method: 'POST',
+                    redirectTo: `${BASE}/dashboard`,
+                    status: 200
+                }
+            ],
+            inspect: [wall('/login'), inside('/dashboard')]
+        })
+        expect(facts.authRequest).toEqual({
+            method: 'POST',
+            path: '/login',
+            status: 200,
+            failed: false
+        })
+        expect(verdict.outcome).toBe('pass')
+        expect(cdp.navigations()).toBe(2)
+    })
+
+    test('a beacon fired while the form is being filled is not the sign-in request', async () => {
+        const {facts} = await run({
+            navigations: [landing, [me]],
+            onFill: [{url: `${BASE}/api/telemetry`, method: 'POST', type: 'XHR', status: 204}],
+            onSubmit: [loginPost],
+            inspect: [wall('/login'), inside('/dashboard')]
+        })
+        expect(facts.authRequest?.path).toBe('/api/auth/login')
+        expect(facts.sessionRequests?.map(s => `${s.phase}:${s.path}`)).toEqual([
+            'pre:/',
+            'pre:/api/telemetry',
+            'auth:/api/auth/login',
+            'post:/api/me'
+        ])
+    })
+
+    test('a foreign request between the sign-in and its data does not shift the phases', async () => {
+        const {facts} = await run({
+            navigations: [landing, []],
+            onSubmit: [
+                loginPost,
+                {url: 'https://fonts.example/x.woff2', type: 'Font', status: 200},
+                me
+            ],
+            inspect: [wall('/login'), inside('/dashboard')]
+        })
+        expect(facts.sessionRequests?.map(s => `${s.phase}:${s.path}`)).toEqual([
+            'pre:/',
+            'auth:/api/auth/login',
+            'post:/api/me'
+        ])
+        expect(facts.postAuthDataAttempted).toBe(1)
+    })
+
+    test('the sign-in request is the FIRST same-origin non-GET at or after the submit; GETs before it are not it', async () => {
         const {facts} = await run({
             navigations: [landing, []],
             onSubmit: [
@@ -350,13 +463,33 @@ describe('driveSession: signing in', () => {
         })
         expect(facts.authRequest?.path).toBe('/api/session')
         expect(facts.authRequest?.method).toBe('PUT')
-        // csrf arrives before the PUT → 'pre' by event order; the PUT is the sign-in, not this GET
+        // csrf is issued by the submit, at or after the boundary, so it is 'post'
+        // data evidence; the PUT is the sign-in, not this GET
         expect(facts.sessionRequests?.map(s => `${s.phase}:${s.path}`)).toEqual([
             'pre:/',
-            'pre:/api/csrf',
+            'post:/api/csrf',
             'auth:/api/session',
             'post:/api/audit'
         ])
+        expect(facts.postAuthDataAttempted).toBe(2)
+        expect(facts.postAuthData2xx).toBe(2)
+    })
+
+    test('a failed data call the submit issued before the login POST still trips the all-data rule', async () => {
+        const {verdict, facts} = await run({
+            navigations: [landing],
+            onSubmit: [{url: `${BASE}/api/data`, type: 'XHR', failed: true}, loginPost],
+            inspect: [wall('/login'), inside('/dashboard')]
+        })
+        expect(facts.sessionRequests?.map(s => `${s.phase}:${s.path}`)).toEqual([
+            'pre:/',
+            'post:/api/data',
+            'auth:/api/auth/login'
+        ])
+        expect(facts.postAuthDataAttempted).toBe(1)
+        expect(facts.postAuthData2xx).toBe(0)
+        expect(verdict.outcome).toBe('fail')
+        expect((verdict as {detail: string}).detail).toContain('EVERY same-origin data request')
     })
 
     test('accepted by the server, redirected straight back to the wall → fail, no re-entry', async () => {
