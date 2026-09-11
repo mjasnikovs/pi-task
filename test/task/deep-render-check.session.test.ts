@@ -436,6 +436,53 @@ describe('driveSession: signing in', () => {
         expect(verdict.outcome).toBe('pass')
     })
 
+    test('a request the submit issues before the sign-in is not post-auth data', async () => {
+        const {verdict, facts} = await run({
+            navigations: [landing, []],
+            onSubmit: [
+                {url: `${BASE}/csrf`, type: 'XHR', status: 401, mimeType: 'application/json'},
+                loginPost
+            ],
+            inspect: [wall('/login'), inside('/dashboard')]
+        })
+        expect(facts.sessionRequests?.map(s => `${s.phase}:${s.path}`)).toEqual([
+            'pre:/',
+            'pre:/csrf',
+            'auth:/api/auth/login'
+        ])
+        expect(facts.postAuthDataAttempted).toBe(0)
+        expect(verdict.outcome).not.toBe('fail')
+    })
+
+    test('a request that 302s to a foreign origin and fails there names that origin', async () => {
+        const {verdict, facts} = await run({
+            navigations: [landing, []],
+            onSubmit: [
+                loginPost,
+                {
+                    url: `${BASE}/api/data`,
+                    type: 'XHR',
+                    redirectTo: 'http://cdn.example.com/api/data',
+                    failed: true
+                }
+            ],
+            inspect: [wall('/login'), inside('/dashboard')]
+        })
+        expect(facts.foreignOriginFailures).toEqual(['http://cdn.example.com'])
+        expect(facts.postAuthDataAttempted).toBe(0)
+        expect(verdict.outcome).not.toBe('fail')
+    })
+
+    test('a form that autosubmits from the fill still yields its sign-in request', async () => {
+        const {verdict, facts} = await run({
+            navigations: [landing, [me]],
+            onFill: [{...loginPost, type: 'Document'}],
+            inspect: [wall('/login'), inside('/dashboard')]
+        })
+        expect(facts.authRequest?.path).toBe('/api/auth/login')
+        expect(verdict.outcome).toBe('pass')
+    })
+
     test('a beacon fired while the form is being filled is not the sign-in request', async () => {
         const {facts} = await run({
             navigations: [landing, [me]],
@@ -482,19 +529,19 @@ describe('driveSession: signing in', () => {
         })
         expect(facts.authRequest?.path).toBe('/api/session')
         expect(facts.authRequest?.method).toBe('PUT')
-        // csrf is issued by the submit, at or after the boundary, so it is 'post'
-        // data evidence; the PUT is the sign-in, not this GET
+        // csrf precedes the sign-in, so it is 'pre' and not data evidence; the PUT
+        // is the sign-in, not this GET
         expect(facts.sessionRequests?.map(s => `${s.phase}:${s.path}`)).toEqual([
             'pre:/',
-            'post:/api/csrf',
+            'pre:/api/csrf',
             'auth:/api/session',
             'post:/api/audit'
         ])
-        expect(facts.postAuthDataAttempted).toBe(2)
-        expect(facts.postAuthData2xx).toBe(2)
+        expect(facts.postAuthDataAttempted).toBe(1)
+        expect(facts.postAuthData2xx).toBe(1)
     })
 
-    test('a failed data call the submit issued before the login POST still trips the all-data rule', async () => {
+    test('a failed data call the submit issued before the login POST is not the authenticated client', async () => {
         const {verdict, facts} = await run({
             navigations: [landing],
             onSubmit: [{url: `${BASE}/api/data`, type: 'XHR', failed: true}, loginPost],
@@ -502,13 +549,11 @@ describe('driveSession: signing in', () => {
         })
         expect(facts.sessionRequests?.map(s => `${s.phase}:${s.path}`)).toEqual([
             'pre:/',
-            'post:/api/data',
+            'pre:/api/data',
             'auth:/api/auth/login'
         ])
-        expect(facts.postAuthDataAttempted).toBe(1)
-        expect(facts.postAuthData2xx).toBe(0)
-        expect(verdict.outcome).toBe('fail')
-        expect((verdict as {detail: string}).detail).toContain('EVERY same-origin data request')
+        expect(facts.postAuthDataAttempted).toBe(0)
+        expect(verdict.outcome).not.toBe('fail')
     })
 
     test('accepted by the server, redirected straight back to the wall → fail, no re-entry', async () => {

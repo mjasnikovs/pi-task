@@ -276,9 +276,9 @@ export interface DeepSessionFacts {
  * The three request-shaped facts, computed from the log and from nothing else. The
  * driver records `sessionRequests` and calls this; the values are exactly what the
  * pre-log driver computed by filtering the same map (the sign-in request is the
- * first same-origin non-GET issued at or after the submit; the data requests are the
- * same-origin
- * XHR/fetch issued at or after the submit, the sign-in request itself excluded).
+ * first same-origin non-GET issued at or after the submit; the data requests are
+ * the same-origin XHR/fetch issued at or after the sign-in request, that request
+ * itself excluded).
  */
 export function deriveLegacyFacts(
     log: SessionRequest[]
@@ -469,6 +469,9 @@ interface CdpMessage {
 
 interface TrackedRequest {
     url: string
+    /** Where the chain ENDED. Which origin a request reached is the last hop's
+     *  question; which request the client made is the first hop's. */
+    finalUrl: string
     method: string
     type: string
     status: number | null
@@ -855,10 +858,14 @@ export async function driveSession(
         // judges it is the chain's last, so the first hop stays and the eventual
         // response lands on it. Overwriting reads a POST that 302s as a GET, and
         // then no sign-in request is ever found.
-        if (p.redirectResponse === undefined || !requests.has(id)) {
-            const req = p.request as {url?: string; method?: string} | undefined
+        const req = p.request as {url?: string; method?: string} | undefined
+        const existing = requests.get(id)
+        if (p.redirectResponse !== undefined && existing) {
+            existing.finalUrl = String(req?.url ?? existing.finalUrl)
+        } else {
             requests.set(id, {
                 url: String(req?.url ?? ''),
+                finalUrl: String(req?.url ?? ''),
                 method: String(req?.method ?? 'GET'),
                 type: String(p.type ?? ''),
                 status: null,
@@ -917,14 +924,14 @@ export async function driveSession(
     if (!before) throw new Error('the page could not be inspected')
 
     const sameOrigin = (r: TrackedRequest): boolean =>
-        r.url.startsWith(`${origin}/`) || r.url === origin
+        r.finalUrl.startsWith(`${origin}/`) || r.finalUrl === origin
     const isData = (r: TrackedRequest): boolean => r.type === 'XHR' || r.type === 'Fetch'
     const foreignOriginFailures = (): string[] => {
         const out = new Set<string>()
         for (const r of requests.values()) {
-            if (sameOrigin(r) || !r.failed || !r.url.startsWith('http')) continue
+            if (sameOrigin(r) || !r.failed || !r.finalUrl.startsWith('http')) continue
             try {
-                out.add(new URL(r.url).origin)
+                out.add(new URL(r.finalUrl).origin)
             } catch {
                 // unparseable url — nothing to name
             }
@@ -935,10 +942,11 @@ export async function driveSession(
         isData(r) ? 'xhr'
         : r.type === 'Document' ? 'document'
         : 'other'
-    /** The same-origin request log, phased against the submit. `postSeq` is the
-     *  first `seq` the submit could issue — Infinity while no submit has happened —
-     *  so before a submit every request so far is 'pre'; the sign-in request sits at
-     *  or after the boundary but is 'auth', not 'post'. */
+    /** The same-origin request log. `postSeq` is where the authenticated half
+     *  begins — Infinity while no submit has happened — so everything before it is
+     *  'pre'; the sign-in request itself is 'auth', not 'post'. The boundary is the
+     *  sign-in request, not the submit: a CSRF token or a beacon the submit fires
+     *  BEFORE the login is not evidence about the authenticated client. */
     const sessionLog = (authId: string | null, postSeq: number): SessionRequest[] =>
         [...requests]
             .filter(([, r]) => sameOrigin(r))
@@ -973,6 +981,7 @@ export async function driveSession(
 
     if (!before.hasPassword || credentials === null) return judge(unsubmitted({}))
 
+    const fillSeq = nextSeq
     const filled = await evaluate<{ok: boolean; reason?: string}>(
         fillExpr(credentials.identifier, credentials.password)
     )
@@ -997,6 +1006,18 @@ export async function driveSession(
         if (r.seq >= submitSeq && sameOrigin(r) && r.method !== 'GET') {
             authId = id
             break
+        }
+    }
+    // Nothing after the submit: a form that submits from the fill's own input
+    // events already sent it. Only a NAVIGATION qualifies here — a form submission
+    // is one, and the background traffic the fill races (beacons, telemetry) is
+    // XHR or fetch, never a document.
+    if (authId === null) {
+        for (const [id, r] of requests) {
+            if (r.seq >= fillSeq && sameOrigin(r) && r.method !== 'GET' && r.type === 'Document') {
+                authId = id
+                break
+            }
         }
     }
     const authReq = authId === null ? null : requests.get(authId)!
@@ -1025,7 +1046,7 @@ export async function driveSession(
         await settle(() => lastActivity, RE_NAV_CAP_MS, quietMs)
     }
     return judge(
-        facts(sessionLog(authId, submitSeq), {
+        facts(sessionLog(authId, authReq?.seq ?? submitSeq), {
             submitted: true,
             foreignOriginFailures: foreignOriginFailures(),
             leftAuthWall,
