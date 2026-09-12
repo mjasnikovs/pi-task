@@ -205,7 +205,8 @@ describe('drive: a session that works', () => {
             method: 'POST',
             path: '/api/auth/login',
             status: 200,
-            failed: false
+            failed: false,
+            redirected: false
         })
         // The re-entry navigation is what produced the data request: without it the
         // authenticated path is never observed at all (a success card issues nothing).

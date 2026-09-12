@@ -231,6 +231,9 @@ export function pinnedLocalPort(vars: Record<string, string>): number | null {
 export interface SessionRequest {
     method: string
     path: string
+    /** Where the chain ENDED — the path `status` and `mimeType` actually describe.
+     *  Absent in a pre-existing recorded session, where it falls back to `path`. */
+    finalPath?: string
     status: number | null
     mimeType: string | null
     failed: boolean
@@ -258,7 +261,14 @@ export interface DeepSessionFacts {
     submitted: boolean
     /** The sign-in request the SUBMIT issued, when one was issued at all.
      *  Derived: the `sessionRequests` entry in phase 'auth'. */
-    authRequest: {method: string; path: string; status: number | null; failed: boolean} | null
+    authRequest: {
+        method: string
+        path: string
+        status: number | null
+        failed: boolean
+        /** The sign-in chain redirected, so `status` is the hop it LANDED on. */
+        redirected?: boolean
+    } | null
     /** Same-origin XHR/fetch requests issued at or after the sign-in request,
      *  excluding that request itself. Derived: `sessionRequests` in phase 'post'. */
     postAuthDataAttempted: number
@@ -292,7 +302,13 @@ export function deriveLegacyFacts(
     return {
         authRequest:
             auth === null ? null : (
-                {method: auth.method, path: auth.path, status: auth.status, failed: auth.failed}
+                {
+                    method: auth.method,
+                    path: auth.path,
+                    status: auth.status,
+                    failed: auth.failed,
+                    redirected: auth.redirected
+                }
             ),
         postAuthDataAttempted: data.length,
         postAuthData2xx: data.filter(r => r.status !== null && r.status >= 200 && r.status < 300)
@@ -304,6 +320,12 @@ export function deriveLegacyFacts(
  *  answered No. 501 is included because a server that routes but implements
  *  nothing is the same dead call from the client's side. */
 const MISSING_ROUTE_STATUS = new Set([404, 405, 501])
+
+/** A redirected entry's `status` and `mimeType` belong to its LAST hop, so the two
+ *  rules below may read them only where that hop is still the client's own business.
+ *  Before and during sign-in, a 302 to the login page is the normal unauthenticated
+ *  flow; after sign-in, that same redirect IS the defect. */
+const lastHopJudgesTheClient = (r: SessionRequest): boolean => !r.redirected || r.phase === 'post'
 
 /**
  * Judge a recorded session. The ONE thing that may FAIL is a session the SERVER
@@ -376,15 +398,17 @@ export function judgeDeepSession(f: DeepSessionFacts): DeepRenderOutcome {
     const missingRoute = (f.sessionRequests ?? []).find(
         r =>
             r.initiator === 'xhr'
-            && !r.redirected
+            && lastHopJudgesTheClient(r)
             && r.status !== null
             && MISSING_ROUTE_STATUS.has(r.status)
     )
     if (missingRoute) {
+        const landed = missingRoute.finalPath ?? missingRoute.path
+        const hop = landed === missingRoute.path ? '' : ` → \`${landed}\``
         return {
             outcome: 'fail',
             detail:
-                `\`${missingRoute.method} ${missingRoute.path}\` → ${String(missingRoute.status)}: `
+                `\`${missingRoute.method} ${missingRoute.path}\`${hop} → ${String(missingRoute.status)}: `
                 + 'the client sent this to a path the server does not route. This is a dead client '
                 + 'call — a base URL joined twice, a renamed route, a wrong method. No type or mock '
                 + 'can produce a route that is not mounted.'
@@ -394,11 +418,13 @@ export function judgeDeepSession(f: DeepSessionFacts): DeepRenderOutcome {
     // `GET /*` → index.html fallback returns 200 for a route it does not have, so
     // the status is healthy and the body is the app shell. A document navigation
     // answered with HTML is normal; an XHR asking for data and getting HTML is a
-    // call that reached nothing. A redirected request is exempt because the mime
-    // came from the hop it ended on: a fetch login that 302s to a page reads as
-    // HTML while being a sign-in that worked.
+    // call that reached nothing. A fetch login that 302s to a page reads as HTML
+    // while being a sign-in that worked, hence the last-hop guard.
     const swallowed = (f.sessionRequests ?? []).find(
-        r => r.initiator === 'xhr' && !r.redirected && (r.mimeType ?? '').startsWith('text/html')
+        r =>
+            r.initiator === 'xhr'
+            && lastHopJudgesTheClient(r)
+            && (r.mimeType ?? '').startsWith('text/html')
     )
     if (swallowed) {
         return {
@@ -410,7 +436,7 @@ export function judgeDeepSession(f: DeepSessionFacts): DeepRenderOutcome {
                 + 'sees a 200 it cannot parse. No status check can see this.'
         }
     }
-    const {method, path: p, status, failed} = f.authRequest
+    const {method, path: p, status, failed, redirected: authRedirected} = f.authRequest
     if (failed || status === null || status < 200 || status >= 300) {
         return {
             outcome: 'skip',
@@ -422,6 +448,19 @@ export function judgeDeepSession(f: DeepSessionFacts): DeepRenderOutcome {
     }
     const signedIn = `signed in (\`${method} ${p}\` → ${status})`
     if (!f.leftAuthWall) {
+        // A form sign-in that redirects lands its status on the hop it reached, so a
+        // 200 here is the landing page's, not a verdict on the credentials. Landing
+        // back on the wall is what a REJECTED password looks like, and the gate's one
+        // FAIL needs the server to have said yes.
+        if (authRedirected === true) {
+            return {
+                outcome: 'skip',
+                note:
+                    `the sign-in request (\`${method} ${p}\`) redirected, so its ${String(status)} `
+                    + 'describes the page it landed on and not the credentials, and the client is '
+                    + 'still on the wall — the authenticated half of the app was NOT observed'
+            }
+        }
         return {
             outcome: 'fail',
             detail:
@@ -968,6 +1007,7 @@ export async function driveSession(
             out.push({
                 method: r.method,
                 path: pathOf(r.url),
+                finalPath: pathOf(r.finalUrl),
                 status: r.status,
                 mimeType: r.mimeType,
                 failed: r.failed,
@@ -1038,13 +1078,16 @@ export async function driveSession(
         )
     // An SSO sign-in addresses this app and ends on the provider, so it is absent
     // from the same-origin log above and "no request to our own origin" would
-    // misname it.
+    // misname it. Document-only for the same reason the authId fallback is: a
+    // telemetry beacon the fill races that happens to end off-origin would otherwise
+    // name a bogus identity provider.
     const offsiteSignIn =
         authId !== null ? null : (
             firstRequest(
                 r =>
                     r.seq >= fillSeq
                     && r.method !== 'GET'
+                    && r.type === 'Document'
                     && addressedOrigin(r)
                     && !sameOrigin(r)
                     && r.finalUrl.startsWith('http')

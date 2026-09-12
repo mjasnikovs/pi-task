@@ -333,7 +333,8 @@ describe('driveSession: signing in', () => {
             method: 'POST',
             path: '/api/auth/login',
             status: 200,
-            failed: false
+            failed: false,
+            redirected: false
         })
         expect(facts.sessionRequests?.map(s => s.phase)).toEqual(['pre', 'auth', 'post'])
         expect(facts.postAuthDataAttempted).toBe(1)
@@ -374,7 +375,8 @@ describe('driveSession: signing in', () => {
             method: 'POST',
             path: '/login',
             status: 200,
-            failed: false
+            failed: false,
+            redirected: true
         })
         expect(verdict.outcome).toBe('pass')
         expect(cdp.navigations()).toBe(2)
@@ -666,6 +668,27 @@ describe('driveSession: sessions that report on the environment', () => {
             true
         )
         expect((verdict as {detail?: string}).detail ?? '').not.toContain('does not route')
+    })
+
+    // The fill races the page's own background traffic. A beacon that happens to end
+    // off-origin is not a sign-in, and naming it as one shadows the base-URL note
+    // that actually explains the session.
+    test('a telemetry beacon that ends off-origin is NOT an identity provider', async () => {
+        const {facts} = await run({
+            navigations: [landing, []],
+            onFill: [
+                {
+                    url: `${BASE}/api/telemetry`,
+                    method: 'POST',
+                    type: 'XHR',
+                    status: 200,
+                    redirectTo: 'https://beacon.vendor.io/collect'
+                }
+            ],
+            onSubmit: [],
+            inspect: [wall('/login'), wall('/login')]
+        })
+        expect(facts.signInLeftOrigin).toBeNull()
     })
 
     test('a sign-in that leaves for an identity provider names that provider', async () => {

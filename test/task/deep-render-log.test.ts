@@ -31,7 +31,10 @@ const req = (over: Partial<SessionRequest>): SessionRequest => ({
 
 /** A session the server authenticated, whose client left the wall — every branch
  *  before the two rules already satisfied, so only the log decides. */
-const session = (log: SessionRequest[]): DeepSessionFacts => ({
+const session = (
+    log: SessionRequest[],
+    over: Partial<DeepSessionFacts> = {}
+): DeepSessionFacts => ({
     sessionRequests: log,
     landingHadAuthWall: true,
     credentialsFound: true,
@@ -42,7 +45,8 @@ const session = (log: SessionRequest[]): DeepSessionFacts => ({
     urlBefore: 'http://127.0.0.1:3000/login',
     urlAfter: 'http://127.0.0.1:3000/',
     postAuthDomOk: true,
-    postAuthDomDetail: ''
+    postAuthDomDetail: '',
+    ...over
 })
 
 const login = (status: number, over: Partial<SessionRequest> = {}): SessionRequest =>
@@ -55,7 +59,8 @@ describe('deriveLegacyFacts', () => {
             method: 'POST',
             path: '/api/auth/login',
             status: 200,
-            failed: false
+            failed: false,
+            redirected: false
         })
     })
 
@@ -157,6 +162,86 @@ describe('rule B — an XHR answered with the SPA shell', () => {
     test('text/html with a charset parameter is still the shell', () => {
         const r = judgeDeepSession(
             session([login(200), req({path: '/api/me', mimeType: 'text/html; charset=utf-8'})])
+        )
+        expect(r.outcome).toBe('fail')
+    })
+})
+
+describe('a redirected entry — whose status and mime belong to its last hop', () => {
+    // The exemption exists for the auth hop only. A post-auth data call that 302s to
+    // the login page and is answered with the shell is a session the client cannot
+    // use, and its 200 is the only PASS evidence the counters have.
+    test('a post-auth XHR redirected onto the SPA shell FAILS', () => {
+        const f = session([
+            login(200),
+            req({path: '/api/me', finalPath: '/login', redirected: true, mimeType: 'text/html'})
+        ])
+        expect(f.postAuthData2xx).toBe(1)
+        const r = judgeDeepSession(f)
+        expect(r.outcome).toBe('fail')
+        expect((r as {detail: string}).detail).toContain('SPA shell')
+    })
+
+    test('a post-auth XHR redirected onto a 404 FAILS, naming both hops', () => {
+        const r = judgeDeepSession(
+            session([
+                login(200),
+                req({path: '/api/me', status: 200}),
+                req({
+                    path: '/api/items',
+                    finalPath: '/api/items/',
+                    redirected: true,
+                    status: 404,
+                    mimeType: 'text/plain'
+                })
+            ])
+        )
+        expect(r.outcome).toBe('fail')
+        expect((r as {detail: string}).detail).toContain('`GET /api/items` → `/api/items/` → 404')
+    })
+
+    // An unauthenticated boot call bounced to the login page is the normal flow, not
+    // a defect, and the sign-in fetch that 302s to a page is the case the exemption
+    // was written for.
+    test('a pre-phase or auth-phase redirect onto the login page PASSES', () => {
+        const shell = {redirected: true, finalPath: '/login', mimeType: 'text/html'}
+        const r = judgeDeepSession(
+            session([
+                req({phase: 'pre', path: '/api/me', ...shell}),
+                login(200, {...shell, path: '/api/auth/login'}),
+                req({path: '/api/me', status: 200})
+            ])
+        )
+        expect(r.outcome).toBe('pass')
+    })
+
+    // A form sign-in that 302s back to `/login?error=1` lands a 200 on a rejected
+    // password. The gate's one FAIL needs the server to have said yes, so this SKIPs.
+    test('a redirected sign-in that never left the wall SKIPs, it does not FAIL', () => {
+        const r = judgeDeepSession(
+            session(
+                [
+                    login(200, {
+                        path: '/login',
+                        finalPath: '/login',
+                        redirected: true,
+                        initiator: 'document',
+                        mimeType: 'text/html'
+                    })
+                ],
+                {leftAuthWall: false, urlAfter: 'http://127.0.0.1:3000/login'}
+            )
+        )
+        expect(r.outcome).toBe('skip')
+        expect((r as {note: string}).note).toContain('NOT observed')
+    })
+
+    test('an un-redirected sign-in that never left the wall still FAILS', () => {
+        const r = judgeDeepSession(
+            session([login(200), req({path: '/api/me', status: 500})], {
+                leftAuthWall: false,
+                urlAfter: 'http://127.0.0.1:3000/login'
+            })
         )
         expect(r.outcome).toBe('fail')
     })
