@@ -427,13 +427,20 @@ export function judgeDeepSession(f: DeepSessionFacts): DeepRenderOutcome {
             && (r.mimeType ?? '').startsWith('text/html')
     )
     if (swallowed) {
+        const landed = swallowed.finalPath ?? swallowed.path
+        const hop = landed === swallowed.path ? '' : ` → \`${landed}\``
+        const cause =
+            swallowed.redirected ?
+                'The call was bounced to a page, so the session the client carried is not one this '
+                + 'server accepts and the answer is the SPA shell.'
+            :   'The route is not mounted and the catch-all answered instead, so the client sees a '
+                + '200 it cannot parse.'
         return {
             outcome: 'fail',
             detail:
-                `\`${swallowed.method} ${swallowed.path}\` → ${String(swallowed.status)} `
+                `\`${swallowed.method} ${swallowed.path}\`${hop} → ${String(swallowed.status)} `
                 + `${swallowed.mimeType ?? ''}: an XHR asked this server for data and got the SPA `
-                + 'shell. The route is not mounted and the catch-all answered instead, so the client '
-                + 'sees a 200 it cannot parse. No status check can see this.'
+                + `shell. ${cause} No status check can see this.`
         }
     }
     const {method, path: p, status, failed, redirected: authRedirected} = f.authRequest
@@ -530,6 +537,9 @@ interface TrackedRequest {
     status: number | null
     mimeType: string | null
     failed: boolean
+    /** A redirectResponse was seen. Not `url !== finalUrl`: a 302 back to the page
+     *  it came from — a rejected password — leaves both spellings identical. */
+    redirected: boolean
     /** Arrival order of this request's first requestWillBeSent. Phases compare this
      *  and never a clock: a batch can straddle a millisecond on a loaded host. */
     seq: number
@@ -915,6 +925,7 @@ export async function driveSession(
         const existing = requests.get(id)
         if (p.redirectResponse !== undefined && existing) {
             existing.finalUrl = String(req?.url ?? existing.finalUrl)
+            existing.redirected = true
         } else {
             requests.set(id, {
                 url: String(req?.url ?? ''),
@@ -924,6 +935,7 @@ export async function driveSession(
                 status: null,
                 mimeType: null,
                 failed: false,
+                redirected: false,
                 seq: nextSeq++
             })
         }
@@ -1012,7 +1024,7 @@ export async function driveSession(
                 mimeType: r.mimeType,
                 failed: r.failed,
                 initiator: initiatorOf(r),
-                redirected: r.finalUrl !== r.url,
+                redirected: r.redirected,
                 phase:
                     id === authId ? 'auth'
                     : r.seq >= postSeq ? 'post'
@@ -1078,16 +1090,15 @@ export async function driveSession(
         )
     // An SSO sign-in addresses this app and ends on the provider, so it is absent
     // from the same-origin log above and "no request to our own origin" would
-    // misname it. Document-only for the same reason the authId fallback is: a
-    // telemetry beacon the fill races that happens to end off-origin would otherwise
-    // name a bogus identity provider.
+    // misname it. The two windows are authId's, for the same reasons: anything the
+    // submit issued counts, and only a NAVIGATION counts back to the fill, where the
+    // background traffic it races would otherwise name a bogus identity provider.
     const offsiteSignIn =
         authId !== null ? null : (
             firstRequest(
                 r =>
-                    r.seq >= fillSeq
+                    (r.seq >= submitSeq || (r.seq >= fillSeq && r.type === 'Document'))
                     && r.method !== 'GET'
-                    && r.type === 'Document'
                     && addressedOrigin(r)
                     && !sameOrigin(r)
                     && r.finalUrl.startsWith('http')

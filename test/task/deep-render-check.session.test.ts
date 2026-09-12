@@ -710,3 +710,71 @@ describe('driveSession: sessions that report on the environment', () => {
         expect((verdict as {note: string}).note).toContain('https://idp.example.com')
     })
 })
+
+// Regressions from the 0.40.39 review. Each one is driven through `driveSession`
+// rather than a hand-built fact set: the first two were already "covered" by tests
+// that assembled a shape the driver cannot produce.
+describe('driveSession: redirects the URL pair cannot see', () => {
+    test('a sign-in that 302s back to the SAME url is still a redirect → skip, not fail', async () => {
+        const {verdict, facts} = await run({
+            navigations: [landing],
+            onSubmit: [
+                {
+                    url: `${BASE}/login`,
+                    method: 'POST',
+                    type: 'Document',
+                    redirectTo: `${BASE}/login`,
+                    status: 200,
+                    mimeType: 'text/html'
+                }
+            ],
+            inspect: [wall('/login'), wall('/login')]
+        })
+        expect(facts.authRequest?.redirected).toBe(true)
+        expect(verdict.outcome).toBe('skip')
+        expect((verdict as {note: string}).note).toContain('redirected')
+    })
+
+    test('a post-auth XHR bounced to the login page names the hop, not a missing route', async () => {
+        const {verdict} = await run({
+            navigations: [
+                landing,
+                [
+                    {
+                        url: `${BASE}/api/me`,
+                        type: 'XHR',
+                        redirectTo: `${BASE}/login`,
+                        status: 200,
+                        mimeType: 'text/html'
+                    }
+                ]
+            ],
+            onSubmit: [loginPost],
+            inspect: [wall('/login'), inside('/dashboard')]
+        })
+        expect(verdict.outcome).toBe('fail')
+        const detail = (verdict as {detail: string}).detail
+        expect(detail).toContain('→ `/login`')
+        expect(detail).not.toContain('route is not mounted')
+    })
+
+    test('an XHR sign-in that 302s off-origin names the provider, not "no request to our origin"', async () => {
+        const {verdict, facts} = await run({
+            navigations: [landing, []],
+            onSubmit: [
+                {
+                    url: `${BASE}/api/login`,
+                    method: 'POST',
+                    type: 'XHR',
+                    redirectTo: 'https://idp.example.com/authorize',
+                    status: 200
+                }
+            ],
+            inspect: [wall('/login'), wall('/login')]
+        })
+        expect(facts.signInLeftOrigin).toBe('https://idp.example.com')
+        expect((verdict as {note: string}).note).not.toContain(
+            "issued no request to the app's own origin"
+        )
+    })
+})
