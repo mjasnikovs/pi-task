@@ -20,6 +20,7 @@ import {groupChildArgs} from '../config/group-args.js'
 import type {SpawnFn} from '../shared/child-process.js'
 import {runWorker, type RunWorkerResult} from './pi-worker-core.js'
 import {contextWindowForGroup} from '../task/context-usage.js'
+import {classifyWorkerAnswer, describeNoAnswer} from './worker-failure.js'
 import {
     childFailureReason,
     formatChildFailure,
@@ -31,14 +32,14 @@ import {
 const RENDER_PROMPT_MAX = 120
 
 /**
- * What the caller can read back after the fact. `exitCode` alone described only
- * the FINAL attempt, so a child that burned two spawns on a dead provider and a
- * child that ran once and said nothing were the same record (issue #19).
+ * What the caller can read back after the fact. `exitCode`, `modelError` and
+ * `stderr` describe the FINAL attempt only; a discarded attempt's own cause
+ * lives in its restart record (issue #19).
  */
 interface WorkerDetails {
     exitCode: number
     attempts: number
-    restarts: string[]
+    restarts: Array<{reason: string; detail?: string}>
     modelError?: string
     stderr?: string
 }
@@ -49,7 +50,10 @@ function workerDetails(r: RunWorkerResult): WorkerDetails {
     return {
         exitCode: r.exitCode,
         attempts: r.attempts,
-        restarts: r.restarts.map(x => x.reason),
+        restarts: r.restarts.map(x => ({
+            reason: x.reason,
+            ...(x.detail !== undefined ? {detail: x.detail} : {})
+        })),
         ...(r.modelError !== undefined ? {modelError: r.modelError} : {}),
         ...(r.stderr ? {stderr: r.stderr.slice(-STDERR_TAIL)} : {})
     }
@@ -131,21 +135,15 @@ export function registerPiWorker(pi: ExtensionAPI, internals: PiWorkerInternals 
                 return workerUnavailable(failure, details, childFailureReason(result))
             }
 
-            // Not a kill, so the ladder leaves it to us: pi reports a failed turn
-            // as exit 0, empty text, and the cause in `modelError`.
-            if (result.modelError && result.text.trim().length === 0) {
-                return workerUnavailable(
-                    `Worker failed: model error — ${result.modelError.slice(0, 200)}`,
-                    details,
-                    'model-error'
-                )
-            }
-
-            const text = result.text.trim()
-            if (text.length === 0) {
-                return workerUnavailable(describeEmptyAnswer(result), details, 'no-answer')
-            }
-            return workerAnswer(result.text, details)
+            const noAnswer = classifyWorkerAnswer(result)
+            if (noAnswer === undefined) return workerAnswer(result.text, details)
+            // Only the model sees the text, never `details`, so the diagnosis
+            // has to be in the text.
+            const text =
+                noAnswer.kind === 'empty-answer' ?
+                    describeEmptyAnswer(result)
+                :   `Worker failed: ${describeNoAnswer(noAnswer)}`
+            return workerUnavailable(text, details, noAnswer.kind)
         },
 
         renderCall(args, theme) {

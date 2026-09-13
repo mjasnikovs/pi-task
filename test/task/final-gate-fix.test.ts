@@ -485,6 +485,25 @@ describe('runFinalGateAutofix — ignored-path channel', () => {
         expect(log.some(l => l.includes('DOWNGRADED to UNOBSERVED'))).toBe(true)
     })
 
+    test('a child that died AFTER writing an ignored path still trails the write', async () => {
+        // The trail line is recorded before any guard can reject the attempt —
+        // and a thrown child is a rejection like any other. `discard` cannot
+        // revert the .env, so if this line is skipped the write is invisible forever.
+        const log: string[] = []
+        const r = await runFinalGateAutofix(
+            base({
+                runChild: () => Promise.reject(new Error('model error — context length exceeded')),
+                ignoredSnapshot: snapshots({}, {'.env': '1:20'}),
+                gateWithoutIgnored: () => Promise.resolve(true),
+                log: m => log.push(m)
+            })
+        )
+        expect(r.ok).toBe(false)
+        expect(r.reason).toContain('fix child failed')
+        expect(r.ignoredWrites).toEqual(['.env'])
+        expect(log.some(l => l.includes('IGNORED path(s) — .env'))).toBe(true)
+    })
+
     test('an INDEPENDENT ignored write is trailed but leaves the PASS alone', async () => {
         const log: string[] = []
         const r = await runFinalGateAutofix(

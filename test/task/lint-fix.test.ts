@@ -538,6 +538,27 @@ test('BLOCKED is consulted AFTER the guards — a blocked child that discarded w
     expect(r.reason).toMatch(/^revert-guard:/)
 })
 
+test('a child that discarded work and THEN threw still trips the revert-guard', async () => {
+    // Same rule as BLOCKED: the guards exist to catch destroyed work, and a child
+    // can revert the task's edits and then die on the provider. An early return on
+    // the throw leaves the tree unreverted.
+    const logs: string[] = []
+    const {git} = fakeGit({
+        diff: ['src/a.ts', ''],
+        'ls-files': ['', ''],
+        'write-tree': ['abc123']
+    })
+    const r = await runBoundedLintFix(
+        makeDeps({
+            git,
+            log: m => logs.push(m),
+            runChild: () => Promise.reject(new Error('model error — AI_APICallError: 503'))
+        })
+    )
+    expect(r.ok).toBe(false)
+    expect(logs.filter(l => l.includes('REVERT-GUARD'))).toHaveLength(1)
+})
+
 test('a missing marker is DONE — the re-run stays the arbiter', async () => {
     const {git} = fakeGit({
         diff: ['src/a.ts', 'src/a.ts'],

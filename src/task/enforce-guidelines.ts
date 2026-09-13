@@ -27,7 +27,10 @@ import type {SpawnFn} from '../shared/child-process.js'
 import {makeGit} from '../shared/git-runner.js'
 import {USER_CANCELLED} from './child-runner.js'
 import {
+    classifyWorkerAnswer,
     classifyWorkerFailure,
+    describeNoAnswer,
+    type WorkerAnswerInput,
     type WorkerFailure,
     type WorkerFailureInput
 } from '../workers/worker-failure.js'
@@ -255,10 +258,7 @@ export function parseEnforceVerdict(text: string): {clean: boolean; detail: stri
 }
 
 /** The subset of a runWorker result the enforcement-child mapping reads. */
-export interface EnforceChildResult extends WorkerFailureInput {
-    text: string
-    modelError?: string
-}
+export interface EnforceChildResult extends WorkerFailureInput, WorkerAnswerInput {}
 
 /**
  * Map the enforcement child's runWorker result to a fatal error message, or null
@@ -277,23 +277,24 @@ export interface EnforceChildResult extends WorkerFailureInput {
  * user as their own cancel. The switch below is exhaustive, so the next cause
  * added to the union is a compile error here rather than a silent mislabel.
  *
- * A loop is NOT fatal: enforce attaches the detector in nudge-then-warn mode, so a
- * loop that survived its restart-with-hint nudges returns null here (the caller
- * logs/notifies it as a warning) and the verdict gate alone decides the outcome.
- * It still has to be matched before `aborted`/`exitCode` so the kill's side
- * effects don't get re-classified as a user cancel or a crash.
+ * A loop is NOT fatal on its own: enforce attaches the detector in nudge-then-warn
+ * mode, so a loop that survived its restart-with-hint nudges is a warning (the
+ * caller notifies it) and the answer still decides. It still has to be matched
+ * before `aborted`/`exitCode` so the kill's side effects don't get re-classified
+ * as a user cancel or a crash.
+ *
+ * After the kill ladder, the answer itself: a model error or a child that never
+ * spoke is fatal — left unread, either parses as "no verdict" and a dead provider
+ * is blamed on the work (issue #19). Only a genuinely empty answer reaches the
+ * verdict parser.
  */
 export function classifyEnforceChildFailure(r: EnforceChildResult): string | null {
     const kill = classifyWorkerFailure(r)
     const named = kill ? describeKill(kill) : null
     if (named !== null) return named
-    // Not a kill, so the ladder leaves it to the consumer: pi reports a failed
-    // turn as exit 0, empty text, and the cause in `modelError`. Unread, the
-    // empty text parses as "no verdict" and a dead provider is blamed on the work.
-    // Checked after a surviving loop too — that arm is a warning, not an answer.
-    return r.modelError && r.text.trim().length === 0 ?
-            `model error — ${r.modelError.slice(0, 200)}`
-        :   null
+    const noAnswer = classifyWorkerAnswer(r)
+    if (!noAnswer || noAnswer.kind === 'empty-answer') return null
+    return describeNoAnswer(noAnswer)
 }
 
 function describeKill(failure: WorkerFailure): string | null {

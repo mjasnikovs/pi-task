@@ -331,7 +331,8 @@ export async function runFinalGateAutofix(deps: FinalFixDeps): Promise<FinalFixR
         signal: deps.signal,
         marker: 'FINAL-GATE-FIX'
     })
-    if (end.kind === 'error') return {ok: false, reason: `fix child failed: ${end.msg}`}
+    // A child that threw is NOT an early return from here: the guards below catch
+    // what it wrote before it died, and a thrown child has still written it.
 
     // What the child wrote to gitignored paths. Recorded on the trail IMMEDIATELY —
     // before any guard can reject the attempt — because `discard` reverts tracked
@@ -444,6 +445,9 @@ export async function runFinalGateAutofix(deps: FinalFixDeps): Promise<FinalFixR
         }
     }
 
+    if (end.kind === 'error') {
+        return withIgnored({ok: false, reason: `fix child failed: ${end.msg}`})
+    }
     if (end.kind === 'blocked') {
         // Self-declared blocked: skip the (expensive) gate re-run; nothing converged.
         return withIgnored({ok: false, reason: `fix child blocked: ${end.note}`})

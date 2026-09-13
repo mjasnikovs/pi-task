@@ -800,6 +800,40 @@ describe('runWorkVerification', () => {
         expect(runs).toBe(2)
     })
 
+    test('a model error on attempt 1 gets the same single retry as a missing verdict', async () => {
+        // Before issue #19 the child returned '' here and rode the no-verdict
+        // retry. Naming the error as a throw must not cost that retry: the child
+        // still never judged the work, and a FAIL now buys a full implementation
+        // re-run for a provider blip.
+        let runs = 0
+        const out = await runWorkVerification({
+            cwd: '/x',
+            spec: 'GOAL\nx',
+            runChild: async () => {
+                runs++
+                if (runs === 1) throw new Error('model error — AI_APICallError: 429')
+                return 'WORK-VERIFIED: PASS'
+            }
+        })
+        expect(out.ok).toBe(true)
+        expect(runs).toBe(2)
+    })
+
+    test('a model error twice → harness fault, not a verdict', async () => {
+        let runs = 0
+        const out = await runWorkVerification({
+            cwd: '/x',
+            spec: 'GOAL\nx',
+            runChild: async () => {
+                runs++
+                throw new Error('model error — AI_APICallError: 429')
+            }
+        })
+        expect(out.ok).toBe(false)
+        expect(out.failClass).toBe('harness-fault')
+        expect(runs).toBe(2)
+    })
+
     test('no verdict twice → blocked, reason says the retry happened', async () => {
         let runs = 0
         const out = await runWorkVerification({

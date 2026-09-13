@@ -32,9 +32,9 @@ import type {WorkerKillId} from './worker-kill.js'
  * The subset of a finished child result this classification reads.
  *
  * Structural on purpose: `runWorker` returns a superset, and `EnforceChildResult`
- * extends this interface with the one field enforcement adds. Typing the input as
- * what is actually READ lets both pass without either importing the other's
- * interface.
+ * extends this interface with the answer fields enforcement adds. Typing the
+ * input as what is actually READ lets both pass without either importing the
+ * other's interface.
  */
 export interface WorkerFailureInput {
     exitCode: number
@@ -50,11 +50,11 @@ export interface WorkerFailureInput {
 /**
  * Why the child died, or `undefined` when it finished under its own power.
  *
- * Note what is NOT here: an empty answer, and a reported `modelError` on a run
- * that still produced text. Neither is a kill — whether they count as a failure
- * is the consumer's policy — research-worker.ts, for one, accepts an explicit
- * empty section after a retry — so folding them in would move a decision out of
- * the module that owns it.
+ * Note what is NOT here: a reported `modelError`, a child that never spoke, and
+ * an empty answer. None is a kill — whether they count as a failure is the
+ * consumer's policy — research-worker.ts, for one, accepts an explicit empty
+ * section after a retry. `classifyWorkerAnswer` below names them; each consumer
+ * decides what they mean.
  */
 export type WorkerFailure =
     | {kind: 'stalled'}
@@ -210,4 +210,59 @@ export function classifyWorkerFailure(r: WorkerFailureInput): WorkerFailure | un
         if (hit) return hit
     }
     return undefined
+}
+
+/** The answer-side fields `classifyWorkerAnswer` reads off a finished child. */
+export interface WorkerAnswerInput {
+    text: string
+    modelError?: string
+    sawOutput?: boolean
+    stderr?: string
+}
+
+/**
+ * Why a child that was NOT killed still has no answer, or `undefined` for an answer.
+ *
+ * `model-error` wins even next to text. The event sink already drops an error
+ * that a LATER turn answered past, so a `modelError` that survives is one that
+ * came AFTER the last text: the provider died mid-run and the text is partial.
+ * Two consumers once required empty text here and each shipped a truncated
+ * verdict as a whole one.
+ */
+export type WorkerNoAnswer =
+    | {kind: 'model-error'; cause: string}
+    | {kind: 'dead-child'; stderr: string}
+    | {kind: 'empty-answer'}
+
+export function classifyWorkerAnswer(r: WorkerAnswerInput): WorkerNoAnswer | undefined {
+    if (r.modelError !== undefined && r.modelError.length > 0) {
+        return {kind: 'model-error', cause: r.modelError}
+    }
+    if (r.text.trim().length > 0) return undefined
+    if (r.sawOutput === false) return {kind: 'dead-child', stderr: r.stderr ?? ''}
+    return {kind: 'empty-answer'}
+}
+
+const MODEL_ERROR_PREFIX = 'model error — '
+const CAUSE_MAX = 200
+const STDERR_TAIL = 300
+
+/** The one wording of a model error, so a caller can recognise it back (`isModelErrorMessage`). */
+export function describeNoAnswer(f: WorkerNoAnswer): string {
+    switch (f.kind) {
+        case 'model-error':
+            return `${MODEL_ERROR_PREFIX}${f.cause.slice(0, CAUSE_MAX)}`
+        case 'dead-child':
+            return (
+                'produced no output — the child never wrote a single byte, so it died '
+                + 'before it could answer'
+                + (f.stderr ? `: ${f.stderr.slice(-STDERR_TAIL)}` : '')
+            )
+        case 'empty-answer':
+            return 'produced no output'
+    }
+}
+
+export function isModelErrorMessage(msg: string): boolean {
+    return msg.startsWith(MODEL_ERROR_PREFIX)
 }

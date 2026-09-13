@@ -37,6 +37,7 @@
  * can FAIL before the spec is looked at.
  */
 import {USER_CANCELLED} from './child-runner.js'
+import {isModelErrorMessage} from '../workers/worker-failure.js'
 import {buildEnvNotesBlock, ENV_NOTE_EMIT_INSTRUCTION, extractEnvNotes} from './env-notes.js'
 import {buildContractsVerifyBlock} from './contracts.js'
 import {findSkipEscapes, skipEscapeVerifyFindings} from './skip-escape.js'
@@ -1069,6 +1070,8 @@ export async function runWorkVerification(deps: VerificationDeps): Promise<Verif
         } catch (err) {
             if (err instanceof Error && err.message === USER_CANCELLED) throw err
             const msg = err instanceof Error ? err.message : String(err)
+            // A provider that died under the child never judged the work either.
+            if (isModelErrorMessage(msg) && attempt === 1) continue
             return {
                 ok: false,
                 failClass: 'harness-fault',

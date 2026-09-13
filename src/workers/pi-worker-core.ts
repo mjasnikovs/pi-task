@@ -482,8 +482,9 @@ export interface RunWorkerResult {
      * surface this through child-runner.ts; without it a swallowed provider error
      * reaches the caller as an indistinguishable empty answer and gets reported as
      * the useless "produced no output".
-     * Only meaningful when `text` is empty: a turn that produced text after pi
-     * recovered is a success, and the first-error capture must not relabel it.
+     * Survives next to text only when the error came AFTER that text: a turn
+     * that produced text after pi recovered is a success and the sink drops the
+     * earlier error. See `classifyWorkerAnswer` (worker-failure.ts).
      */
     modelError?: string
     /**

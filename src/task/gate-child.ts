@@ -263,10 +263,12 @@ export function makeGateChild(
                     }
                 }
             }
+            const failure = classifyEnforceChildFailure(r)
             // A loop that survived the restart-with-hint nudges is a WARNING, not a
             // failure: log it and tell the user, but let the verdict gate be the
-            // only thing that can block.
-            if (r.loopHit) {
+            // only thing that can block. Unless the same child also failed — then
+            // "continuing" would contradict the throw below.
+            if (r.loopHit && failure === null) {
                 log(`=== ${deps.kind} LOOP WARNING — ${formatLoopHint(r.loopHit)} ===`)
                 notifyRun(
                     deps.ctx,
@@ -275,7 +277,6 @@ export function makeGateChild(
                     'warning'
                 )
             }
-            const failure = classifyEnforceChildFailure(r)
             log(
                 failure ?
                     `=== ${deps.kind} end: FAIL — ${failure} ===`

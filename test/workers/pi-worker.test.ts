@@ -26,8 +26,9 @@ interface RegisteredTool {
 interface Details {
     exitCode: number
     attempts: number
-    restarts: string[]
+    restarts: Array<{reason: string; detail?: string}>
     modelError?: string
+    stderr?: string
 }
 
 async function runTool(responses: SpawnResponse[]): Promise<{text: string; details: Details}> {
@@ -60,12 +61,63 @@ test('a model error with no text is named, not rendered as "(no output)"', async
     expect(r.details.modelError).toBe('AI_APICallError: 429 rate limit exceeded')
     // A 429 is retried on the connection budget, so the spawns it cost are on record.
     expect(r.details.attempts).toBe(3)
-    expect(r.details.restarts).toEqual(['connection-error', 'connection-error'])
+    expect(r.details.restarts.map(x => x.reason)).toEqual(['connection-error', 'connection-error'])
 })
 
 test('a discarded attempt behind an empty final answer is visible in details', async () => {
     const r = await runTool([agentErrorResponse('Connection error.'), emptyClean])
     expect(r.details.attempts).toBe(2)
-    expect(r.details.restarts).toEqual(['connection-error'])
+    expect(r.details.restarts.map(x => x.reason)).toEqual(['connection-error'])
     expect(r.text).toContain('connection-error')
+})
+
+test('a discarded attempt keeps its OWN error text — modelError/stderr describe the final attempt only', async () => {
+    // runWorker records the discarded cause in WorkerRestart.detail; the reason
+    // tag alone ('connection-error') is not the 503 body or the auth failure.
+    const r = await runTool([agentErrorResponse('Connection error.'), emptyClean])
+    expect(r.details.modelError).toBeUndefined()
+    expect(r.details.restarts[0]).toMatchObject({
+        reason: 'connection-error',
+        detail: expect.stringContaining('Connection error.')
+    })
+})
+
+test('a model error that survives next to text is NOT returned as an answer', async () => {
+    // The sink keeps a modelError only when the error came AFTER the last text,
+    // so this fragment is a run the provider cut mid-sentence. The dispatching
+    // model must not receive it as a finished conclusion.
+    const r = await runTool([
+        {
+            events: [
+                {
+                    type: 'agent_end',
+                    messages: [
+                        {
+                            role: 'assistant',
+                            content: [{type: 'text', text: 'The handler is in src/'}]
+                        },
+                        {
+                            role: 'assistant',
+                            content: [{type: 'text', text: ''}],
+                            stopReason: 'error',
+                            errorMessage: 'AI_APICallError: 503'
+                        }
+                    ]
+                }
+            ],
+            exitCode: 0
+        }
+    ])
+    expect(r.text).not.toBe('The handler is in src/')
+    expect(r.text).toContain('503')
+    expect(r.details.modelError).toBe('AI_APICallError: 503')
+})
+
+test('a child that never wrote a byte is named as dead, not "(no output)"', async () => {
+    // sawOutput false: died at startup. The stderr tail is the only evidence,
+    // and it has to reach the TEXT — details never reach the model.
+    const r = await runTool([{events: [], exitCode: 0, stderr: 'error: unknown model "nope"'}])
+    expect(r.text).not.toBe('(no output)')
+    expect(r.text).toContain('never wrote')
+    expect(r.text).toContain('unknown model "nope"')
 })

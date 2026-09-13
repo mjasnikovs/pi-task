@@ -405,11 +405,27 @@ test('classifyEnforceChildFailure: a surviving loop does not hide a model error'
     expect(failure).toContain('model error')
 })
 
-test('classifyEnforceChildFailure: a model error on a run that still answered is NOT fatal', () => {
-    // pi retries a failed turn itself; an earlier blip with a later answer is an answer.
-    expect(
-        classifyEnforceChildFailure(childResult({text: 'ENFORCE: CLEAN', modelError: 'blip'}))
-    ).toBeNull()
+test('classifyEnforceChildFailure: a model error that SURVIVES next to text is fatal — the text is partial', () => {
+    // The sink (shared/child-process.ts) already drops an error that a LATER turn
+    // answered past. So a modelError that reaches here next to text is one that
+    // arrived AFTER the last text: the provider died mid-run and the verdict in the
+    // text never covered the rest of the work. Same class as command-timeout: a
+    // partial verdict must never be parsed as a real one.
+    const failure = classifyEnforceChildFailure(
+        childResult({text: 'file 1 fine\nENFORCE: CLEAN', modelError: 'AI_APICallError: 429'})
+    )
+    expect(failure).toContain('model error')
+    expect(failure).toContain('429')
+})
+
+test('classifyEnforceChildFailure: a child that never wrote a byte is a dead child, NOT "no verdict"', () => {
+    // sawOutput false — died at startup (unresolvable model, missing key, bad argv).
+    // Blaming that on the developer's work is the same mislabel as the 429.
+    const failure = classifyEnforceChildFailure(
+        childResult({text: '', sawOutput: false, stderr: 'error: unknown model "nope"'})
+    )
+    expect(failure).toContain('never wrote')
+    expect(failure).toContain('unknown model "nope"')
 })
 
 test('classifyEnforceChildFailure: stall-kill (also aborted) names the dead backend, NOT a cancel', () => {

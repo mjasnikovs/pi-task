@@ -272,14 +272,9 @@ export async function runBoundedLintFix(deps: LintFixDeps): Promise<LintFixResul
         signal: deps.signal,
         marker: 'LINT-FIX'
     })
-    if (end.kind === 'error') {
-        deps.log?.(`lint-fix child failed — ${end.msg}`)
-        return {ok: false, reason: `fix child failed: ${end.msg}`}
-    }
-    // A BLOCKED child is NOT an early return from here: the guards below exist to
-    // catch a child that discarded work, and a child can discard work and then
-    // block. The marker is consulted after them, in place of the re-run — which is
-    // where the twin consults its own.
+    // Neither a BLOCKED nor a thrown child is an early return from here: the
+    // guards below exist to catch a child that discarded work, and a child can
+    // discard work and then block, or die. Both are consulted after them.
 
     // REVERT-GUARD: every pre-existing work file must still differ from HEAD, and
     // every pre-existing untracked file must still exist. Trip → restore snapshot.
@@ -390,6 +385,10 @@ export async function runBoundedLintFix(deps: LintFixDeps): Promise<LintFixResul
         }
     }
 
+    if (end.kind === 'error') {
+        deps.log?.(`lint-fix child failed — ${end.msg}`)
+        return {ok: false, reason: `fix child failed: ${end.msg}`}
+    }
     if (end.kind === 'blocked') deps.log?.(`lint-fix BLOCKED — ${end.note}`)
 
     // The CHECK is the arbiter, including after a BLOCKED marker.

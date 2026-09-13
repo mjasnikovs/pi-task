@@ -398,3 +398,22 @@ describe('gate child guard policy', () => {
         expect(h.seenInput[0]!.override).toBeUndefined()
     })
 })
+
+test('a looping child that also died on a model error is NOT told "continuing (not blocked)"', async () => {
+    // The loop arm is a warning and the model-error arm is fatal. Emitting the
+    // warning and then throwing sends the user two contradictory notices about
+    // one child; the fatal outcome is the only one that may be announced.
+    const {deps, notices} = harness({
+        runWorker: () =>
+            Promise.resolve(
+                workerResult({
+                    text: '',
+                    aborted: true,
+                    loopHit: {call: {name: 'read', args: {}}, count: 3, windowSize: 5},
+                    modelError: 'AI_APICallError: 429'
+                } as Partial<RunWorkerResult>)
+            )
+    })
+    await expect(makeGateChild(deps)('read', 'x')).rejects.toThrow(/model error/)
+    expect(notices.some(n => n.includes('continuing (not blocked)'))).toBe(false)
+})
