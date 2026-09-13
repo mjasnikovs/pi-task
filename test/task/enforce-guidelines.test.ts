@@ -385,6 +385,33 @@ test('classifyEnforceChildFailure: stream-stall kill (also aborted) names the hu
     expect(failure).toContain('stream')
 })
 
+test('classifyEnforceChildFailure: a model error with no text is named, NOT parsed as "no verdict"', () => {
+    // Issue #19: pi delivers a failed turn as exit 0, empty text, and the cause in
+    // `modelError`. Left unread, the empty text reaches parseEnforceVerdict and a
+    // provider 429 is reported as a guideline violation.
+    const failure = classifyEnforceChildFailure(
+        childResult({text: '', modelError: 'AI_APICallError: 429 rate limit exceeded'})
+    )
+    expect(failure).toContain('model error')
+    expect(failure).toContain('429 rate limit exceeded')
+})
+
+test('classifyEnforceChildFailure: a surviving loop does not hide a model error', () => {
+    // The loop arm is a warning, not an answer, so the empty text still has to
+    // be explained by the error the child reported.
+    const failure = classifyEnforceChildFailure(
+        childResult({text: '', aborted: true, loopHit: 'read x3', modelError: '429 rate limit'})
+    )
+    expect(failure).toContain('model error')
+})
+
+test('classifyEnforceChildFailure: a model error on a run that still answered is NOT fatal', () => {
+    // pi retries a failed turn itself; an earlier blip with a later answer is an answer.
+    expect(
+        classifyEnforceChildFailure(childResult({text: 'ENFORCE: CLEAN', modelError: 'blip'}))
+    ).toBeNull()
+})
+
 test('classifyEnforceChildFailure: stall-kill (also aborted) names the dead backend, NOT a cancel', () => {
     const failure = classifyEnforceChildFailure(childResult({aborted: true, stalled: true}))
     expect(failure).toContain('model server unreachable')

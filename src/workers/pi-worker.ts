@@ -17,7 +17,8 @@ import {Text} from '@earendil-works/pi-tui'
 import {Type} from '@sinclair/typebox'
 import {getConfig} from '../config/config.js'
 import {groupChildArgs} from '../config/group-args.js'
-import {runWorker} from './pi-worker-core.js'
+import type {SpawnFn} from '../shared/child-process.js'
+import {runWorker, type RunWorkerResult} from './pi-worker-core.js'
 import {contextWindowForGroup} from '../task/context-usage.js'
 import {
     childFailureReason,
@@ -29,15 +30,50 @@ import {
 
 const RENDER_PROMPT_MAX = 120
 
+/**
+ * What the caller can read back after the fact. `exitCode` alone described only
+ * the FINAL attempt, so a child that burned two spawns on a dead provider and a
+ * child that ran once and said nothing were the same record (issue #19).
+ */
 interface WorkerDetails {
     exitCode: number
+    attempts: number
+    restarts: string[]
+    modelError?: string
+    stderr?: string
+}
+
+const STDERR_TAIL = 500
+
+function workerDetails(r: RunWorkerResult): WorkerDetails {
+    return {
+        exitCode: r.exitCode,
+        attempts: r.attempts,
+        restarts: r.restarts.map(x => x.reason),
+        ...(r.modelError !== undefined ? {modelError: r.modelError} : {}),
+        ...(r.stderr ? {stderr: r.stderr.slice(-STDERR_TAIL)} : {})
+    }
+}
+
+/** An empty final answer, with the spawns it cost, so the model can tell a
+ *  retried failure from a child that simply had nothing to say. */
+function describeEmptyAnswer(r: RunWorkerResult): string {
+    if (r.restarts.length === 0) return '(no output)'
+    const reasons = r.restarts.map(x => x.reason).join(', ')
+    return `(no output after ${r.attempts} attempts; discarded: ${reasons})`
 }
 
 const WorkerParams = Type.Object({
     prompt: Type.String({description: 'Task for the worker to perform.'})
 })
 
-export function registerPiWorker(pi: ExtensionAPI): void {
+/** Test seams: a fake child, and no real backoff sleep between its attempts. */
+export interface PiWorkerInternals {
+    spawn?: SpawnFn
+    sleepFor?: (ms: number) => Promise<void>
+}
+
+export function registerPiWorker(pi: ExtensionAPI, internals: PiWorkerInternals = {}): void {
     makeWorkerTool<typeof WorkerParams, WorkerDetails>(pi, {
         name: 'pi-worker',
         label: 'Pi Worker',
@@ -84,16 +120,32 @@ export function registerPiWorker(pi: ExtensionAPI): void {
                 // model and its window is the honest one. Without this the churn
                 // rule cannot fire — see RunWorkerInput.contextWindow.
                 contextWindow: contextWindowForGroup(ctx, 'research') || 'unknown',
-                groupArgs: groupChildArgs('research')
+                groupArgs: groupChildArgs('research'),
+                ...(internals.spawn ? {spawn: internals.spawn} : {}),
+                ...(internals.sleepFor ? {sleepFor: internals.sleepFor} : {})
             })
-            const details: WorkerDetails = {exitCode: result.exitCode}
+            const details = workerDetails(result)
 
             const failure = formatChildFailure(result, 'Worker aborted.')
             if (failure !== null) {
                 return workerUnavailable(failure, details, childFailureReason(result))
             }
 
-            return workerAnswer(result.text || '(no output)', details)
+            // Not a kill, so the ladder leaves it to us: pi reports a failed turn
+            // as exit 0, empty text, and the cause in `modelError`.
+            if (result.modelError && result.text.trim().length === 0) {
+                return workerUnavailable(
+                    `Worker failed: model error — ${result.modelError.slice(0, 200)}`,
+                    details,
+                    'model-error'
+                )
+            }
+
+            const text = result.text.trim()
+            if (text.length === 0) {
+                return workerUnavailable(describeEmptyAnswer(result), details, 'no-answer')
+            }
+            return workerAnswer(result.text, details)
         },
 
         renderCall(args, theme) {

@@ -26,7 +26,11 @@ import * as path from 'node:path'
 import type {SpawnFn} from '../shared/child-process.js'
 import {makeGit} from '../shared/git-runner.js'
 import {USER_CANCELLED} from './child-runner.js'
-import {classifyWorkerFailure, type WorkerFailureInput} from '../workers/worker-failure.js'
+import {
+    classifyWorkerFailure,
+    type WorkerFailure,
+    type WorkerFailureInput
+} from '../workers/worker-failure.js'
 import {TASKS_DIR_NAME} from './task-types.js'
 import {findProbeGamingInDiff} from './probe-gaming.js'
 
@@ -253,6 +257,7 @@ export function parseEnforceVerdict(text: string): {clean: boolean; detail: stri
 /** The subset of a runWorker result the enforcement-child mapping reads. */
 export interface EnforceChildResult extends WorkerFailureInput {
     text: string
+    modelError?: string
 }
 
 /**
@@ -279,8 +284,19 @@ export interface EnforceChildResult extends WorkerFailureInput {
  * effects don't get re-classified as a user cancel or a crash.
  */
 export function classifyEnforceChildFailure(r: EnforceChildResult): string | null {
-    const failure = classifyWorkerFailure(r)
-    if (!failure) return null
+    const kill = classifyWorkerFailure(r)
+    const named = kill ? describeKill(kill) : null
+    if (named !== null) return named
+    // Not a kill, so the ladder leaves it to the consumer: pi reports a failed
+    // turn as exit 0, empty text, and the cause in `modelError`. Unread, the
+    // empty text parses as "no verdict" and a dead provider is blamed on the work.
+    // Checked after a surviving loop too — that arm is a warning, not an answer.
+    return r.modelError && r.text.trim().length === 0 ?
+            `model error — ${r.modelError.slice(0, 200)}`
+        :   null
+}
+
+function describeKill(failure: WorkerFailure): string | null {
     switch (failure.kind) {
         case 'stalled':
             // Otherwise a long silence is reported as a user cancel.
