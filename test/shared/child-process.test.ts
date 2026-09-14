@@ -58,6 +58,7 @@ function fakeSpawnChunks(chunks: string[], exitCode = 0): SpawnFn {
 
 describe('runChild text mode', () => {
     test('collects stdout, stderr, exitCode', async () => {
+process.stdout.write('::case collects stdout, stderr, exitCode ' + Date.now() + '\n')
         const spawn = fakeSpawnSimple('hello world', 0, 'warn')
         const result = await runChild(spawn, noopInvocation, '/tmp', undefined, {mode: 'text'})
         expect(result.stdout).toBe('hello world')
@@ -68,6 +69,7 @@ describe('runChild text mode', () => {
     })
 
     test('reports non-zero exit', async () => {
+process.stdout.write('::case reports non-zero exit ' + Date.now() + '\n')
         const spawn = fakeSpawnSimple('output', 42)
         const result = await runChild(spawn, noopInvocation, '/tmp', undefined, {mode: 'text'})
         expect(result.exitCode).toBe(42)
@@ -75,6 +77,7 @@ describe('runChild text mode', () => {
     })
 
     test('fires onFirstByte exactly once on the first stdout chunk', async () => {
+process.stdout.write('::case fires onFirstByte exactly once on the first stdout chunk ' + Date.now() + '\n')
         let fired = 0
         const spawn = fakeSpawnSimple('hello world')
         await runChild(spawn, noopInvocation, '/tmp', undefined, {
@@ -85,6 +88,7 @@ describe('runChild text mode', () => {
     })
 
     test('does not fire onFirstByte when stdout is empty', async () => {
+process.stdout.write('::case does not fire onFirstByte when stdout is empty ' + Date.now() + '\n')
         let fired = 0
         const spawn = fakeSpawnSimple('', 0, 'stderr-only')
         await runChild(spawn, noopInvocation, '/tmp', undefined, {
@@ -120,6 +124,7 @@ describe('runChild stdin delivery', () => {
     }
 
     test('a broken stdin does not take the host down and fails the run', async () => {
+process.stdout.write('::case a broken stdin does not take the host down and fails the run ' + Date.now() + '\n')
         const result = await runChild(
             fakeSpawnBrokenStdin(0),
             {...noopInvocation, stdin: 'the prompt'},
@@ -132,6 +137,7 @@ describe('runChild stdin delivery', () => {
     })
 
     test("a broken stdin keeps the child's own non-zero exit", async () => {
+process.stdout.write('::case a broken stdin keeps the childs own non-zero exit ' + Date.now() + '\n')
         const result = await runChild(
             fakeSpawnBrokenStdin(42),
             {...noopInvocation, stdin: 'the prompt'},
@@ -145,6 +151,7 @@ describe('runChild stdin delivery', () => {
 
 describe('runChild json-events mode', () => {
     test('returns final assistant text from agent_end', async () => {
+process.stdout.write('::case returns final assistant text from agent_end ' + Date.now() + '\n')
         const spawn = fakeSpawnSimple(
             JSON.stringify(agentEndResponse('the answer').events[0]) + '\n'
         )
@@ -155,6 +162,7 @@ describe('runChild json-events mode', () => {
     })
 
     test('falls back to text_delta accumulation', async () => {
+process.stdout.write('::case falls back to text_delta accumulation ' + Date.now() + '\n')
         const events = [
             {type: 'message_update', assistantMessageEvent: {type: 'text_start'}},
             {type: 'message_update', assistantMessageEvent: {type: 'text_delta', delta: 'hello '}},
@@ -169,6 +177,7 @@ describe('runChild json-events mode', () => {
     })
 
     test('emits onLine on text_start', async () => {
+process.stdout.write('::case emits onLine on text_start ' + Date.now() + '\n')
         const events = [{type: 'message_update', assistantMessageEvent: {type: 'text_start'}}]
         const stdout = events.map(e => JSON.stringify(e) + '\n').join('')
         const spawn = fakeSpawnSimple(stdout)
@@ -181,6 +190,7 @@ describe('runChild json-events mode', () => {
     })
 
     test('emits onLine on tool_execution_start with summary', async () => {
+process.stdout.write('::case emits onLine on tool_execution_start with summary ' + Date.now() + '\n')
         const events = [{type: 'tool_execution_start', toolName: 'bash', args: {command: 'ls -la'}}]
         const stdout = events.map(e => JSON.stringify(e) + '\n').join('')
         const spawn = fakeSpawnSimple(stdout)
@@ -197,6 +207,7 @@ describe('runChild json-events mode', () => {
     // real and only readout, and the WINDOW comes from the caller because the
     // stream carries none.
     test('emits onContextUsage from message_end, windowed by the caller', async () => {
+process.stdout.write('::case emits onContextUsage from message_end, windowed by the caller ' + Date.now() + '\n')
         const events = [
             {
                 type: 'message_end',
@@ -221,6 +232,7 @@ describe('runChild json-events mode', () => {
     })
 
     test('parses an event whose JSON is split across two data chunks', async () => {
+process.stdout.write('::case parses an event whose JSON is split across two data chunks ' + Date.now() + '\n')
         const line = JSON.stringify(agentEndResponse('split answer').events[0]) + '\n'
         const mid = Math.floor(line.length / 2)
         const spawn = fakeSpawnChunks([line.slice(0, mid), line.slice(mid)])
@@ -231,6 +243,7 @@ describe('runChild json-events mode', () => {
     })
 
     test('flushes a final event that is not newline-terminated', async () => {
+process.stdout.write('::case flushes a final event that is not newline-terminated ' + Date.now() + '\n')
         // No trailing '\n' — the event only completes at close.
         const line = JSON.stringify(agentEndResponse('no newline').events[0])
         const spawn = fakeSpawnChunks([line])
@@ -241,6 +254,7 @@ describe('runChild json-events mode', () => {
     })
 
     test('does not buffer the raw stream into stdout (prevents string-length overflow)', async () => {
+process.stdout.write('::case does not buffer the raw stream into stdout (prevents string-length overflow) ' + Date.now() + '\n')
         // A large multi-chunk json-events stream must not accumulate in stdout.
         const deltas = Array.from({length: 50}, (_, i) => ({
             type: 'message_update',
@@ -263,6 +277,7 @@ describe('runChild json-events mode', () => {
     })
 
     test('onToolCall returning a LoopHit triggers process kill and sets aborted', async () => {
+process.stdout.write('::case onToolCall returning a LoopHit triggers process kill and sets aborted ' + Date.now() + '\n')
         const events = [
             {type: 'tool_execution_start', toolName: 'bash', args: {command: 'echo hi'}}
         ]
@@ -283,18 +298,22 @@ describe('runChild json-events mode', () => {
 
 describe('summarizeToolArgs', () => {
     test('bash command joined to single line', () => {
+process.stdout.write('::case bash command joined to single line ' + Date.now() + '\n')
         expect(summarizeToolArgs('bash', {command: 'ls  -la\n/tmp'})).toBe('ls -la /tmp')
     })
 
     test('file_path field', () => {
+process.stdout.write('::case file_path field ' + Date.now() + '\n')
         expect(summarizeToolArgs('read', {file_path: '/src/foo.ts'})).toBe('/src/foo.ts')
     })
 
     test('pattern field', () => {
+process.stdout.write('::case pattern field ' + Date.now() + '\n')
         expect(summarizeToolArgs('grep', {pattern: 'runChild'})).toBe('runChild')
     })
 
     test('returns empty string when no recognised field', () => {
+process.stdout.write('::case returns empty string when no recognised field ' + Date.now() + '\n')
         expect(summarizeToolArgs('unknown', {data: 'xyz'})).toBe('')
     })
 })
@@ -324,6 +343,7 @@ describe('runChild stall guard (dead model backend)', () => {
     }
 
     test('no output + unreachable endpoint → killed with stalled:true', async () => {
+process.stdout.write('::case no output + unreachable endpoint → killed with stalled:true ' + Date.now() + '\n')
         let probes = 0
         const result = await runChild(wedgedSpawn(1, 5), noopInvocation, '/tmp', undefined, {
             mode: 'json-events',
@@ -341,6 +361,7 @@ describe('runChild stall guard (dead model backend)', () => {
     })
 
     test('no output + REACHABLE endpoint → keeps waiting (prompt processing)', async () => {
+process.stdout.write('::case no output + REACHABLE endpoint → keeps waiting (prompt processing) ' + Date.now() + '\n')
         let probes = 0
         const spawn = (() => {
             const p = makeProc()
@@ -364,6 +385,7 @@ describe('runChild stall guard (dead model backend)', () => {
     })
 
     test('output progress resets the window — probe never fires for a chatty child', async () => {
+process.stdout.write('::case output progress resets the window — probe never fires for a chatty child ' + Date.now() + '\n')
         let probes = 0
         const spawn = (() => {
             const p = makeProc()
@@ -392,6 +414,7 @@ describe('runChild stall guard (dead model backend)', () => {
     })
 
     test('a crashing probe proves nothing → keeps waiting', async () => {
+process.stdout.write('::case a crashing probe proves nothing → keeps waiting ' + Date.now() + '\n')
         const spawn = (() => {
             const p = makeProc()
             setTimeout(() => p.emit('close', 0), 200)
@@ -408,6 +431,7 @@ describe('runChild stall guard (dead model backend)', () => {
 
 describe('summarizeToolArgs — search/fetch workers', () => {
     test('pi-worker-search shows the quoted query, 60-char clipped', () => {
+process.stdout.write('::case pi-worker-search shows the quoted query, 60-char clipped ' + Date.now() + '\n')
         expect(summarizeToolArgs('pi-worker-search', {query: 'bun sql tagged template'})).toBe(
             '"bun sql tagged template"'
         )
@@ -417,6 +441,7 @@ describe('summarizeToolArgs — search/fetch workers', () => {
     })
 
     test('pi-worker-fetch shows the url, 60-char clipped', () => {
+process.stdout.write('::case pi-worker-fetch shows the url, 60-char clipped ' + Date.now() + '\n')
         expect(summarizeToolArgs('pi-worker-fetch', {url: 'https://bun.sh/docs', query: 'q'})).toBe(
             'https://bun.sh/docs'
         )
@@ -425,6 +450,7 @@ describe('summarizeToolArgs — search/fetch workers', () => {
     })
 
     test('missing expected arg falls through to the generic fields', () => {
+process.stdout.write('::case missing expected arg falls through to the generic fields ' + Date.now() + '\n')
         expect(summarizeToolArgs('pi-worker-search', {q: 'wrong-name'})).toBe('')
         expect(summarizeToolArgs('pi-worker-fetch', {})).toBe('')
     })
@@ -457,6 +483,7 @@ describe('runChild process-group reaping', () => {
     // `detached: true` would satisfy the live-platform shape and the win32 arm
     // would never run.
     test('json-events child on win32 is spawned windowsHide, never detached', async () => {
+process.stdout.write('::case json-events child on win32 is spawned windowsHide, never detached ' + Date.now() + '\n')
         const {spawn, opts} = recordingSpawn(4242)
         await runChild(spawn, noopInvocation, '/tmp', undefined, {
             mode: 'json-events',
@@ -478,6 +505,7 @@ describe('runChild process-group reaping', () => {
     )
 
     test('text child (git/plumbing) gets neither detached nor windowsHide', async () => {
+process.stdout.write('::case text child (git/plumbing) gets neither detached nor windowsHide ' + Date.now() + '\n')
         const {spawn, opts} = recordingSpawn(4242)
         await runChild(spawn, noopInvocation, '/tmp', undefined, {mode: 'text'})
         expect(opts.detached).toBeUndefined()
@@ -486,6 +514,7 @@ describe('runChild process-group reaping', () => {
 
     // Driven by `platform`, so the windows runner asserts the POSIX reap too.
     test('linux: a child that exits has its group SIGTERMed, then SIGKILLed', async () => {
+process.stdout.write('::case linux: a child that exits has its group SIGTERMed, then SIGKILLed ' + Date.now() + '\n')
         const {spawn} = recordingSpawn(4242)
         jest.useFakeTimers()
         try {
@@ -506,6 +535,7 @@ describe('runChild process-group reaping', () => {
     })
 
     test('text child does not signal any process group on close', async () => {
+process.stdout.write('::case text child does not signal any process group on close ' + Date.now() + '\n')
         const {spawn} = recordingSpawn(4242)
         const killed = await recordKills(() =>
             runChild(spawn, noopInvocation, '/tmp', undefined, {mode: 'text'})
@@ -594,6 +624,7 @@ describe('runChild process-group reaping', () => {
 
     // `killed` turns true once SIGTERM is delivered, not once the child is gone.
     test('a child deaf to SIGTERM is SIGKILLed when the grace period ends', async () => {
+process.stdout.write('::case a child deaf to SIGTERM is SIGKILLed when the grace period ends ' + Date.now() + '\n')
         const signals: string[] = []
         const r = await abortDeaf({mode: 'text'}, signals)
         expect(signals).toEqual(['SIGTERM', 'SIGKILL'])
@@ -601,6 +632,7 @@ describe('runChild process-group reaping', () => {
     })
 
     test("linux: a deaf model child's group is SIGKILLed when the grace period ends", async () => {
+process.stdout.write('::case linux: a deaf model childs group is SIGKILLed when the grace period ends ' + Date.now() + '\n')
         let run: Promise<ChildResult> | undefined
         const killed = await recordKills(() => {
             run = abortDeaf({mode: 'json-events', platform: 'linux'})
@@ -615,6 +647,7 @@ describe('runChild process-group reaping', () => {
     // Once the child has exited Windows may hand its pid to an unrelated process,
     // and `taskkill /T /F` would kill that one and everything under it.
     test('win32: a child that exits on its own is never taskkilled', async () => {
+process.stdout.write('::case win32: a child that exits on its own is never taskkilled ' + Date.now() + '\n')
         const tk = fakeTaskkill()
         jest.useFakeTimers()
         try {
@@ -636,6 +669,7 @@ describe('runChild process-group reaping', () => {
 
     // taskkill walks the tree down from a live root.
     test('win32: a killed child is taskkilled once, before its own kill', async () => {
+process.stdout.write('::case win32: a killed child is taskkilled once, before its own kill ' + Date.now() + '\n')
         const tk = fakeTaskkill()
         try {
             const killed = await recordKills(() => abortOn('win32', () => tk.note('kill')))
@@ -649,6 +683,7 @@ describe('runChild process-group reaping', () => {
     // A grandchild holding the inherited pipes keeps 'close' away long after the
     // leader exited. The run ends with the leader, and a kill landing after it is moot.
     test('win32: the run ends when the leader exits, though its pipes stay open', async () => {
+process.stdout.write('::case win32: the run ends when the leader exits, though its pipes stay open ' + Date.now() + '\n')
         const tk = fakeTaskkill()
         const controller = new AbortController()
         const p = makeProc()
@@ -684,6 +719,7 @@ describe('runChild process-group reaping', () => {
 
     // A spawn seam need not report 'exit'; 'close' still means the leader is gone.
     test('win32: a leader seen only through close is not taskkilled after it', async () => {
+process.stdout.write('::case win32: a leader seen only through close is not taskkilled after it ' + Date.now() + '\n')
         const tk = fakeTaskkill()
         const controller = new AbortController()
         const spawn = (() => {
@@ -715,6 +751,7 @@ describe('runChild process-group reaping', () => {
     // Real processes on the host's platform. Detached, so neither a POSIX group reap
     // nor the job a Windows runtime puts its children in ends the grandchild early.
     test('a real child ends its run on exit, though a grandchild holds its pipes', async () => {
+process.stdout.write('::case a real child ends its run on exit, though a grandchild holds its pipes ' + Date.now() + '\n')
         const pidFile = path.join(tmpDir('grandchild-pid-'), 'pid')
         strays.push(killPidIn(pidFile))
         const script = [
@@ -740,6 +777,7 @@ describe('runChild process-group reaping', () => {
 
 describe('reapProcessGroup', () => {
     test('win32: one forced tree kill through System32 taskkill', async () => {
+process.stdout.write('::case win32: one forced tree kill through System32 taskkill ' + Date.now() + '\n')
         const tk = fakeTaskkill()
         try {
             const killed = await recordKills(() =>
@@ -753,6 +791,7 @@ describe('reapProcessGroup', () => {
     })
 
     test('win32: nothing once the leader has exited', async () => {
+process.stdout.write('::case win32: nothing once the leader has exited ' + Date.now() + '\n')
         const tk = fakeTaskkill()
         try {
             const killed = await recordKills(() =>
@@ -767,6 +806,7 @@ describe('reapProcessGroup', () => {
 
     // A POSIX group outlives its leader, and the server it backgrounded is the point.
     test('linux: the group is signalled even after the leader exited', async () => {
+process.stdout.write('::case linux: the group is signalled even after the leader exited ' + Date.now() + '\n')
         const killed = await recordKills(() =>
             reapProcessGroup(4242, 'SIGKILL', {platform: 'linux', leaderExited: true})
         )
@@ -777,6 +817,7 @@ describe('reapProcessGroup', () => {
     // and run whatever System32\taskkill.exe the working directory holds. On a windows
     // host the real taskkill answers instead, so it is aimed at a process of our own.
     test('win32: an empty SystemRoot never runs a taskkill from the working directory', async () => {
+process.stdout.write('::case win32: an empty SystemRoot never runs a taskkill from the working directory ' + Date.now() + '\n')
         const target = realSpawn(process.execPath, ['-e', 'setInterval(() => {}, 1 << 30)'], {
             stdio: 'ignore'
         })
@@ -796,6 +837,7 @@ describe('reapProcessGroup', () => {
     // real taskkill. The grandchild shares the leader's stdout, so 'close' arrives only
     // once both are dead.
     test('a live leader is reaped together with the grandchild it started', async () => {
+process.stdout.write('::case a live leader is reaped together with the grandchild it started ' + Date.now() + '\n')
         const leaderScript = [
             "const {spawn} = require('node:child_process')",
             "const g = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1 << 30)'], {stdio: 'inherit'})",
@@ -846,6 +888,7 @@ describe('runChild abort-listener lifecycle', () => {
     }
 
     test('leaves no listener after 20 children close normally on a shared signal', async () => {
+process.stdout.write('::case leaves no listener after 20 children close normally on a shared signal ' + Date.now() + '\n')
         const controller = new AbortController()
         for (let i = 0; i < 20; i++) {
             await runChild(fakeSpawnEnding('close'), noopInvocation, '/tmp', controller.signal, {
@@ -857,6 +900,7 @@ describe('runChild abort-listener lifecycle', () => {
     })
 
     test('leaves no listener after 20 children fail via error on a shared signal', async () => {
+process.stdout.write('::case leaves no listener after 20 children fail via error on a shared signal ' + Date.now() + '\n')
         const controller = new AbortController()
         for (let i = 0; i < 20; i++) {
             const r = await runChild(
@@ -872,6 +916,7 @@ describe('runChild abort-listener lifecycle', () => {
     })
 
     test('detaches on the json-events path too (own process group, sink attached)', async () => {
+process.stdout.write('::case detaches on the json-events path too (own process group, sink attached) ' + Date.now() + '\n')
         const controller = new AbortController()
         for (let i = 0; i < 10; i++) {
             await runChild(
@@ -886,6 +931,7 @@ describe('runChild abort-listener lifecycle', () => {
     })
 
     test('aborting an active child cleans up once and resolves once', async () => {
+process.stdout.write('::case aborting an active child cleans up once and resolves once ' + Date.now() + '\n')
         const controller = new AbortController()
         let closes = 0
         const spawn = (() => {
@@ -913,6 +959,7 @@ describe('runChild abort-listener lifecycle', () => {
     })
 
     test('racing error and close resolves once and leaves no listener', async () => {
+process.stdout.write('::case racing error and close resolves once and leaves no listener ' + Date.now() + '\n')
         const controller = new AbortController()
         const spawn = (() => {
             const p = makeProc()
@@ -933,6 +980,7 @@ describe('runChild abort-listener lifecycle', () => {
     })
 
     test('an already-aborted signal gains no listener', async () => {
+process.stdout.write('::case an already-aborted signal gains no listener ' + Date.now() + '\n')
         const controller = new AbortController()
         controller.abort()
         await runChild(fakeSpawnEnding('close'), noopInvocation, '/tmp', controller.signal, {
@@ -942,6 +990,7 @@ describe('runChild abort-listener lifecycle', () => {
     })
 
     test('completed children are not retained by the shared signal', async () => {
+process.stdout.write('::case completed children are not retained by the shared signal ' + Date.now() + '\n')
         const controller = new AbortController()
         const refs: Array<WeakRef<object>> = []
         const spawn = (() => {
@@ -974,6 +1023,7 @@ describe('runChild abort-listener lifecycle', () => {
 // the group reap.
 describe('ownGroupSpawnOptions', () => {
     test('win32: hidden console, never detached', () => {
+process.stdout.write('::case win32: hidden console, never detached ' + Date.now() + '\n')
         expect(ownGroupSpawnOptions('win32')).toEqual({windowsHide: true})
     })
 
@@ -982,6 +1032,7 @@ describe('ownGroupSpawnOptions', () => {
     })
 
     testPosix('a real POSIX child under these options leads its own group', async () => {
+process.stdout.write('::case a real POSIX child under these options leads its own group ' + Date.now() + '\n')
         const p = realSpawn('sh', ['-c', 'ps -o pgid= -p $$'], {
             ...ownGroupSpawnOptions(process.platform),
             stdio: ['ignore', 'pipe', 'ignore']

@@ -1,0 +1,17 @@
+name: probe
+on: pull_request
+jobs:
+  probe:
+    runs-on: windows-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+      - run: bun install --frozen-lockfile
+      - name: child-process tests on unfixed source
+        timeout-minutes: 8
+        run: bun test --isolate test/shared/child-process.test.ts
+        env:
+          AGENT: "1"
