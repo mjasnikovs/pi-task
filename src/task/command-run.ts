@@ -30,6 +30,7 @@
  */
 
 import {spawn} from 'node:child_process'
+import {EXIT_DRAIN_MS} from '../shared/child-process.js'
 import {isCommandNotFound, resolveRunner, runnerEnv} from './runner-resolve.js'
 
 /** What one finished command looks like, stripped of how it was spawned. */
@@ -118,13 +119,6 @@ class BoundedOutput {
 }
 
 /**
- * After the child EXITS, how long its pipes may still deliver buffered data
- * before the run is reported. Not a wait for the pipes to CLOSE — that is the
- * bug below — just the turn or two the reader needs to hand over what it has.
- */
-const DRAIN_MS = 50
-
-/**
  * The real runner: one bounded child, output collected, never rejects.
  *
  * A kill — by the wall clock or by the caller's cancel — reads as `status: null`,
@@ -192,7 +186,7 @@ export const spawnCommand: CommandRunner = spec =>
         const killAndSettle = (): void => {
             kill()
             clearTimeout(drain)
-            drain = setTimeout(() => done(null), DRAIN_MS)
+            drain = setTimeout(() => done(null), EXIT_DRAIN_MS)
         }
         // NOT unref'd. This timer is the only bound left on every gate command,
         // repo-health command and ACCEPT-debt re-run, and an unref'd timer is only
@@ -225,7 +219,7 @@ export const spawnCommand: CommandRunner = spec =>
             settleIfDrained()
             if (!settled) {
                 clearTimeout(drain)
-                drain = setTimeout(() => done(exitStatus), DRAIN_MS)
+                drain = setTimeout(() => done(exitStatus), EXIT_DRAIN_MS)
             }
         })
     })

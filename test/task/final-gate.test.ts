@@ -5,6 +5,7 @@
  * each case is fast and hermetic.
  */
 import {afterAll, describe, expect, test} from 'bun:test'
+import {testPosix} from '../test-utils/platform.js'
 import {tmpDir} from '../test-utils/tmp-dir.js'
 import {spawnSync} from 'node:child_process'
 import * as fs from 'node:fs'
@@ -31,12 +32,10 @@ import {runVerifyCommandLine, rerunDebtVerifyCommand} from '../../src/task/final
 import type {CommandRun, CommandRunner} from '../../src/task/command-run.js'
 import {inertClosure, type EnvClosure} from '../../src/task/env-template-closure.js'
 
-// Some cases exercise irreducibly-POSIX process/shell mechanics — death by a
+// `testPosix` marks the cases that exercise irreducibly-POSIX process/shell mechanics — death by a
 // Unix signal (no equivalent on Windows), or shadowing `npm` (a .cmd on Windows,
 // which node's bare spawn can't resolve without a shell). Skip those on Windows
 // rather than pretend; the product paths they cover degrade to env-gap-skip there.
-const IS_WINDOWS = process.platform === 'win32'
-const itPosix = IS_WINDOWS ? test.skip : test
 
 /**
  * Every root this file makes, removed together at the end.
@@ -296,7 +295,7 @@ describe('runFinalIntegrationGate', () => {
         expect(out.failures).toHaveLength(2)
     })
 
-    itPosix('a lockfile desync aggregates with a failing integration command', async () => {
+    testPosix('a lockfile desync aggregates with a failing integration command', async () => {
         const dir = makeDir({scripts: {test: 'echo TEST-ALSO-FAILED && exit 1'}})
         fs.writeFileSync(path.join(dir, 'package-lock.json'), '{}')
         await withFakeBin(
@@ -313,7 +312,7 @@ describe('runFinalIntegrationGate', () => {
         )
     })
 
-    itPosix('an in-sync lockfile passes and the check is named in the reason', async () => {
+    testPosix('an in-sync lockfile passes and the check is named in the reason', async () => {
         const dir = makeDir({scripts: {test: 'exit 0'}})
         fs.writeFileSync(path.join(dir, 'package-lock.json'), '{}')
         await withFakeBin('npm', 'exit 0', async () => {
@@ -324,7 +323,7 @@ describe('runFinalIntegrationGate', () => {
         })
     })
 
-    itPosix('a lock-check tool that cannot run (127) is an env gap → skipped', async () => {
+    testPosix('a lock-check tool that cannot run (127) is an env gap → skipped', async () => {
         const dir = makeDir({scripts: {test: 'exit 0'}})
         fs.writeFileSync(path.join(dir, 'package-lock.json'), '{}')
         await withFakeBin('npm', 'exit 127', async () => {
@@ -333,7 +332,7 @@ describe('runFinalIntegrationGate', () => {
         })
     })
 
-    itPosix('a lockfile check alone (no test/build scripts) still gates', async () => {
+    testPosix('a lockfile check alone (no test/build scripts) still gates', async () => {
         const dir = makeDir({name: 'x'})
         fs.writeFileSync(path.join(dir, 'package-lock.json'), '{}')
         await withFakeBin('npm', 'exit 1', async () => {
@@ -513,7 +512,7 @@ describe('runFinalIntegrationGate — served-page render check (runs 8/11)', () 
             scripts: {start: 'node -e "setTimeout(()=>{},600000)"'}
         })
 
-    itPosix('a served app that renders blank FAILs the whole gate', async () => {
+    testPosix('a served app that renders blank FAILs the whole gate', async () => {
         const dir = servedApp()
         const out = await runFinalIntegrationGate(dir, {
             timeoutMs: 900_000,
@@ -532,7 +531,7 @@ describe('runFinalIntegrationGate — served-page render check (runs 8/11)', () 
         expect(out.reason).toContain('EMPTY')
     })
 
-    itPosix(
+    testPosix(
         'a served app whose page cannot be observed → PASS with an UNOBSERVED warning',
         async () => {
             const dir = servedApp()
@@ -551,7 +550,7 @@ describe('runFinalIntegrationGate — served-page render check (runs 8/11)', () 
         }
     )
 
-    itPosix('a served app that renders content → clean PASS, no warning', async () => {
+    testPosix('a served app that renders content → clean PASS, no warning', async () => {
         const dir = servedApp()
         const out = await runFinalIntegrationGate(dir, {
             timeoutMs: 900_000,
@@ -613,35 +612,38 @@ describe('runFinalIntegrationGate — failure aggregation + ranking (run 13)', (
     // playwright .spec collision) PLUS an unservable app (listener up, page never
     // renders — no index.html producer). Baseline (early-return) showed ONLY the
     // test failure; the aggregate must carry BOTH with the render failure FIRST.
-    itPosix('run-13 replay: failing test glob + unservable app → both, render first', async () => {
-        const dir = makeDir({
-            dependencies: {hono: '^4'},
-            scripts: {
-                test: 'echo "playwright .spec picked up by bun test: 63 errors" && exit 1',
-                start: 'node -e "setTimeout(()=>{},600000)"'
-            }
-        })
-        const out = await runFinalIntegrationGate(dir, {
-            timeoutMs: 900_000,
-            bootGraceMs: 5000,
-            bootDeps: {
-                groupHasListener: () => true,
-                groupListeningPort: () => 3000,
-                renderProbe: () => ({
-                    outcome: 'fail',
-                    detail: 'GET / responded 404 — the rendered document is the not-found page'
-                })
-            }
-        })
-        expect(out.ok).toBe(false)
-        expect(out.failures).toHaveLength(2)
-        expect(out.failures![0]).toContain('boot check')
-        expect(out.failures![0]).toContain('404')
-        expect(out.failures![1]).toContain('`bun run test` exited 1')
-        // The reason (picker question + autofix seed) carries the full ranked list.
-        expect(out.reason).toContain('1. boot check')
-        expect(out.reason).toContain('2. `bun run test` exited 1')
-    })
+    testPosix(
+        'run-13 replay: failing test glob + unservable app → both, render first',
+        async () => {
+            const dir = makeDir({
+                dependencies: {hono: '^4'},
+                scripts: {
+                    test: 'echo "playwright .spec picked up by bun test: 63 errors" && exit 1',
+                    start: 'node -e "setTimeout(()=>{},600000)"'
+                }
+            })
+            const out = await runFinalIntegrationGate(dir, {
+                timeoutMs: 900_000,
+                bootGraceMs: 5000,
+                bootDeps: {
+                    groupHasListener: () => true,
+                    groupListeningPort: () => 3000,
+                    renderProbe: () => ({
+                        outcome: 'fail',
+                        detail: 'GET / responded 404 — the rendered document is the not-found page'
+                    })
+                }
+            })
+            expect(out.ok).toBe(false)
+            expect(out.failures).toHaveLength(2)
+            expect(out.failures![0]).toContain('boot check')
+            expect(out.failures![0]).toContain('404')
+            expect(out.failures![1]).toContain('`bun run test` exited 1')
+            // The reason (picker question + autofix seed) carries the full ranked list.
+            expect(out.reason).toContain('1. boot check')
+            expect(out.reason).toContain('2. `bun run test` exited 1')
+        }
+    )
 
     test('launch-contract, launch-script and integration failures all aggregate', async () => {
         const dir = makeDir({

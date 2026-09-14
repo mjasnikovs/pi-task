@@ -1,11 +1,13 @@
 import {describe, expect, jest, test} from 'bun:test'
 import {
+    BOOT_KILL_GRACE_MS,
     runBootCheck,
     type BootChild,
     type BootDeps,
     type BootSpawnOptions
 } from '../../src/task/boot-probe.js'
-import {fakeTaskkill, recordKills, testOffWin32} from '../test-utils/fake-reap.js'
+import {fakeTaskkill, recordKills} from '../test-utils/fake-reap.js'
+import {testPosix} from '../test-utils/platform.js'
 
 /**
  * The boot state machine, driven through a SCRIPTED child.
@@ -89,15 +91,8 @@ function fakeChild(o: FakeChildOptions = {}) {
 
 const CMD: [string, string[]] = ['bun', ['run', 'start']]
 
-/**
- * `runBootCheck` computes
- * `expectServer = (opts.expectServer ?? false) && platform !== 'win32'`, and
- * `platform` is the host's unless `deps.platform` says otherwise, so every
- * served-app branch below is unreachable on a win32 host and degrades to the
- * survival rule. Same convention as `boot-probe.test.ts`'s `itPosix`.
- */
-const IS_WINDOWS = process.platform === 'win32'
-const testPosix = IS_WINDOWS ? test.skip : test
+// The served-app cases below run on the host's platform, and a win32 host has no
+// process groups to attribute a listener to, so it applies the survival rule instead.
 
 describe('the exit ladder', () => {
     test('exit 0 on a non-served project PASSes', async () => {
@@ -398,24 +393,34 @@ describe('the win32 degrade', () => {
 // and by then Windows may have handed its pid to an unrelated process.
 describe('the boot reap', () => {
     /** Survive the grace window, get reaped, exit, then let the SIGKILL pass come due. */
-    async function passThenExitOn(platform: NodeJS.Platform): Promise<void> {
+    async function passThenExitOn(
+        platform: NodeJS.Platform,
+        killGroup?: BootDeps['killGroup']
+    ): Promise<void> {
         jest.useFakeTimers()
         try {
             const f = fakeChild({pid: 9931})
             const p = runBootCheck('/tmp/x', CMD, 20, {
-                deps: {...f.deps({platform}), killGroup: undefined}
+                deps: {...f.deps({platform}), killGroup}
             })
             jest.advanceTimersByTime(20)
             expect(await p).toEqual({outcome: 'pass'})
             f.exit(null, 'SIGTERM')
             jest.advanceTimersByTime(1) // fakeChild delivers the exit on a 1ms poll
-            jest.advanceTimersByTime(2_000)
+            jest.advanceTimersByTime(BOOT_KILL_GRACE_MS)
         } finally {
             jest.useRealTimers()
         }
     }
 
-    testOffWin32('win32: taskkill once, while the boot child still lives', async () => {
+    // An injected reap replaces the real one, so it has to be told what that one knows.
+    test('an injected killGroup learns whether the boot child had exited', async () => {
+        const exited: boolean[] = []
+        await passThenExitOn('linux', (_pid, _signal, leaderExited) => exited.push(leaderExited))
+        expect(exited).toEqual([false, true])
+    })
+
+    test('win32: taskkill once, while the boot child still lives', async () => {
         const tk = fakeTaskkill()
         try {
             const killed = await recordKills(() => passThenExitOn('win32'))

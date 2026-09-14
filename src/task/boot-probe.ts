@@ -323,7 +323,7 @@ export interface BootDeps {
      * a fake child has no group to kill and a real `process.kill(pid)` against a
      * fake pid would signal something else entirely.
      */
-    killGroup?: (pid: number, signal: NodeJS.Signals) => void
+    killGroup?: (pid: number, signal: NodeJS.Signals, leaderExited: boolean) => void
     /** Which platform's spawn options, served-app rule and reap to use. Tests drive
      *  the win32 arm from a POSIX host; production leaves it to `process.platform`. */
     platform?: NodeJS.Platform
@@ -667,6 +667,8 @@ function holderIsOurs(command: string, boot: HealthCommand): boolean {
     )
 }
 
+export const BOOT_KILL_GRACE_MS = 2_000
+
 /** The real spawn. Kept beside the seam so the default is one line to read. */
 function defaultSpawnBoot(bin: string, args: string[], o: BootSpawnOptions): BootChild {
     return spawn(bin, args, o) as unknown as BootChild
@@ -784,25 +786,25 @@ export async function runBootCheck(
         let leaderExited = false
         const reapGroup =
             opts.deps?.killGroup
-            ?? ((pid: number, sig: NodeJS.Signals) =>
-                reapProcessGroup(pid, sig, {platform, leaderExited}))
+            ?? ((pid: number, sig: NodeJS.Signals, exited: boolean) =>
+                reapProcessGroup(pid, sig, {platform, leaderExited: exited}))
         const killGroup = (sig: NodeJS.Signals) => {
             // Truthiness, deliberately: `process.kill(0, sig)` signals the
             // CALLER's own process group, so a pid of 0 turns a best-effort
             // teardown into self-termination. Node's spawn never yields 0, but
             // `spawnBoot` is a seam now and a fake or future child could.
             if (!child.pid) return
-            reapGroup(child.pid, sig)
+            reapGroup(child.pid, sig, leaderExited)
         }
         const passAndKill = (renderNote?: string) => {
             settle(renderNote ? {outcome: 'pass', renderNote} : {outcome: 'pass'})
             killGroup('SIGTERM')
-            setTimeout(() => killGroup('SIGKILL'), 2_000).unref()
+            setTimeout(() => killGroup('SIGKILL'), BOOT_KILL_GRACE_MS).unref()
         }
         const failAndKill = (detail: string) => {
             settle({outcome: 'fail', detail})
             killGroup('SIGTERM')
-            setTimeout(() => killGroup('SIGKILL'), 2_000).unref()
+            setTimeout(() => killGroup('SIGKILL'), BOOT_KILL_GRACE_MS).unref()
         }
         // Served apps only: poll for a listening socket owned by our process group.
         // As soon as one appears the boot has demonstrably served → run the render
@@ -894,7 +896,7 @@ export async function runBootCheck(
                     detail: `still running after ${graceMs}ms but never opened a listening socket — the spec/dependencies promise an HTTP server`
                 })
                 killGroup('SIGTERM')
-                setTimeout(() => killGroup('SIGKILL'), 2_000).unref()
+                setTimeout(() => killGroup('SIGKILL'), BOOT_KILL_GRACE_MS).unref()
                 return
             }
             passAndKill()

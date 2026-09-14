@@ -10,6 +10,14 @@ import type {LoopHit} from '../task/loop-detector.js'
 /** Grace period between SIGTERM and SIGKILL (ms). */
 export const KILL_GRACE_MS = 5000
 
+/**
+ * After a child EXITS, how long its pipes may still deliver buffered data before
+ * the run is reported. Not a wait for the pipes to CLOSE, which a grandchild holding
+ * them can put off for as long as it lives: just the turn or two the reader needs
+ * to hand over what it has.
+ */
+export const EXIT_DRAIN_MS = 50
+
 /** Base flags shared by all child pi invocations. */
 export const CHILD_BASE_ARGS = [
     '--print',
@@ -88,25 +96,25 @@ export type OwnGroupSpawnOptions = {detached: true} | {windowsHide: true}
 
 /**
  * Tear down a child spawned with `ownGroupSpawnOptions`, and whatever it
- * backgrounded. Best-effort: a group already gone is not an error. Kept beside
- * the spawn shape so a platform change edits one file.
+ * backgrounded that is still in its group. Best-effort: a group already gone is
+ * not an error. Kept beside the spawn shape so a platform change edits one file.
+ *
+ * `leaderExited` has no default: whether the leader still lives decides whether its
+ * pid is still its own. Returns whether a reap went out.
  */
 export function reapProcessGroup(
     pid: number,
     sig: NodeJS.Signals,
-    {
-        platform = process.platform,
-        leaderExited = false
-    }: {platform?: NodeJS.Platform; leaderExited?: boolean} = {}
-): void {
+    {platform = process.platform, leaderExited}: {platform?: NodeJS.Platform; leaderExited: boolean}
+): boolean {
     // taskkill walks the tree down from a live leader. Once the leader has exited its
     // pid may already be another process's, and /T /F would kill that one instead.
-    if (platform === 'win32' && leaderExited) return
+    if (platform === 'win32' && leaderExited) return false
     try {
         if (platform === 'win32') {
-            // System32's taskkill by absolute path, as pi's killProcessTree finds it, so
-            // neither PATH nor the working directory can supply another. Synchronous,
-            // unlike pi's: runChild kills the leader next, and the walk must end first.
+            // System32's taskkill by absolute path, so neither PATH nor the working
+            // directory can supply another. Synchronous, unlike pi's killProcessTree:
+            // runChild kills the leader next, and the walk must end first.
             const taskkill = path.join(
                 process.env.SystemRoot || 'C:\\Windows',
                 'System32',
@@ -116,8 +124,9 @@ export function reapProcessGroup(
         } else {
             process.kill(-pid, sig)
         }
+        return true
     } catch {
-        // group already gone
+        return false
     }
 }
 
@@ -528,13 +537,10 @@ export function runChild(
         }
 
         // Reap the child's whole process group — the child itself AND anything it
-        // backgrounded.
+        // backgrounded. Set by 'exit' or 'close', whichever a spawn reports first.
         let leaderExited = false
-        proc.once('exit', () => (leaderExited = true))
-        const reapGroup = (sig: NodeJS.Signals): void => {
-            if (!ownGroup || !proc.pid) return
-            reapProcessGroup(proc.pid, sig, {platform, leaderExited})
-        }
+        const reapGroup = (sig: NodeJS.Signals): boolean =>
+            ownGroup && !!proc.pid && reapProcessGroup(proc.pid, sig, {platform, leaderExited})
 
         // One kill path for every source: SIGTERM, then SIGKILL after a grace
         // period if the child ignored the term. For a group-owning (model) child,
@@ -542,14 +548,16 @@ export function runChild(
         // proc.kill hits only the leader, reapGroup the grandchildren. The sweep
         // goes first because win32's taskkill walks the tree down from a live
         // leader. The FIRST cause wins: a stall kill's SIGTERM can trip the abort
-        // path behind it.
+        // path behind it. A leader that already exited gave its own verdict.
         const killProc = (cause: ChildKill): void => {
+            if (leaderExited) return
             kill ??= cause
             reapGroup('SIGTERM')
             proc.kill('SIGTERM')
             setTimeout(() => {
                 reapGroup('SIGKILL')
-                if (!proc.killed) proc.kill('SIGKILL')
+                // Not `proc.killed`: that turns true once SIGTERM is delivered.
+                if (!leaderExited) proc.kill('SIGKILL')
             }, KILL_GRACE_MS)
         }
 
@@ -670,15 +678,39 @@ export function runChild(
             resolve(result)
         }
 
-        proc.once('close', (code: number | null) => {
-            // The child has exited, but anything it backgrounded (a dev server) may
-            // still hold its process group and a port — reap the group so the next
-            // gate's boot check does not collide with our own orphan. Best-effort:
-            // SIGTERM now, SIGKILL shortly after for anything that ignored it.
-            if (ownGroup) {
-                reapGroup('SIGTERM')
-                setTimeout(() => reapGroup('SIGKILL'), 1_000).unref()
-            }
+        // 'close' waits on every holder of the pipes, and a grandchild that inherited
+        // them holds them for as long as it lives. The run ends with the leader: at
+        // once if its pipes are already at EOF, otherwise after one drain.
+        let finished = false
+        let exitCode: number | null = null
+        let endedStreams = 0
+        const expectedStreams = (proc.stdout ? 1 : 0) + (proc.stderr ? 1 : 0)
+        let drain: ReturnType<typeof setTimeout> | undefined
+        const finishIfDrained = (): void => {
+            if (leaderExited && endedStreams >= expectedStreams) finish(exitCode)
+        }
+        proc.stdout?.on('end', () => {
+            endedStreams++
+            finishIfDrained()
+        })
+        proc.stderr?.on('end', () => {
+            endedStreams++
+            finishIfDrained()
+        })
+        proc.once('exit', (code: number | null) => {
+            leaderExited = true
+            exitCode = code
+            finishIfDrained()
+            if (!finished) drain = setTimeout(() => finish(exitCode), EXIT_DRAIN_MS)
+        })
+        proc.once('close', (code: number | null) => finish(code ?? exitCode))
+
+        const finish = (code: number | null): void => {
+            if (finished) return
+            finished = true
+            leaderExited = true
+            clearTimeout(drain)
+            if (reapGroup('SIGTERM')) setTimeout(() => reapGroup('SIGKILL'), KILL_GRACE_MS).unref()
             if (sink) sink.flush()
             const text = sink ? sink.text : undefined
             // pi waits for EOF before it runs, so a stdin error on a child nobody
@@ -695,7 +727,7 @@ export function runChild(
                 text,
                 modelError: sink?.modelError
             })
-        })
+        }
         proc.once('error', () => {
             settle({
                 stdout,

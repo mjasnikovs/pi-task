@@ -14,7 +14,9 @@
  * The fake is launched through a POSIX shell shebang, exactly as render-check's
  * fake browser is, so the spawn-flow cases are POSIX-only.
  */
-import {afterAll, describe, expect, test} from 'bun:test'
+import {afterAll, describe, expect} from 'bun:test'
+import {recordKills} from '../test-utils/fake-reap.js'
+import {testPosix} from '../test-utils/platform.js'
 import {tmpDir} from '../test-utils/tmp-dir.js'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
@@ -169,51 +171,53 @@ function run(
     })
 }
 
-// The fake browser is launched via a POSIX shell shebang, so these cases are
-// skipped elsewhere rather than faked.
-const posix = process.platform === 'win32' ? test.skip : test
+// `testPosix` throughout: the fake browser is launched via a POSIX shell shebang, so
+// these cases are skipped elsewhere rather than faked.
 
 describe('drive: a session that works', () => {
-    posix('signs in, leaves the wall, and its authenticated data calls 2xx → pass', async () => {
-        let facts: DeepSessionFacts | null = null
-        const r = await run(
-            fakeBrowser({
-                navigations: [
-                    landing,
-                    [
-                        {
-                            url: `${BASE}/api/me`,
-                            type: 'XHR',
-                            status: 200,
-                            mimeType: 'application/json'
-                        }
-                    ]
-                ],
-                onSubmit: [loginPost],
-                inspect: [wall('/login'), inside('/dashboard')]
-            }),
-            {onFacts: f => void (facts = f)}
-        )
-        expect(r.outcome).toBe('pass')
-        expect((r as {detail: string}).detail).toContain('1/1 same-origin data requests')
+    testPosix(
+        'signs in, leaves the wall, and its authenticated data calls 2xx → pass',
+        async () => {
+            let facts: DeepSessionFacts | null = null
+            const r = await run(
+                fakeBrowser({
+                    navigations: [
+                        landing,
+                        [
+                            {
+                                url: `${BASE}/api/me`,
+                                type: 'XHR',
+                                status: 200,
+                                mimeType: 'application/json'
+                            }
+                        ]
+                    ],
+                    onSubmit: [loginPost],
+                    inspect: [wall('/login'), inside('/dashboard')]
+                }),
+                {onFacts: f => void (facts = f)}
+            )
+            expect(r.outcome).toBe('pass')
+            expect((r as {detail: string}).detail).toContain('1/1 same-origin data requests')
 
-        const f = facts as unknown as DeepSessionFacts
-        expect(f.submitted).toBe(true)
-        expect(f.leftAuthWall).toBe(true)
-        expect(f.authRequest).toEqual({
-            method: 'POST',
-            path: '/api/auth/login',
-            status: 200,
-            failed: false,
-            redirected: false
-        })
-        // The re-entry navigation is what produced the data request: without it the
-        // authenticated path is never observed at all (a success card issues nothing).
-        expect(f.postAuthDataAttempted).toBe(1)
-        expect(f.sessionRequests?.map(s => s.phase)).toEqual(['pre', 'auth', 'post'])
-    })
+            const f = facts as unknown as DeepSessionFacts
+            expect(f.submitted).toBe(true)
+            expect(f.leftAuthWall).toBe(true)
+            expect(f.authRequest).toEqual({
+                method: 'POST',
+                path: '/api/auth/login',
+                status: 200,
+                failed: false,
+                redirected: false
+            })
+            // The re-entry navigation is what produced the data request: without it the
+            // authenticated path is never observed at all (a success card issues nothing).
+            expect(f.postAuthDataAttempted).toBe(1)
+            expect(f.sessionRequests?.map(s => s.phase)).toEqual(['pre', 'auth', 'post'])
+        }
+    )
 
-    posix('a landing page with no wall short-circuits before any fill → pass', async () => {
+    testPosix('a landing page with no wall short-circuits before any fill → pass', async () => {
         const r = await run(
             fakeBrowser({
                 navigations: [landing],
@@ -226,7 +230,7 @@ describe('drive: a session that works', () => {
 })
 
 describe('drive: the run-17 class', () => {
-    posix('server accepts the credentials, client never leaves the wall → fail', async () => {
+    testPosix('server accepts the credentials, client never leaves the wall → fail', async () => {
         let facts: DeepSessionFacts | null = null
         const r = await run(
             fakeBrowser({
@@ -242,7 +246,7 @@ describe('drive: the run-17 class', () => {
         expect((facts as unknown as DeepSessionFacts).postAuthDataAttempted).toBe(0)
     })
 
-    posix('an authenticated XHR answered by the SPA catch-all → fail', async () => {
+    testPosix('an authenticated XHR answered by the SPA catch-all → fail', async () => {
         const r = await run(
             fakeBrowser({
                 navigations: [
@@ -257,7 +261,7 @@ describe('drive: the run-17 class', () => {
         expect((r as {detail: string}).detail).toContain('got the SPA')
     })
 
-    posix('an authenticated XHR on an unmounted route → fail', async () => {
+    testPosix('an authenticated XHR on an unmounted route → fail', async () => {
         const r = await run(
             fakeBrowser({
                 navigations: [
@@ -279,7 +283,7 @@ describe('drive: the run-17 class', () => {
         expect((r as {detail: string}).detail).toContain('does not route')
     })
 
-    posix('signed in, left the wall, blank page behind it → fail', async () => {
+    testPosix('signed in, left the wall, blank page behind it → fail', async () => {
         const r = await run(
             fakeBrowser({
                 navigations: [landing, []],
@@ -301,7 +305,7 @@ describe('drive: the run-17 class', () => {
 })
 
 describe('drive: sessions that report on the environment, never on the app', () => {
-    posix('a form that cannot be filled → skip', async () => {
+    testPosix('a form that cannot be filled → skip', async () => {
         const r = await run(
             fakeBrowser({
                 navigations: [landing],
@@ -313,7 +317,7 @@ describe('drive: sessions that report on the environment, never on the app', () 
         expect((r as {note: string}).note).toContain('could not be driven')
     })
 
-    posix('a form with no submit control → skip', async () => {
+    testPosix('a form with no submit control → skip', async () => {
         const r = await run(
             fakeBrowser({
                 navigations: [landing],
@@ -325,7 +329,7 @@ describe('drive: sessions that report on the environment, never on the app', () 
         expect((r as {note: string}).note).toContain('could not be driven')
     })
 
-    posix('a client pinned to a build-time origin names that origin → skip', async () => {
+    testPosix('a client pinned to a build-time origin names that origin → skip', async () => {
         const r = await run(
             fakeBrowser({
                 navigations: [landing],
@@ -344,7 +348,7 @@ describe('drive: sessions that report on the environment, never on the app', () 
         expect((r as {note: string}).note).toContain('http://localhost:9999')
     })
 
-    posix('a sign-in the server rejected → skip, never fail', async () => {
+    testPosix('a sign-in the server rejected → skip, never fail', async () => {
         const r = await run(
             fakeBrowser({
                 navigations: [landing],
@@ -356,13 +360,13 @@ describe('drive: sessions that report on the environment, never on the app', () 
         expect((r as {note: string}).note).toContain('did not accept the declared credentials')
     })
 
-    posix('a browser that exits before it listens → skip', async () => {
+    testPosix('a browser that exits before it listens → skip', async () => {
         const r = await run(fakeBrowser({inspect: []}, 'crash'))
         expect(r.outcome).toBe('skip')
         expect((r as {note: string}).note).toContain('could not run')
     })
 
-    posix('a browser that never prints the DevTools banner → skip on the budget', async () => {
+    testPosix('a browser that never prints the DevTools banner → skip on the budget', async () => {
         const r = await run(fakeBrowser({inspect: []}, 'hang'), {timeoutMs: 400})
         expect(r.outcome).toBe('skip')
         expect((r as {note: string}).note).toContain('timed out after 400ms')
@@ -374,23 +378,13 @@ describe('drive: sessions that report on the environment, never on the app', () 
 describe('launchBrowser teardown', () => {
     /** Group kills issued while `fn` runs, passed through to the real kill. */
     async function groupReaps(fn: () => Promise<unknown>): Promise<number> {
-        let reaps = 0
-        const realKill = process.kill.bind(process)
-        process.kill = ((pid: number, sig?: string | number) => {
-            if (pid < 0) reaps++
-            return realKill(pid, sig)
-        }) as typeof process.kill
-        try {
-            await fn()
-        } finally {
-            process.kill = realKill
-        }
-        return reaps
+        const kills = await recordKills(fn, {passThrough: true})
+        return kills.filter(k => k.pid < 0).length
     }
 
     // The session's own close ends the browser, then the check's teardown abort
     // runs close again.
-    posix('a finished session reaps the browser once', async () => {
+    testPosix('a finished session reaps the browser once', async () => {
         const reaps = await groupReaps(async () => {
             const r = await run(fakeBrowser({navigations: [landing], inspect: [inside('/')]}))
             expect(r.outcome).toBe('pass')
@@ -400,7 +394,7 @@ describe('launchBrowser teardown', () => {
 
     // The abort's close kills the browser, then the launch's own failure path
     // closes again.
-    posix('an aborted launch reaps the browser once', async () => {
+    testPosix('an aborted launch reaps the browser once', async () => {
         const controller = new AbortController()
         const reaps = await groupReaps(async () => {
             const launch = launchBrowser(
