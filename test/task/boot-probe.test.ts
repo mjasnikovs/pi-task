@@ -11,6 +11,7 @@
  * gate instead, because they run `runFinalIntegrationGate` end to end.
  */
 import {describe, expect, test} from 'bun:test'
+import {testPosix} from '../test-utils/platform.js'
 import {tmpDir} from '../test-utils/tmp-dir.js'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
@@ -27,10 +28,8 @@ import {
     runBootSection
 } from '../../src/task/boot-probe.js'
 
-// Some cases exercise irreducibly-POSIX process mechanics — death by a Unix signal
-// has no Windows equivalent. Skip those rather than pretend.
-const IS_WINDOWS = process.platform === 'win32'
-const itPosix = IS_WINDOWS ? test.skip : test
+// `testPosix` marks the cases that exercise irreducibly-POSIX process mechanics —
+// death by a Unix signal has no Windows equivalent. Skip those rather than pretend.
 
 /** A cross-platform child fixture: `node -e <script>` behaves identically on every
  *  OS, unlike `sh -c` (no POSIX-shell semantics on Windows). */
@@ -184,7 +183,7 @@ describe('runBootCheck', () => {
 
     // Death by a Unix signal has no Windows equivalent, so this behaviour is
     // POSIX-only and the case is skipped rather than faked.
-    itPosix('signal death within the window → FAIL naming the signal', async () => {
+    testPosix('signal death within the window → FAIL naming the signal', async () => {
         const r = await runBootCheck(os.tmpdir(), ['sh', ['-c', 'kill -SEGV $$']])
         expect(r.outcome).toBe('fail')
         expect((r as {detail: string}).detail).toContain('SIGSEGV')
@@ -248,16 +247,19 @@ describe('runBootCheck — served-app listener requirement (run 10 item 1)', () 
     // these tests to the survival rule on a toolless runner.
     const canSee = {enumerationCapable: () => true, pickPort: async () => null}
 
-    itPosix('watcher: stays alive but never listens → FAIL naming the missing socket', async () => {
-        const r = await runBootCheck(os.tmpdir(), alive, 800, {
-            expectServer: true,
-            deps: {...canSee, groupHasListener: () => false}
-        })
-        expect(r.outcome).toBe('fail')
-        expect((r as {detail: string}).detail).toContain('listening socket')
-    })
+    testPosix(
+        'watcher: stays alive but never listens → FAIL naming the missing socket',
+        async () => {
+            const r = await runBootCheck(os.tmpdir(), alive, 800, {
+                expectServer: true,
+                deps: {...canSee, groupHasListener: () => false}
+            })
+            expect(r.outcome).toBe('fail')
+            expect((r as {detail: string}).detail).toContain('listening socket')
+        }
+    )
 
-    itPosix('type-only entrypoint: exits 0 without listening → FAIL', async () => {
+    testPosix('type-only entrypoint: exits 0 without listening → FAIL', async () => {
         const r = await runBootCheck(os.tmpdir(), nodeScript('process.exit(0)'), 2000, {
             expectServer: true,
             deps: {...canSee, groupHasListener: () => false}
@@ -266,7 +268,7 @@ describe('runBootCheck — served-app listener requirement (run 10 item 1)', () 
         expect((r as {detail: string}).detail).toContain('listening socket')
     })
 
-    itPosix('a listener owned by our group appears → PASS (early, before grace)', async () => {
+    testPosix('a listener owned by our group appears → PASS (early, before grace)', async () => {
         const r = await runBootCheck(os.tmpdir(), alive, 5000, {
             expectServer: true,
             deps: {...canSee, groupHasListener: () => true}
@@ -274,7 +276,7 @@ describe('runBootCheck — served-app listener requirement (run 10 item 1)', () 
         expect(r.outcome).toBe('pass')
     })
 
-    itPosix(
+    testPosix(
         'CLI project (expectServer off): staying alive still PASSes, no listener needed',
         async () => {
             const r = await runBootCheck(os.tmpdir(), alive, 500, {
@@ -294,26 +296,29 @@ describe('runBootCheck — unobservable listener degrades, never false-FAILs (ru
     const alive = nodeScript('setTimeout(()=>{},600000)')
     const blind = {enumerationCapable: () => false, groupHasListener: () => false}
 
-    itPosix('no enumeration tool + the assigned port answers → PASS on real evidence', async () => {
-        const probed: number[] = []
-        const r = await runBootCheck(os.tmpdir(), alive, 5000, {
-            expectServer: true,
-            deps: {
-                ...blind,
-                pickPort: async () => 45671,
-                httpProbe: p => {
-                    probed.push(p)
-                    return true
+    testPosix(
+        'no enumeration tool + the assigned port answers → PASS on real evidence',
+        async () => {
+            const probed: number[] = []
+            const r = await runBootCheck(os.tmpdir(), alive, 5000, {
+                expectServer: true,
+                deps: {
+                    ...blind,
+                    pickPort: async () => 45671,
+                    httpProbe: p => {
+                        probed.push(p)
+                        return true
+                    }
                 }
-            }
-        })
-        expect(r.outcome).toBe('pass')
-        // The PRIVATE assigned port is what makes an HTTP answer ownership evidence.
-        expect(probed).toContain(45671)
-        expect((r as {renderNote?: string}).renderNote).toBeUndefined()
-    })
+            })
+            expect(r.outcome).toBe('pass')
+            // The PRIVATE assigned port is what makes an HTTP answer ownership evidence.
+            expect(probed).toContain(45671)
+            expect((r as {renderNote?: string}).renderNote).toBeUndefined()
+        }
+    )
 
-    itPosix('no enumeration tool + port never answers → survival PASS, UNOBSERVED', async () => {
+    testPosix('no enumeration tool + port never answers → survival PASS, UNOBSERVED', async () => {
         const r = await runBootCheck(os.tmpdir(), alive, 800, {
             expectServer: true,
             deps: {...blind, pickPort: async () => 45672, httpProbe: () => false}
@@ -324,7 +329,7 @@ describe('runBootCheck — unobservable listener degrades, never false-FAILs (ru
         expect(note).toContain('ss/netstat/lsof')
     })
 
-    itPosix('blindness never excuses a child that DIED — nonzero exit still FAILs', async () => {
+    testPosix('blindness never excuses a child that DIED — nonzero exit still FAILs', async () => {
         const r = await runBootCheck(os.tmpdir(), nodeScript('process.exit(3)'), 5000, {
             expectServer: true,
             deps: {...blind, pickPort: async () => 45673, httpProbe: () => false}
@@ -333,7 +338,7 @@ describe('runBootCheck — unobservable listener degrades, never false-FAILs (ru
         expect((r as {detail: string}).detail).toContain('exited 3')
     })
 
-    itPosix('a listener seen via the assigned port still gets the render probe', async () => {
+    testPosix('a listener seen via the assigned port still gets the render probe', async () => {
         let url = ''
         const r = await runBootCheck(os.tmpdir(), alive, 5000, {
             expectServer: true,
@@ -353,7 +358,7 @@ describe('runBootCheck — unobservable listener degrades, never false-FAILs (ru
         expect((r as {detail: string}).detail).toContain('EMPTY')
     })
 
-    itPosix('the boot child is told the reserved port via PORT', async () => {
+    testPosix('the boot child is told the reserved port via PORT', async () => {
         const r = await runBootCheck(
             os.tmpdir(),
             nodeScript('console.log("PORT="+process.env.PORT);setTimeout(()=>{},600000)'),
@@ -408,7 +413,7 @@ describe('listener enumeration parsers (run 14)', () => {
 describe('runBootCheck — render check on the served page (runs 8/11)', () => {
     const alive = nodeScript('setTimeout(()=>{},600000)')
 
-    itPosix(
+    testPosix(
         'a served page that renders blank → FAIL naming the port and the blank body',
         async () => {
             const r = await runBootCheck(os.tmpdir(), alive, 5000, {
@@ -431,7 +436,7 @@ describe('runBootCheck — render check on the served page (runs 8/11)', () => {
         }
     )
 
-    itPosix('a served page that renders content → PASS, no warning', async () => {
+    testPosix('a served page that renders content → PASS, no warning', async () => {
         const r = await runBootCheck(os.tmpdir(), alive, 5000, {
             expectServer: true,
             deps: {
@@ -444,7 +449,7 @@ describe('runBootCheck — render check on the served page (runs 8/11)', () => {
         expect((r as {renderNote?: string}).renderNote).toBeUndefined()
     })
 
-    itPosix('no browser (render SKIP) → PASS but UNOBSERVED renderNote', async () => {
+    testPosix('no browser (render SKIP) → PASS but UNOBSERVED renderNote', async () => {
         const r = await runBootCheck(os.tmpdir(), alive, 5000, {
             expectServer: true,
             deps: {
@@ -457,7 +462,7 @@ describe('runBootCheck — render check on the served page (runs 8/11)', () => {
         expect((r as {renderNote: string}).renderNote).toContain('UNOBSERVED')
     })
 
-    itPosix('a listener whose port is undeterminable → PASS but UNOBSERVED', async () => {
+    testPosix('a listener whose port is undeterminable → PASS but UNOBSERVED', async () => {
         let probed = false
         const r = await runBootCheck(os.tmpdir(), alive, 5000, {
             expectServer: true,
@@ -484,7 +489,7 @@ describe('runBootCheck — authenticated deep-render check (run 17)', () => {
     const served = {groupHasListener: () => true, groupListeningPort: () => 3000}
     const rendered = () => ({outcome: 'pass', detail: 'rendered visible text'}) as const
 
-    itPosix('a session the server authenticated but the client cannot use → FAIL', async () => {
+    testPosix('a session the server authenticated but the client cannot use → FAIL', async () => {
         const r = await runBootCheck(os.tmpdir(), alive, 5000, {
             expectServer: true,
             deps: {
@@ -504,7 +509,7 @@ describe('runBootCheck — authenticated deep-render check (run 17)', () => {
         expect((r as {detail: string}).detail).toContain(':3000')
     })
 
-    itPosix('a working authenticated session → PASS with no warning', async () => {
+    testPosix('a working authenticated session → PASS with no warning', async () => {
         const r = await runBootCheck(os.tmpdir(), alive, 5000, {
             expectServer: true,
             deps: {
@@ -518,7 +523,7 @@ describe('runBootCheck — authenticated deep-render check (run 17)', () => {
         expect((r as {renderNote?: string}).renderNote).toBeUndefined()
     })
 
-    itPosix('no credentials / no browser (deep SKIP) → PASS but UNOBSERVED', async () => {
+    testPosix('no credentials / no browser (deep SKIP) → PASS but UNOBSERVED', async () => {
         const r = await runBootCheck(os.tmpdir(), alive, 5000, {
             expectServer: true,
             deps: {
@@ -536,7 +541,7 @@ describe('runBootCheck — authenticated deep-render check (run 17)', () => {
         expect((r as {renderNote: string}).renderNote).toContain('no account credentials')
     })
 
-    itPosix(
+    testPosix(
         'the shallow render FAILs → the deep probe never runs (its verdict leads)',
         async () => {
             let deepRan = false
@@ -556,7 +561,7 @@ describe('runBootCheck — authenticated deep-render check (run 17)', () => {
         }
     )
 
-    itPosix('a NON-served project never reaches the deep probe (I1)', async () => {
+    testPosix('a NON-served project never reaches the deep probe (I1)', async () => {
         let deepRan = false
         const r = await runBootCheck(os.tmpdir(), nodeScript('process.exit(0)'), 3000, {
             expectServer: false,
@@ -576,7 +581,7 @@ describe('runBootCheck — authenticated deep-render check (run 17)', () => {
     // The browser session signs in and waits for the app's data calls, so it routinely
     // outlives the boot grace window. Settling on the timer would kill the server under
     // it and silently discard the verdict.
-    itPosix(
+    testPosix(
         'a deep session slower than the grace window still decides the boot',
         async () => {
             const r = await runBootCheck(os.tmpdir(), alive, 1200, {
@@ -606,7 +611,7 @@ describe('runBootCheck — authenticated deep-render check (run 17)', () => {
     // The port the app is served on decides whether the authenticated half is
     // observable at all: a client with its base URL baked in at build time calls
     // that origin and no other.
-    itPosix('a declared local port is served instead of a reserved one', async () => {
+    testPosix('a declared local port is served instead of a reserved one', async () => {
         let reservedUsed = false
         // The child dies unless it was handed the declared port, so a PASS is proof
         // the boot really served on 4321 and not on the reserved number.
@@ -633,7 +638,7 @@ describe('runBootCheck — authenticated deep-render check (run 17)', () => {
         expect(reservedUsed).toBe(false)
     })
 
-    itPosix('no declared port (or one already held) → the reserved port, unchanged', async () => {
+    testPosix('no declared port (or one already held) → the reserved port, unchanged', async () => {
         let reservedUsed = false
         const r = await runBootCheck(os.tmpdir(), alive, 3000, {
             expectServer: true,
@@ -653,7 +658,7 @@ describe('runBootCheck — authenticated deep-render check (run 17)', () => {
         expect(reservedUsed).toBe(true)
     })
 
-    itPosix('a deep probe that THROWS can never fail the gate on its own fault', async () => {
+    testPosix('a deep probe that THROWS can never fail the gate on its own fault', async () => {
         const r = await runBootCheck(os.tmpdir(), alive, 5000, {
             expectServer: true,
             deps: {
