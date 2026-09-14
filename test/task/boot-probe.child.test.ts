@@ -1,5 +1,10 @@
 import {describe, expect, test} from 'bun:test'
-import {runBootCheck, type BootChild, type BootDeps} from '../../src/task/boot-probe.js'
+import {
+    runBootCheck,
+    type BootChild,
+    type BootDeps,
+    type BootSpawnOptions
+} from '../../src/task/boot-probe.js'
 
 /**
  * The boot state machine, driven through a SCRIPTED child.
@@ -381,5 +386,38 @@ describe('the win32 degrade', () => {
             expect(r.outcome).toBe('fail')
             if (r.outcome === 'fail') expect(r.detail).toContain('never opened a listening socket')
         }
+    })
+})
+
+// Issue #20: the boot child is reaped as a group exactly like a model child, and
+// on win32 that must not cost a console window per process.
+describe('the boot spawn options', () => {
+    async function spawnOptionsOn(platform: NodeJS.Platform): Promise<BootSpawnOptions> {
+        const f = fakeChild()
+        let seen: BootSpawnOptions | undefined
+        const p = runBootCheck('/tmp/x', CMD, 5_000, {
+            deps: f.deps({
+                platform,
+                spawnBoot: (_bin, _args, opts) => {
+                    seen = opts
+                    return f.child
+                }
+            })
+        })
+        f.exit(0)
+        await p
+        return seen!
+    }
+
+    test('win32: windowsHide, never detached', async () => {
+        const seen = await spawnOptionsOn('win32')
+        expect(seen).toMatchObject({windowsHide: true})
+        expect('detached' in seen).toBe(false)
+    })
+
+    test.each(['darwin', 'linux'] as const)('%s: detached, no windowsHide', async platform => {
+        const seen = await spawnOptionsOn(platform)
+        expect(seen).toMatchObject({detached: true})
+        expect('windowsHide' in seen).toBe(false)
     })
 })

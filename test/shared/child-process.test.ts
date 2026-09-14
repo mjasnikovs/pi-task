@@ -1,6 +1,12 @@
 import {describe, expect, test} from 'bun:test'
 import {getEventListeners} from 'node:events'
-import {runChild, summarizeToolArgs} from '../../src/shared/child-process.js'
+import {
+    runChild,
+    summarizeToolArgs,
+    ownGroupSpawnOptions,
+    reapProcessGroup
+} from '../../src/shared/child-process.js'
+import {spawn as realSpawn} from 'node:child_process'
 import {fakeSpawnSimple, agentEndResponse, makeProc} from '../test-utils/fake-spawn.js'
 import type {LoopHit, SpawnFn} from '../../src/shared/child-process.js'
 
@@ -398,11 +404,13 @@ describe('summarizeToolArgs — search/fetch workers', () => {
 // self-inflicted EADDRINUSE. They must be spawned in their OWN process group and
 // that group reaped on exit; plumbing children (text mode) must not be.
 describe('runChild process-group reaping', () => {
+    type GroupOpts = {detached?: boolean; windowsHide?: boolean}
     /** A spawn that records the options it was handed and returns a controllable proc. */
-    function recordingSpawn(pid: number | undefined): {spawn: SpawnFn; opts: {detached?: boolean}} {
-        const opts: {detached?: boolean} = {}
-        const spawn = ((_cmd: string, _args: string[], o: {detached?: boolean}) => {
+    function recordingSpawn(pid: number | undefined): {spawn: SpawnFn; opts: GroupOpts} {
+        const opts: GroupOpts = {}
+        const spawn = ((_cmd: string, _args: string[], o: GroupOpts) => {
             opts.detached = o.detached
+            opts.windowsHide = o.windowsHide
             const p = makeProc()
             p.pid = pid
             queueMicrotask(() => p.emit('close', 0))
@@ -411,16 +419,35 @@ describe('runChild process-group reaping', () => {
         return {spawn, opts}
     }
 
-    test('json-events child is spawned detached (its own process group)', async () => {
+    // Driven per platform, not read from the host: on a POSIX host a hardcoded
+    // `detached: true` would satisfy the live-platform shape and the win32 arm
+    // would never run.
+    test('json-events child on win32 is spawned windowsHide, never detached', async () => {
         const {spawn, opts} = recordingSpawn(4242)
-        await runChild(spawn, noopInvocation, '/tmp', undefined, {mode: 'json-events'})
-        expect(opts.detached).toBe(true)
+        await runChild(spawn, noopInvocation, '/tmp', undefined, {
+            mode: 'json-events',
+            platform: 'win32'
+        })
+        expect(opts).toEqual({windowsHide: true, detached: undefined})
     })
 
-    test('text child (git/plumbing) is NOT detached', async () => {
+    test.each(['darwin', 'linux'] as const)(
+        'json-events child on %s is spawned detached (its own process group)',
+        async platform => {
+            const {spawn, opts} = recordingSpawn(4242)
+            await runChild(spawn, noopInvocation, '/tmp', undefined, {
+                mode: 'json-events',
+                platform
+            })
+            expect(opts).toEqual({detached: true, windowsHide: undefined})
+        }
+    )
+
+    test('text child (git/plumbing) gets neither detached nor windowsHide', async () => {
         const {spawn, opts} = recordingSpawn(4242)
         await runChild(spawn, noopInvocation, '/tmp', undefined, {mode: 'text'})
         expect(opts.detached).toBeUndefined()
+        expect(opts.windowsHide).toBeUndefined()
     })
 
     // `reapGroup` branches on the platform: it calls `process.kill(-pid, sig)` off
@@ -603,5 +630,49 @@ describe('runChild abort-listener lifecycle', () => {
         // earlier one must be collectable now that its listener is detached.
         const alive = refs.filter(r => r.deref() !== undefined).length
         expect(alive).toBeLessThanOrEqual(1)
+    })
+})
+
+// Issue #20: on Windows a `detached` child gets its own console window, and
+// every console process the model then runs pops another. The reap there is
+// `taskkill /T`, which needs no flag. POSIX keeps `detached` — it is what makes
+// `kill(-pid)` sweep a backgrounded server. Pinned per platform so a mac or
+// linux edit cannot bring the window spam back, and a windows edit cannot lose
+// the group reap.
+describe('ownGroupSpawnOptions', () => {
+    test('win32: hidden console, never detached', () => {
+        expect(ownGroupSpawnOptions('win32')).toEqual({windowsHide: true})
+    })
+
+    test.each(['darwin', 'linux'] as const)('%s: own process group', platform => {
+        expect(ownGroupSpawnOptions(platform)).toEqual({detached: true})
+    })
+
+    const testPosix = process.platform === 'win32' ? test.skip : test
+    testPosix('a real POSIX child under these options leads its own group', async () => {
+        const p = realSpawn('sh', ['-c', 'ps -o pgid= -p $$'], {
+            ...ownGroupSpawnOptions(process.platform),
+            stdio: ['ignore', 'pipe', 'ignore']
+        })
+        // Own group = not swept with the runner if this hangs, so bound it and
+        // kill it ourselves on every exit path.
+        const pgid = await new Promise<string>((resolve, reject) => {
+            const deadline = setTimeout(() => reject(new Error('ps did not settle')), 10_000)
+            let out = ''
+            p.stdout.on('data', (d: Buffer) => (out += d.toString()))
+            p.on('error', reject)
+            p.on('close', () => {
+                clearTimeout(deadline)
+                resolve(out.trim())
+            })
+        }).finally(() => {
+            if (p.pid) reapProcessGroup(p.pid, 'SIGKILL')
+        })
+        // A missing or busybox `ps` prints nothing; say so rather than let
+        // Number('') === 0 read as "inherited the runner's group".
+        expect(pgid).toMatch(/^\d+$/)
+        // A group leader's pgid is its own pid. Inheriting ours would mean a
+        // `kill(-pid)` reap hits nothing but ESRCH.
+        expect(Number(pgid)).toBe(p.pid!)
     })
 })

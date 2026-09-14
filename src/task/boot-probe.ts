@@ -26,6 +26,8 @@ import type {RenderOutcome} from './render-check.js'
 import {runRenderCheck} from './render-check.js'
 import {resolveRunner, runnerEnv, isCommandNotFound} from './runner-resolve.js'
 import {outputTail} from './command-run.js'
+import {ownGroupSpawnOptions, reapProcessGroup} from '../shared/child-process.js'
+import type {OwnGroupSpawnOptions} from '../shared/child-process.js'
 import {packageScripts, makeHasTarget} from './launch-manifest.js'
 import {
     collectProjectEnv,
@@ -322,15 +324,17 @@ export interface BootDeps {
      * fake pid would signal something else entirely.
      */
     killGroup?: (pid: number, signal: NodeJS.Signals) => void
+    /** Which platform's group options to spawn with. Tests drive the win32 arm
+     *  from a POSIX host; production leaves it to `process.platform`. */
+    platform?: NodeJS.Platform
 }
 
 /** What `runBootCheck` passes to its spawn. */
-export interface BootSpawnOptions {
+export type BootSpawnOptions = {
     cwd: string
-    detached: true
     stdio: ['ignore', 'pipe', 'pipe']
     env: Record<string, string | undefined>
-}
+} & OwnGroupSpawnOptions
 
 /** A stream the boot check reads output from. */
 export interface BootStream {
@@ -596,7 +600,8 @@ function pgidOf(pid: number): number | null {
 }
 
 /** Default listener probe: any LISTENing socket owned by a pid in process group
- *  `pgid` (the detached boot child IS its own group leader, so pgid === child.pid). */
+ *  `pgid`. POSIX only (expectServer is fenced off win32): there the detached boot
+ *  child leads its own group, so pgid === child.pid. */
 function defaultGroupHasListener(pgid: number): boolean {
     for (const {pid} of listeningSockets()) {
         if (pgidOf(pid) === pgid) return true
@@ -667,24 +672,9 @@ function defaultSpawnBoot(bin: string, args: string[], o: BootSpawnOptions): Boo
     return spawn(bin, args, o) as unknown as BootChild
 }
 
-/**
- * The real group teardown, best-effort. A group already gone is not an error.
- *
- * On POSIX the negative pid signals the whole group, which is what makes a
- * `detached` spawn reapable together with anything it backgrounded. Windows has
- * neither process groups nor a negative-pid kill, so that branch shells out to
- * `taskkill /T /F` as a single forced tree teardown instead of escalating.
- */
+/** The real group teardown; the spawn shape's twin lives beside it. */
 function defaultKillGroup(pid: number, sig: NodeJS.Signals): void {
-    try {
-        if (process.platform === 'win32') {
-            spawnSync('taskkill', ['/pid', String(pid), '/T', '/F'])
-        } else {
-            process.kill(-pid, sig)
-        }
-    } catch {
-        // group already gone
-    }
+    reapProcessGroup(pid, sig)
 }
 
 /**
@@ -696,8 +686,9 @@ function defaultKillGroup(pid: number, sig: NodeJS.Signals): void {
  *
  *   - non-zero exit (or signal death) before the window closes → FAIL, output tail;
  *   - exit 0 before the window closes → PASS (a CLI-style "run" that finished);
- *   - still alive when the window closes → PASS, then the whole process group is
- *     killed (detached spawn = own group; SIGTERM, escalating to SIGKILL).
+ *   - still alive when the window closes → PASS, then the child and everything it
+ *     backgrounded are killed (ownGroupSpawnOptions + reapProcessGroup; SIGTERM,
+ *     escalating to SIGKILL).
  *
  * For a SERVED app (`expectServer` true — the spec/plan promised an HTTP server) mere
  * survival is not enough: a watcher (`dev` = tailwind/bundler --watch) stays alive
@@ -763,7 +754,7 @@ export async function runBootCheck(
     return new Promise(resolve => {
         const child = spawnBoot(runner.bin, args, {
             cwd,
-            detached: true,
+            ...ownGroupSpawnOptions(opts.deps?.platform ?? process.platform),
             stdio: ['ignore', 'pipe', 'pipe'],
             env: {
                 ...runnerEnv(runner),

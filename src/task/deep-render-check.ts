@@ -44,6 +44,7 @@ import * as os from 'node:os'
 import * as path from 'node:path'
 import WebSocket from 'ws'
 import {findHeadlessBrowser, judgeRenderedDom} from './render-check.js'
+import {ownGroupSpawnOptions, reapProcessGroup} from '../shared/child-process.js'
 
 export type DeepRenderOutcome =
     | {outcome: 'pass'; detail: string}
@@ -820,11 +821,7 @@ export async function launchBrowser(
         } catch {
             // socket already gone
         }
-        try {
-            if (child?.pid) process.kill(-child.pid, 'SIGKILL')
-        } catch {
-            // group already gone
-        }
+        if (child?.pid) reapProcessGroup(child.pid, 'SIGKILL')
         return Promise.resolve()
     }
     signal?.addEventListener('abort', () => void close(), {once: true})
@@ -846,7 +843,7 @@ export async function launchBrowser(
                 '--remote-debugging-port=0',
                 'about:blank'
             ],
-            {detached: true, stdio: ['ignore', 'pipe', 'pipe']}
+            {...ownGroupSpawnOptions(process.platform), stdio: ['ignore', 'pipe', 'pipe']}
         )
         const proc = child
         proc.unref()

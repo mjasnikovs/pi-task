@@ -58,10 +58,53 @@ export type SpawnFn = (
          *  possible at all: with `detached`, a `kill(-pid)` issued after the child
          *  has exited still takes the backgrounded grandchild with it; without it
          *  the same call throws ESRCH and the grandchild survives. Set only for
-         *  model children (json-events); plumbing stays in-group. */
+         *  model children (json-events); plumbing stays in-group. Never set on
+         *  win32 — see ownGroupSpawnOptions. */
         detached?: boolean
+        /** win32 only: keep the child's console off-screen. */
+        windowsHide?: boolean
     }
 ) => ProcLike
+
+/**
+ * Spawn options that make a model child reapable with everything it backgrounds.
+ *
+ * POSIX (linux, darwin): `detached` = own process group, so `kill(-pid)` sweeps
+ * the grandchildren. On win32 the same flag is a defect: libuv maps it to
+ * DETACHED_PROCESS, which gives the child NO console, so every console process
+ * the model then runs allocates a fresh visible one (issue #20). win32 gets
+ * `windowsHide` (CREATE_NO_WINDOW) instead: the child gets a windowless console
+ * that its descendants inherit. Either/or is load-bearing — Windows ignores
+ * CREATE_NO_WINDOW next to DETACHED_PROCESS. The win32 reap is `taskkill /T`,
+ * which walks the live tree and needs no flag; unlike a POSIX group kill it
+ * cannot catch what the child left behind after it exited.
+ */
+export function ownGroupSpawnOptions(platform: NodeJS.Platform): OwnGroupSpawnOptions {
+    return platform === 'win32' ? {windowsHide: true} : {detached: true}
+}
+
+export type OwnGroupSpawnOptions = {detached: true} | {windowsHide: true}
+
+/**
+ * Tear down a child spawned with `ownGroupSpawnOptions`, and whatever it
+ * backgrounded. Best-effort: a group already gone is not an error. Kept beside
+ * the spawn shape so a platform change edits one file.
+ */
+export function reapProcessGroup(
+    pid: number,
+    sig: NodeJS.Signals,
+    platform: NodeJS.Platform = process.platform
+): void {
+    try {
+        if (platform === 'win32') {
+            spawnSyncDefault('taskkill', ['/pid', String(pid), '/T', '/F'])
+        } else {
+            process.kill(-pid, sig)
+        }
+    } catch {
+        // group already gone
+    }
+}
 
 // ─── Result types ────────────────────────────────────────────────────────────
 
@@ -160,6 +203,9 @@ export interface RunChildTextOptions {
 
 export interface RunChildJsonEventsOptions {
     mode: 'json-events'
+    /** Which platform's group options and reap to use. Tests drive the win32 arm
+     *  from a POSIX host with it; production leaves it to `process.platform`. */
+    platform?: NodeJS.Platform
     onLine?: (line: string) => void
     onContextUsage?: (snapshot: ContextSnapshot) => void
     /**
@@ -443,11 +489,12 @@ export function runChild(
         // OWN process group so every such grandchild can be reaped as a unit on exit.
         // Plumbing (git, mode:'text') never backgrounds anything and stays in-group.
         const ownGroup = opts?.mode === 'json-events'
+        const platform = (ownGroup && opts.platform) || process.platform
         const proc = spawn(invocation.command, invocation.args, {
             cwd,
             shell: false,
             stdio: [usesStdin ? 'pipe' : 'ignore', 'pipe', 'pipe'],
-            ...(ownGroup ? {detached: true} : {}),
+            ...(ownGroup ? ownGroupSpawnOptions(platform) : {}),
             ...(invocation.env ? {env: invocation.env} : {})
         })
 
@@ -466,20 +513,10 @@ export function runChild(
         }
 
         // Reap the child's whole process group — the child itself AND anything it
-        // backgrounded. No-op unless the child owns a group (ownGroup) and we have a
-        // pid; ESRCH (group already gone) is swallowed. POSIX: negative-pid signals
-        // the group; Windows has no groups, so taskkill /T tears down the tree.
+        // backgrounded. No-op unless the child owns a group (ownGroup) and we have a pid.
         const reapGroup = (sig: NodeJS.Signals): void => {
             if (!ownGroup || !proc.pid) return
-            try {
-                if (process.platform === 'win32') {
-                    spawnSyncDefault('taskkill', ['/pid', String(proc.pid), '/T', '/F'])
-                } else {
-                    process.kill(-proc.pid, sig)
-                }
-            } catch {
-                // group already gone
-            }
+            reapProcessGroup(proc.pid, sig, platform)
         }
 
         // One kill path for every source: SIGTERM, then SIGKILL after a grace
