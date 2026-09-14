@@ -64,12 +64,15 @@ describe('registerStreamWatchdog', () => {
         })
     })
 
+    // The window is wide against the 40ms beat: Windows CI timers slip well past
+    // 80ms under load, and a single late beat must not read as a dead stream.
+    // 20 beats still outlast the window, so a watchdog that ignored the beats fires.
     test('a streaming turn is never touched', async () => {
-        await withWindow(80, async () => {
+        await withWindow(300, async () => {
             const f = fakePi()
             registerStreamWatchdog(f.pi)
             f.emit('turn_start')
-            for (let i = 0; i < 12; i++) {
+            for (let i = 0; i < 20; i++) {
                 await sleep(40)
                 f.emit('message_update')
             }
