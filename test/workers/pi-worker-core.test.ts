@@ -1163,8 +1163,10 @@ describe('runWorker', () => {
         test('a worker that keeps working is not killed for being slow', async () => {
             // Reads paced closer together than the no-progress window: total elapsed
             // runs past that window, but the worker is never idle for a whole one.
+            // The window is wide against the 30ms pace: Windows CI timers slip well
+            // past 150ms under load, and one late read must not read as a stall.
             const events = [
-                ...Array.from({length: 12}, (_, i) => toolCall(i)),
+                ...Array.from({length: 20}, (_, i) => toolCall(i)),
                 {
                     type: 'agent_end',
                     messages: [{role: 'assistant', content: [{type: 'text', text: 'answered'}]}]
@@ -1176,7 +1178,7 @@ describe('runWorker', () => {
                 profile: 'adhoc',
                 contextWindow: 'unknown',
                 override: {
-                    'worker-timeout': {timeoutMs: 150, progressCeilingMs: 10_000, fanout: null},
+                    'worker-timeout': {timeoutMs: 400, progressCeilingMs: 10_000, fanout: null},
                     stalled: false,
                     loop: {detector: false, progress: {...DEFAULT_LOOP_PROGRESS}}
                 },
@@ -1187,7 +1189,7 @@ describe('runWorker', () => {
             expect(r.timedOut).toBeUndefined()
             expect(r.attempts).toBe(1)
             // Proof the run really did outlive the no-progress window.
-            expect(r.totalWallMs).toBeGreaterThan(150)
+            expect(r.totalWallMs).toBeGreaterThan(400)
         })
 
         test('the same worker IS killed by the same window when it goes quiet', async () => {
@@ -1198,7 +1200,7 @@ describe('runWorker', () => {
                 profile: 'adhoc',
                 contextWindow: 'unknown',
                 override: {
-                    'worker-timeout': {timeoutMs: 150, progressCeilingMs: 10_000, fanout: null},
+                    'worker-timeout': {timeoutMs: 400, progressCeilingMs: 10_000, fanout: null},
                     stalled: false,
                     loop: {detector: false, progress: {...DEFAULT_LOOP_PROGRESS}}
                 },
