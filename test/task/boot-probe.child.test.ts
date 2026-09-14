@@ -1,10 +1,11 @@
-import {describe, expect, test} from 'bun:test'
+import {describe, expect, jest, test} from 'bun:test'
 import {
     runBootCheck,
     type BootChild,
     type BootDeps,
     type BootSpawnOptions
 } from '../../src/task/boot-probe.js'
+import {fakeTaskkill, recordKills, testOffWin32} from '../test-utils/fake-reap.js'
 
 /**
  * The boot state machine, driven through a SCRIPTED child.
@@ -90,8 +91,9 @@ const CMD: [string, string[]] = ['bun', ['run', 'start']]
 
 /**
  * `runBootCheck` computes
- * `expectServer = (opts.expectServer ?? false) && process.platform !== 'win32'`,
- * so every served-app branch below is unreachable on win32 and degrades to the
+ * `expectServer = (opts.expectServer ?? false) && platform !== 'win32'`, and
+ * `platform` is the host's unless `deps.platform` says otherwise, so every
+ * served-app branch below is unreachable on a win32 host and degrades to the
  * survival rule. Same convention as `boot-probe.test.ts`'s `itPosix`.
  */
 const IS_WINDOWS = process.platform === 'win32'
@@ -366,26 +368,70 @@ describe('teardown', () => {
 })
 
 // The rule that makes every test above posix-only, asserted rather than assumed.
+// Driven by deps.platform, so both arms run on every host.
 describe('the win32 degrade', () => {
-    test('expectServer is forced false on win32 — there are no process groups', async () => {
-        const f = fakeChild()
-        const r = await runBootCheck('/tmp/x', CMD, 20, {
+    const servedApp = (platform: NodeJS.Platform) =>
+        runBootCheck('/tmp/x', CMD, 20, {
             expectServer: true,
-            deps: f.deps({
+            deps: fakeChild().deps({
+                platform,
                 enumerationCapable: () => true,
                 groupHasListener: () => false,
                 httpProbe: () => false,
                 pickPort: () => Promise.resolve(41234)
             })
         })
-        if (IS_WINDOWS) {
-            // Degraded to the survival rule: still alive after the window ⇒ PASS,
-            // with no listener requirement to have missed.
-            expect(r).toEqual({outcome: 'pass'})
-        } else {
-            expect(r.outcome).toBe('fail')
-            if (r.outcome === 'fail') expect(r.detail).toContain('never opened a listening socket')
+
+    test('win32: expectServer degrades to the survival rule — there are no process groups', async () => {
+        // Still alive after the window ⇒ PASS, with no listener requirement to have missed.
+        expect(await servedApp('win32')).toEqual({outcome: 'pass'})
+    })
+
+    test('linux: a served app that never listens fails', async () => {
+        const r = await servedApp('linux')
+        expect(r.outcome).toBe('fail')
+        if (r.outcome === 'fail') expect(r.detail).toContain('never opened a listening socket')
+    })
+})
+
+// A PASS on survival reaps a live child. The SIGKILL pass 2s later finds it gone,
+// and by then Windows may have handed its pid to an unrelated process.
+describe('the boot reap', () => {
+    /** Survive the grace window, get reaped, exit, then let the SIGKILL pass come due. */
+    async function passThenExitOn(platform: NodeJS.Platform): Promise<void> {
+        jest.useFakeTimers()
+        try {
+            const f = fakeChild({pid: 9931})
+            const p = runBootCheck('/tmp/x', CMD, 20, {
+                deps: {...f.deps({platform}), killGroup: undefined}
+            })
+            jest.advanceTimersByTime(20)
+            expect(await p).toEqual({outcome: 'pass'})
+            f.exit(null, 'SIGTERM')
+            jest.advanceTimersByTime(1) // fakeChild delivers the exit on a 1ms poll
+            jest.advanceTimersByTime(2_000)
+        } finally {
+            jest.useRealTimers()
         }
+    }
+
+    testOffWin32('win32: taskkill once, while the boot child still lives', async () => {
+        const tk = fakeTaskkill()
+        try {
+            const killed = await recordKills(() => passThenExitOn('win32'))
+            expect(killed).toEqual([])
+            expect(tk.calls()).toEqual(['taskkill /pid 9931 /T /F'])
+        } finally {
+            tk.restore()
+        }
+    })
+
+    test('linux: the group still gets its SIGKILL after the boot child exits', async () => {
+        const killed = await recordKills(() => passThenExitOn('linux'))
+        expect(killed).toEqual([
+            {pid: -9931, sig: 'SIGTERM'},
+            {pid: -9931, sig: 'SIGKILL'}
+        ])
     })
 })
 

@@ -815,13 +815,20 @@ export async function launchBrowser(
 ): Promise<LaunchedBrowser> {
     let child: ReturnType<typeof spawn> | null = null
     let socket: WebSocket | null = null
+    let reaped = false
     const close = (): Promise<void> => {
         try {
             socket?.close()
         } catch {
             // socket already gone
         }
-        if (child?.pid) reapProcessGroup(child.pid, 'SIGKILL')
+        // Once: a later pass would signal a pid the browser may have given up.
+        if (child?.pid && !reaped) {
+            reaped = true
+            reapProcessGroup(child.pid, 'SIGKILL', {
+                leaderExited: child.exitCode !== null || child.signalCode !== null
+            })
+        }
         return Promise.resolve()
     }
     signal?.addEventListener('abort', () => void close(), {once: true})

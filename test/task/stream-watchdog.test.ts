@@ -1,4 +1,4 @@
-import {describe, expect, test} from 'bun:test'
+import {describe, expect, jest, test} from 'bun:test'
 import type {ExtensionAPI} from '@earendil-works/pi-coding-agent'
 import {registerStreamWatchdog} from '../../src/task/stream-watchdog.js'
 import {consumeWatchdogAbort, WATCHDOG_CANCEL_MARKER} from '../../src/task/command-watchdog.js'
@@ -28,7 +28,6 @@ function fakePi() {
 }
 
 const sleep = (ms: number): Promise<void> => new Promise(r => setTimeout(r, ms))
-
 /** Run `fn` with a millisecond-scale window instead of the configured one. */
 async function withWindow(ms: number, fn: () => Promise<void>): Promise<void> {
     const cfg = getConfig()
@@ -64,22 +63,26 @@ describe('registerStreamWatchdog', () => {
         })
     })
 
-    // The window is wide against the 40ms beat: Windows CI timers slip well past
-    // 80ms under load, and a single late beat must not read as a dead stream.
-    // 20 beats still outlast the window, so a watchdog that ignored the beats fires.
+    // On the fake clock, so a slow host cannot open a gap between two beats.
+    // 12 beats still outlast the window, so a watchdog that ignored them fires.
     test('a streaming turn is never touched', async () => {
-        await withWindow(300, async () => {
-            const f = fakePi()
-            registerStreamWatchdog(f.pi)
-            f.emit('turn_start')
-            for (let i = 0; i < 20; i++) {
-                await sleep(40)
-                f.emit('message_update')
-            }
-            expect(f.aborts()).toBe(0)
-            expect(f.messages).toEqual([])
-            f.emit('agent_end')
-        })
+        jest.useFakeTimers()
+        try {
+            await withWindow(80, async () => {
+                const f = fakePi()
+                registerStreamWatchdog(f.pi)
+                f.emit('turn_start')
+                for (let i = 0; i < 12; i++) {
+                    jest.advanceTimersByTime(40)
+                    f.emit('message_update')
+                }
+                expect(f.aborts()).toBe(0)
+                expect(f.messages).toEqual([])
+                f.emit('agent_end')
+            })
+        } finally {
+            jest.useRealTimers()
+        }
     })
 
     // The command watchdog owns tool time; double-firing here would abort every

@@ -1,4 +1,4 @@
-import {describe, expect, test} from 'bun:test'
+import {describe, expect, jest, test} from 'bun:test'
 import {
     hasAnswerContent,
     isGroundingRetrieval,
@@ -1160,53 +1160,80 @@ describe('runWorker', () => {
             args: {path: `src/f${n}.ts`}
         })
 
+        /**
+         * Run on a fake clock that moves 1ms per event-loop turn. A loaded host
+         * then cannot open a gap between two paced reads that the deadline sees.
+         */
+        async function onFakeClock<T>(run: () => Promise<T>): Promise<T> {
+            jest.useFakeTimers()
+            try {
+                let settled = false
+                const result = run()
+                // Handled now, so a rejection waits for the await below instead of
+                // failing the test as unhandled.
+                result.then(
+                    () => (settled = true),
+                    () => (settled = true)
+                )
+                while (!settled) {
+                    jest.advanceTimersByTime(1)
+                    await new Promise(r => setImmediate(r))
+                }
+                return await result
+            } finally {
+                jest.useRealTimers()
+            }
+        }
+
         test('a worker that keeps working is not killed for being slow', async () => {
             // Reads paced closer together than the no-progress window: total elapsed
             // runs past that window, but the worker is never idle for a whole one.
-            // The window is wide against the 30ms pace: Windows CI timers slip well
-            // past 150ms under load, and one late read must not read as a stall.
             const events = [
-                ...Array.from({length: 20}, (_, i) => toolCall(i)),
+                ...Array.from({length: 12}, (_, i) => toolCall(i)),
                 {
                     type: 'agent_end',
                     messages: [{role: 'assistant', content: [{type: 'text', text: 'answered'}]}]
                 }
             ]
             const spawn = pacedSpawn(events, 30)
-            const r = await runWorker({
-                prompt: 'x',
-                profile: 'adhoc',
-                contextWindow: 'unknown',
-                override: {
-                    'worker-timeout': {timeoutMs: 400, progressCeilingMs: 10_000, fanout: null},
-                    stalled: false,
-                    loop: {detector: false, progress: {...DEFAULT_LOOP_PROGRESS}}
-                },
-                cwd: process.cwd(),
-                spawn
-            })
+            const r = await onFakeClock(() =>
+                runWorker({
+                    prompt: 'x',
+                    profile: 'adhoc',
+                    contextWindow: 'unknown',
+                    override: {
+                        'worker-timeout': {timeoutMs: 150, progressCeilingMs: 10_000, fanout: null},
+                        stalled: false,
+                        loop: {detector: false, progress: {...DEFAULT_LOOP_PROGRESS}}
+                    },
+                    cwd: process.cwd(),
+                    spawn
+                })
+            )
             expect(r.text).toBe('answered')
             expect(r.timedOut).toBeUndefined()
             expect(r.attempts).toBe(1)
             // Proof the run really did outlive the no-progress window.
-            expect(r.totalWallMs).toBeGreaterThan(400)
+            expect(r.totalWallMs).toBeGreaterThan(150)
         })
 
         test('the same worker IS killed by the same window when it goes quiet', async () => {
             // Identical config and identical first events. Only the silence differs.
             const spawn = pacedSpawn([toolCall(0), toolCall(1)], 30, 900)
-            const r = await runWorker({
-                prompt: 'x',
-                profile: 'adhoc',
-                contextWindow: 'unknown',
-                override: {
-                    'worker-timeout': {timeoutMs: 400, progressCeilingMs: 10_000, fanout: null},
-                    stalled: false,
-                    loop: {detector: false, progress: {...DEFAULT_LOOP_PROGRESS}}
-                },
-                cwd: process.cwd(),
-                spawn
-            })
+            const r = await onFakeClock(() =>
+                runWorker({
+                    prompt: 'x',
+                    profile: 'adhoc',
+                    contextWindow: 'unknown',
+                    override: {
+                        'worker-timeout': {timeoutMs: 150, progressCeilingMs: 10_000, fanout: null},
+                        stalled: false,
+                        loop: {detector: false, progress: {...DEFAULT_LOOP_PROGRESS}}
+                    },
+                    cwd: process.cwd(),
+                    spawn
+                })
+            )
             expect(r.timedOut).toBe(true)
         })
 
@@ -1217,20 +1244,27 @@ describe('runWorker', () => {
                 Array.from({length: 4_000}, (_, i) => toolCall(i)),
                 5
             )
-            const r = await runWorker({
-                prompt: 'x',
-                profile: 'adhoc',
-                contextWindow: 'unknown',
-                override: {
-                    'worker-timeout': {timeoutMs: 150, progressCeilingMs: 400, fanout: null},
-                    stalled: false,
-                    loop: {detector: false, progress: {...DEFAULT_LOOP_PROGRESS}}
-                },
-                cwd: process.cwd(),
-                spawn
-            })
+            const restarts: WorkerRestart[] = []
+            const r = await onFakeClock(() =>
+                runWorker({
+                    prompt: 'x',
+                    profile: 'adhoc',
+                    contextWindow: 'unknown',
+                    override: {
+                        'worker-timeout': {timeoutMs: 150, progressCeilingMs: 400, fanout: null},
+                        stalled: false,
+                        loop: {detector: false, progress: {...DEFAULT_LOOP_PROGRESS}}
+                    },
+                    cwd: process.cwd(),
+                    spawn,
+                    onRestart: restart => restarts.push(restart)
+                })
+            )
             expect(r.timedOut).toBe(true)
             expect(r.totalWallMs).toBeLessThan(2_000)
+            // Each attempt ran to the ceiling, so the no-progress window never killed one.
+            expect(restarts.length).toBeGreaterThan(0)
+            for (const restart of restarts) expect(restart.wallMs).toBeGreaterThanOrEqual(400)
         })
 
         test('without the ceiling the fixed cap is unchanged', async () => {
@@ -1240,18 +1274,20 @@ describe('runWorker', () => {
                 Array.from({length: 100}, (_, i) => toolCall(i)),
                 30
             )
-            const r = await runWorker({
-                prompt: 'x',
-                profile: 'adhoc',
-                contextWindow: 'unknown',
-                override: {
-                    'worker-timeout': {timeoutMs: 150, progressCeilingMs: null, fanout: null},
-                    stalled: false,
-                    loop: {detector: false, progress: {...DEFAULT_LOOP_PROGRESS}}
-                },
-                cwd: process.cwd(),
-                spawn
-            })
+            const r = await onFakeClock(() =>
+                runWorker({
+                    prompt: 'x',
+                    profile: 'adhoc',
+                    contextWindow: 'unknown',
+                    override: {
+                        'worker-timeout': {timeoutMs: 150, progressCeilingMs: null, fanout: null},
+                        stalled: false,
+                        loop: {detector: false, progress: {...DEFAULT_LOOP_PROGRESS}}
+                    },
+                    cwd: process.cwd(),
+                    spawn
+                })
+            )
             expect(r.timedOut).toBe(true)
         })
 

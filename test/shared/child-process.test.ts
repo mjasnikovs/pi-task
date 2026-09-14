@@ -1,6 +1,7 @@
-import {describe, expect, test} from 'bun:test'
+import {describe, expect, jest, test} from 'bun:test'
 import {getEventListeners} from 'node:events'
 import {
+    KILL_GRACE_MS,
     runChild,
     summarizeToolArgs,
     ownGroupSpawnOptions,
@@ -8,6 +9,7 @@ import {
 } from '../../src/shared/child-process.js'
 import {spawn as realSpawn} from 'node:child_process'
 import {fakeSpawnSimple, agentEndResponse, makeProc} from '../test-utils/fake-spawn.js'
+import {fakeTaskkill, recordKills, testOffWin32} from '../test-utils/fake-reap.js'
 import type {LoopHit, SpawnFn} from '../../src/shared/child-process.js'
 
 const noopInvocation = {command: 'pi', args: ['--print']}
@@ -413,7 +415,10 @@ describe('runChild process-group reaping', () => {
             opts.windowsHide = o.windowsHide
             const p = makeProc()
             p.pid = pid
-            queueMicrotask(() => p.emit('close', 0))
+            queueMicrotask(() => {
+                p.emit('exit', 0, null)
+                p.emit('close', 0)
+            })
             return p
         }) as unknown as SpawnFn
         return {spawn, opts}
@@ -450,42 +455,206 @@ describe('runChild process-group reaping', () => {
         expect(opts.windowsHide).toBeUndefined()
     })
 
-    // `reapGroup` branches on the platform: it calls `process.kill(-pid, sig)` off
-    // win32 and spawns `taskkill /pid <pid> /T /F` on it. Only the first is
-    // observable through this `process.kill` spy, so the assertion is scoped to it.
-    const itPosix = process.platform === 'win32' ? test.skip : test
-    itPosix('reaps the whole process group on close (negative-pid signal)', async () => {
+    // Driven by `platform`, so the windows runner asserts the POSIX reap too.
+    test('linux: reaps the whole process group on close (negative-pid signal)', async () => {
         const {spawn} = recordingSpawn(4242)
-        const killed: Array<{pid: number; sig: string | number}> = []
-        const realKill: typeof process.kill = process.kill.bind(process)
-        // Intercept so the test never signals a real group; record the calls.
-        process.kill = ((p: number, s: string | number) => {
-            killed.push({pid: p, sig: s})
-            return true
-        }) as typeof process.kill
-        try {
-            await runChild(spawn, noopInvocation, '/tmp', undefined, {mode: 'json-events'})
-        } finally {
-            process.kill = realKill
-        }
-        // The group (negative pid) got a SIGTERM once the child closed.
-        expect(killed.some(k => k.pid === -4242 && k.sig === 'SIGTERM')).toBe(true)
+        const killed = await recordKills(() =>
+            runChild(spawn, noopInvocation, '/tmp', undefined, {
+                mode: 'json-events',
+                platform: 'linux'
+            })
+        )
+        expect(killed).toContainEqual({pid: -4242, sig: 'SIGTERM'})
     })
 
     test('text child does not signal any process group on close', async () => {
         const {spawn} = recordingSpawn(4242)
-        const killed: number[] = []
-        const realKill: typeof process.kill = process.kill.bind(process)
-        process.kill = ((p: number) => {
-            killed.push(p)
-            return true
-        }) as typeof process.kill
-        try {
-            await runChild(spawn, noopInvocation, '/tmp', undefined, {mode: 'text'})
-        } finally {
-            process.kill = realKill
-        }
+        const killed = await recordKills(() =>
+            runChild(spawn, noopInvocation, '/tmp', undefined, {mode: 'text'})
+        )
         expect(killed).toEqual([])
+    })
+
+    /** A model child that closes once killed, as a real one does. */
+    function killableSpawn(onKill: () => void): SpawnFn {
+        return (() => {
+            const p = makeProc()
+            p.pid = 4242
+            p.kill = () => {
+                onKill()
+                p.killed = true
+                queueMicrotask(() => {
+                    p.emit('exit', null, 'SIGTERM')
+                    p.emit('close', null)
+                })
+                return true
+            }
+            return p
+        }) as unknown as SpawnFn
+    }
+
+    /** Abort a model child on `platform`, then run out every reap timer it armed. */
+    async function abortOn(platform: NodeJS.Platform, onKill: () => void = () => {}) {
+        const controller = new AbortController()
+        jest.useFakeTimers()
+        try {
+            const run = runChild(killableSpawn(onKill), noopInvocation, '/tmp', controller.signal, {
+                mode: 'json-events',
+                platform
+            })
+            controller.abort()
+            await run
+            jest.advanceTimersByTime(KILL_GRACE_MS)
+        } finally {
+            jest.useRealTimers()
+        }
+    }
+
+    test("linux: a killed child's group still gets SIGKILL after the child exits", async () => {
+        const killed = await recordKills(() => abortOn('linux'))
+        expect(killed).toContainEqual({pid: -4242, sig: 'SIGKILL'})
+    })
+
+    // Once the child has exited Windows may hand its pid to an unrelated process,
+    // and `taskkill /T /F` would kill that one and everything under it.
+    testOffWin32('win32: a child that exits on its own is never taskkilled', async () => {
+        const tk = fakeTaskkill()
+        jest.useFakeTimers()
+        try {
+            const {spawn} = recordingSpawn(4242)
+            const killed = await recordKills(async () => {
+                await runChild(spawn, noopInvocation, '/tmp', undefined, {
+                    mode: 'json-events',
+                    platform: 'win32'
+                })
+                jest.advanceTimersByTime(KILL_GRACE_MS)
+            })
+            expect(killed).toEqual([])
+            expect(tk.calls()).toEqual([])
+        } finally {
+            jest.useRealTimers()
+            tk.restore()
+        }
+    })
+
+    // taskkill walks the tree down from a live root.
+    testOffWin32('win32: a killed child is taskkilled once, before its own kill', async () => {
+        const tk = fakeTaskkill()
+        try {
+            const killed = await recordKills(() => abortOn('win32', () => tk.note('kill')))
+            expect(killed).toEqual([])
+            expect(tk.calls()).toEqual(['taskkill /pid 4242 /T /F', 'kill'])
+        } finally {
+            tk.restore()
+        }
+    })
+
+    // A grandchild holding the inherited pipes keeps 'close' away long after the
+    // leader exited, and a watchdog kill can land in that gap.
+    testOffWin32(
+        'win32: an exited leader is not taskkilled while its pipes stay open',
+        async () => {
+            const tk = fakeTaskkill()
+            const controller = new AbortController()
+            const p = makeProc()
+            p.pid = 4242
+            jest.useFakeTimers()
+            try {
+                const killed = await recordKills(async () => {
+                    const run = runChild(
+                        (() => p) as unknown as SpawnFn,
+                        noopInvocation,
+                        '/tmp',
+                        controller.signal,
+                        {mode: 'json-events', platform: 'win32'}
+                    )
+                    p.emit('exit', 0, null)
+                    controller.abort()
+                    jest.advanceTimersByTime(KILL_GRACE_MS)
+                    p.emit('close', 0)
+                    await run
+                })
+                expect(killed).toEqual([])
+                expect(tk.calls()).toEqual([])
+            } finally {
+                jest.useRealTimers()
+                tk.restore()
+            }
+        }
+    )
+})
+
+describe('reapProcessGroup', () => {
+    testOffWin32('win32: one forced tree kill through System32 taskkill', async () => {
+        const tk = fakeTaskkill()
+        try {
+            const killed = await recordKills(() =>
+                reapProcessGroup(4242, 'SIGTERM', {platform: 'win32'})
+            )
+            expect(killed).toEqual([])
+            expect(tk.calls()).toEqual(['taskkill /pid 4242 /T /F'])
+        } finally {
+            tk.restore()
+        }
+    })
+
+    testOffWin32('win32: nothing once the leader has exited', async () => {
+        const tk = fakeTaskkill()
+        try {
+            const killed = await recordKills(() =>
+                reapProcessGroup(4242, 'SIGTERM', {platform: 'win32', leaderExited: true})
+            )
+            expect(killed).toEqual([])
+            expect(tk.calls()).toEqual([])
+        } finally {
+            tk.restore()
+        }
+    })
+
+    // A POSIX group outlives its leader, and the server it backgrounded is the point.
+    test('linux: the group is signalled even after the leader exited', async () => {
+        const killed = await recordKills(() =>
+            reapProcessGroup(4242, 'SIGKILL', {platform: 'linux', leaderExited: true})
+        )
+        expect(killed).toEqual([{pid: -4242, sig: 'SIGKILL'}])
+    })
+
+    // Windows always sets SystemRoot, but an empty one must not turn the path relative
+    // and run whatever System32\taskkill.exe the working directory holds.
+    testOffWin32(
+        'win32: an empty SystemRoot never runs a taskkill from the working directory',
+        async () => {
+            const tk = fakeTaskkill({relative: true})
+            try {
+                await recordKills(() => reapProcessGroup(4242, 'SIGTERM', {platform: 'win32'}))
+                expect(tk.calls()).toEqual([])
+            } finally {
+                tk.restore()
+            }
+        }
+    )
+
+    // Real processes on the host's own platform: on the windows runner this is the one
+    // test that runs the real taskkill. The grandchild shares the leader's stdout, so
+    // 'close' arrives only once both are dead.
+    test('a live leader is reaped together with the grandchild it started', async () => {
+        const leaderScript = [
+            "const {spawn} = require('node:child_process')",
+            "spawn(process.execPath, ['-e', 'setInterval(() => {}, 1 << 30)'], {stdio: 'inherit'})",
+            "console.log('ready')",
+            'setInterval(() => {}, 1 << 30)'
+        ].join('\n')
+        const leader = realSpawn(process.execPath, ['-e', leaderScript], {
+            ...ownGroupSpawnOptions(process.platform),
+            stdio: ['ignore', 'pipe', 'ignore']
+        })
+        const closed = new Promise(resolve => leader.once('close', resolve))
+        await new Promise((resolve, reject) => {
+            leader.stdout.once('data', resolve)
+            leader.once('error', reject)
+        })
+        reapProcessGroup(leader.pid!, 'SIGKILL')
+        await closed
     })
 })
 
@@ -654,19 +823,11 @@ describe('ownGroupSpawnOptions', () => {
             ...ownGroupSpawnOptions(process.platform),
             stdio: ['ignore', 'pipe', 'ignore']
         })
-        // Own group = not swept with the runner if this hangs, so bound it and
-        // kill it ourselves on every exit path.
         const pgid = await new Promise<string>((resolve, reject) => {
-            const deadline = setTimeout(() => reject(new Error('ps did not settle')), 10_000)
             let out = ''
             p.stdout.on('data', (d: Buffer) => (out += d.toString()))
             p.on('error', reject)
-            p.on('close', () => {
-                clearTimeout(deadline)
-                resolve(out.trim())
-            })
-        }).finally(() => {
-            if (p.pid) reapProcessGroup(p.pid, 'SIGKILL')
+            p.on('close', () => resolve(out.trim()))
         })
         // A missing or busybox `ps` prints nothing; say so rather than let
         // Number('') === 0 read as "inherited the runner's group".

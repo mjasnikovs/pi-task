@@ -1,5 +1,6 @@
 import {spawn as defaultSpawn, spawnSync as spawnSyncDefault} from 'node:child_process'
 import type {EventEmitter} from 'node:events'
+import * as path from 'node:path'
 import {realStreamTimerDeps, StreamWatchdog} from './stream-watchdog.js'
 import {realStallTimerDeps, StallProbe} from './stall-probe.js'
 import type {CommandKillReason} from './command-watchdog.js'
@@ -93,11 +94,25 @@ export type OwnGroupSpawnOptions = {detached: true} | {windowsHide: true}
 export function reapProcessGroup(
     pid: number,
     sig: NodeJS.Signals,
-    platform: NodeJS.Platform = process.platform
+    {
+        platform = process.platform,
+        leaderExited = false
+    }: {platform?: NodeJS.Platform; leaderExited?: boolean} = {}
 ): void {
+    // taskkill walks the tree down from a live leader. Once the leader has exited its
+    // pid may already be another process's, and /T /F would kill that one instead.
+    if (platform === 'win32' && leaderExited) return
     try {
         if (platform === 'win32') {
-            spawnSyncDefault('taskkill', ['/pid', String(pid), '/T', '/F'])
+            // System32's taskkill by absolute path, as pi's killProcessTree finds it, so
+            // neither PATH nor the working directory can supply another. Synchronous,
+            // unlike pi's: runChild kills the leader next, and the walk must end first.
+            const taskkill = path.join(
+                process.env.SystemRoot || 'C:\\Windows',
+                'System32',
+                'taskkill.exe'
+            )
+            spawnSyncDefault(taskkill, ['/pid', String(pid), '/T', '/F'])
         } else {
             process.kill(-pid, sig)
         }
@@ -513,24 +528,28 @@ export function runChild(
         }
 
         // Reap the child's whole process group — the child itself AND anything it
-        // backgrounded. No-op unless the child owns a group (ownGroup) and we have a pid.
+        // backgrounded.
+        let leaderExited = false
+        proc.once('exit', () => (leaderExited = true))
         const reapGroup = (sig: NodeJS.Signals): void => {
             if (!ownGroup || !proc.pid) return
-            reapProcessGroup(proc.pid, sig, platform)
+            reapProcessGroup(proc.pid, sig, {platform, leaderExited})
         }
 
         // One kill path for every source: SIGTERM, then SIGKILL after a grace
         // period if the child ignored the term. For a group-owning (model) child,
         // ALSO sweep the group so anything it backgrounded dies with it —
-        // proc.kill hits only the leader, reapGroup the grandchildren. The FIRST
-        // cause wins: a stall kill's SIGTERM can trip the abort path behind it.
+        // proc.kill hits only the leader, reapGroup the grandchildren. The sweep
+        // goes first because win32's taskkill walks the tree down from a live
+        // leader. The FIRST cause wins: a stall kill's SIGTERM can trip the abort
+        // path behind it.
         const killProc = (cause: ChildKill): void => {
             kill ??= cause
+            reapGroup('SIGTERM')
             proc.kill('SIGTERM')
-            if (ownGroup) reapGroup('SIGTERM')
             setTimeout(() => {
+                reapGroup('SIGKILL')
                 if (!proc.killed) proc.kill('SIGKILL')
-                if (ownGroup) reapGroup('SIGKILL')
             }, KILL_GRACE_MS)
         }
 

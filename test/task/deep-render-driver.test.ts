@@ -20,6 +20,7 @@ import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import {
+    launchBrowser,
     runDeepRenderCheck,
     type DeepSessionFacts,
     type LoginCredentials
@@ -168,9 +169,7 @@ function run(
     })
 }
 
-// The fake browser is launched via a POSIX shell shebang, and the driver's
-// cleanup ends it with a process-group kill — `process.kill(-child.pid,
-// 'SIGKILL')` at deep-render-check.ts:749. Both are POSIX, so these cases are
+// The fake browser is launched via a POSIX shell shebang, so these cases are
 // skipped elsewhere rather than faked.
 const posix = process.platform === 'win32' ? test.skip : test
 
@@ -367,5 +366,51 @@ describe('drive: sessions that report on the environment, never on the app', () 
         const r = await run(fakeBrowser({inspect: []}, 'hang'), {timeoutMs: 400})
         expect(r.outcome).toBe('skip')
         expect((r as {note: string}).note).toContain('timed out after 400ms')
+    })
+})
+
+// Once the browser is killed its pid is not the browser's for long, so every
+// teardown path must signal it once.
+describe('launchBrowser teardown', () => {
+    /** Group kills issued while `fn` runs, passed through to the real kill. */
+    async function groupReaps(fn: () => Promise<unknown>): Promise<number> {
+        let reaps = 0
+        const realKill = process.kill.bind(process)
+        process.kill = ((pid: number, sig?: string | number) => {
+            if (pid < 0) reaps++
+            return realKill(pid, sig)
+        }) as typeof process.kill
+        try {
+            await fn()
+        } finally {
+            process.kill = realKill
+        }
+        return reaps
+    }
+
+    // The session's own close ends the browser, then the check's teardown abort
+    // runs close again.
+    posix('a finished session reaps the browser once', async () => {
+        const reaps = await groupReaps(async () => {
+            const r = await run(fakeBrowser({navigations: [landing], inspect: [inside('/')]}))
+            expect(r.outcome).toBe('pass')
+        })
+        expect(reaps).toBe(1)
+    })
+
+    // The abort's close kills the browser, then the launch's own failure path
+    // closes again.
+    posix('an aborted launch reaps the browser once', async () => {
+        const controller = new AbortController()
+        const reaps = await groupReaps(async () => {
+            const launch = launchBrowser(
+                fakeBrowser({inspect: []}, 'hang'),
+                tmpDir('deep-render-profile-'),
+                {signal: controller.signal}
+            )
+            controller.abort()
+            await expect(launch).rejects.toThrow()
+        })
+        expect(reaps).toBe(1)
     })
 })

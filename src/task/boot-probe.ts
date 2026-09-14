@@ -324,8 +324,8 @@ export interface BootDeps {
      * fake pid would signal something else entirely.
      */
     killGroup?: (pid: number, signal: NodeJS.Signals) => void
-    /** Which platform's group options to spawn with. Tests drive the win32 arm
-     *  from a POSIX host; production leaves it to `process.platform`. */
+    /** Which platform's spawn options, served-app rule and reap to use. Tests drive
+     *  the win32 arm from a POSIX host; production leaves it to `process.platform`. */
     platform?: NodeJS.Platform
 }
 
@@ -672,11 +672,6 @@ function defaultSpawnBoot(bin: string, args: string[], o: BootSpawnOptions): Boo
     return spawn(bin, args, o) as unknown as BootChild
 }
 
-/** The real group teardown; the spawn shape's twin lives beside it. */
-function defaultKillGroup(pid: number, sig: NodeJS.Signals): void {
-    reapProcessGroup(pid, sig)
-}
-
 /**
  * Exercise the start command ONCE. All four outcomes below were run against real
  * child processes in throwaway projects.
@@ -730,7 +725,8 @@ export async function runBootCheck(
     graceMs = 10_000,
     opts: {expectServer?: boolean; deps?: BootDeps} = {}
 ): Promise<BootOutcome> {
-    const expectServer = (opts.expectServer ?? false) && process.platform !== 'win32'
+    const platform = opts.deps?.platform ?? process.platform
+    const expectServer = (opts.expectServer ?? false) && platform !== 'win32'
     const groupHasListener = opts.deps?.groupHasListener ?? defaultGroupHasListener
     const httpProbe = opts.deps?.httpProbe ?? defaultHttpProbe
     const canEnumerate =
@@ -754,7 +750,7 @@ export async function runBootCheck(
     return new Promise(resolve => {
         const child = spawnBoot(runner.bin, args, {
             cwd,
-            ...ownGroupSpawnOptions(opts.deps?.platform ?? process.platform),
+            ...ownGroupSpawnOptions(platform),
             stdio: ['ignore', 'pipe', 'pipe'],
             env: {
                 ...runnerEnv(runner),
@@ -785,7 +781,11 @@ export async function runBootCheck(
             if (poll) clearInterval(poll)
             resolve(r)
         }
-        const reapGroup = opts.deps?.killGroup ?? defaultKillGroup
+        let leaderExited = false
+        const reapGroup =
+            opts.deps?.killGroup
+            ?? ((pid: number, sig: NodeJS.Signals) =>
+                reapProcessGroup(pid, sig, {platform, leaderExited}))
         const killGroup = (sig: NodeJS.Signals) => {
             // Truthiness, deliberately: `process.kill(0, sig)` signals the
             // CALLER's own process group, so a pid of 0 turns a best-effort
@@ -902,6 +902,7 @@ export async function runBootCheck(
         let timer = setTimeout(onGrace, graceMs)
         child.on('error', () => settle({outcome: 'skip', spawnFailed: true}))
         child.on('exit', (status, signal) => {
+            leaderExited = true
             if (status === 0) {
                 if (expectServer && !listenerSeen) {
                     if (!canEnumerate) {
