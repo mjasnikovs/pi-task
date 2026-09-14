@@ -1,6 +1,6 @@
 import {spawn as defaultSpawn, spawnSync as spawnSyncDefault} from 'node:child_process'
 import type {EventEmitter} from 'node:events'
-import * as path from 'node:path'
+import {system32, trackLeftovers} from './leftovers.js'
 import {realStreamTimerDeps, StreamWatchdog} from './stream-watchdog.js'
 import {realStallTimerDeps, StallProbe} from './stall-probe.js'
 import type {CommandKillReason} from './command-watchdog.js'
@@ -57,8 +57,9 @@ export type SpawnFn = (
         cwd: string
         shell: boolean
         stdio: ['ignore' | 'pipe', 'pipe', 'pipe']
-        /** Set only when the invocation needs env overrides — git-state-guard's
-         *  `GIT_INDEX_FILE` throwaway index is the one caller. Absent → the child
+        /** Set when the invocation needs env overrides — git-state-guard's
+         *  `GIT_INDEX_FILE` throwaway index — and for every model child, which
+         *  carries what leftovers.ts finds its descendants by. Absent → the child
          *  inherits this process's environment. */
         env?: NodeJS.ProcessEnv
         /** true → give the child its own process group (POSIX `detached`), so any
@@ -85,8 +86,8 @@ export type SpawnFn = (
  * `windowsHide` (CREATE_NO_WINDOW) instead: the child gets a windowless console
  * that its descendants inherit. Either/or is load-bearing — Windows ignores
  * CREATE_NO_WINDOW next to DETACHED_PROCESS. The win32 reap is `taskkill /T`,
- * which walks the live tree and needs no flag; unlike a POSIX group kill it
- * cannot catch what the child left behind after it exited.
+ * which walks the live tree and needs no flag. Neither reap reaches what pi's bash
+ * tool backgrounds, since it detaches every command; leftovers.ts finds that.
  */
 export function ownGroupSpawnOptions(platform: NodeJS.Platform): OwnGroupSpawnOptions {
     return platform === 'win32' ? {windowsHide: true} : {detached: true}
@@ -112,15 +113,9 @@ export function reapProcessGroup(
     if (platform === 'win32' && leaderExited) return false
     try {
         if (platform === 'win32') {
-            // System32's taskkill by absolute path, so neither PATH nor the working
-            // directory can supply another. Synchronous, unlike pi's killProcessTree:
-            // runChild kills the leader next, and the walk must end first.
-            const taskkill = path.join(
-                process.env.SystemRoot || 'C:\\Windows',
-                'System32',
-                'taskkill.exe'
-            )
-            spawnSyncDefault(taskkill, ['/pid', String(pid), '/T', '/F'])
+            // Synchronous, unlike pi's killProcessTree: runChild kills the leader
+            // next, and the walk must end first.
+            spawnSyncDefault(system32('taskkill.exe'), ['/pid', String(pid), '/T', '/F'])
         } else {
             process.kill(-pid, sig)
         }
@@ -509,17 +504,20 @@ export function runChild(
         const usesStdin = invocation.stdin !== undefined
         // Model children (json-events) run arbitrary bash — they can `bun run dev &`
         // a server that outlives the child and holds a port, wrecking the final gate
-        // with a self-inflicted EADDRINUSE. Spawn them in their
-        // OWN process group so every such grandchild can be reaped as a unit on exit.
+        // with a self-inflicted EADDRINUSE. They get their OWN process group, so a
+        // kill takes the child's tree with it, and leftovers.ts finds what escaped it.
         // Plumbing (git, mode:'text') never backgrounds anything and stays in-group.
         const ownGroup = opts?.mode === 'json-events'
         const platform = (ownGroup && opts.platform) || process.platform
+        const leftovers =
+            ownGroup ? trackLeftovers(platform, invocation.env ?? process.env, KILL_GRACE_MS) : null
+        const env = leftovers?.env ?? invocation.env
         const proc = spawn(invocation.command, invocation.args, {
             cwd,
             shell: false,
             stdio: [usesStdin ? 'pipe' : 'ignore', 'pipe', 'pipe'],
             ...(ownGroup ? ownGroupSpawnOptions(platform) : {}),
-            ...(invocation.env ? {env: invocation.env} : {})
+            ...(env ? {env} : {})
         })
 
         if (usesStdin) {
@@ -710,6 +708,7 @@ export function runChild(
             finished = true
             leaderExited = true
             clearTimeout(drain)
+            cleanup()
             if (reapGroup('SIGTERM')) setTimeout(() => reapGroup('SIGKILL'), KILL_GRACE_MS).unref()
             if (sink) sink.flush()
             const text = sink ? sink.text : undefined
@@ -717,7 +716,7 @@ export function runChild(
             // killed means it ran on a prompt that never finished arriving. Its own
             // exit describes that half-spec, so it cannot stand as the verdict.
             const truncated = kill === undefined ? stdinError : undefined
-            settle({
+            const result: ChildResult = {
                 stdout,
                 stderr:
                     truncated ? `${stderr}\nprompt delivery failed: ${truncated.message}` : stderr,
@@ -726,9 +725,12 @@ export function runChild(
                 ...(kill ? {kill} : {}),
                 text,
                 modelError: sink?.modelError
-            })
+            }
+            // Not settled before the leftovers are gone: the next phase needs their ports.
+            void (leftovers?.reap() ?? Promise.resolve()).then(() => settle(result))
         }
         proc.once('error', () => {
+            void leftovers?.reap()
             settle({
                 stdout,
                 stderr,

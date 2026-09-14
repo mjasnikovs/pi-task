@@ -822,6 +822,67 @@ describe('reapProcessGroup', () => {
     })
 })
 
+// pi's bash tool starts every command in a group of its own, so this is the shape a
+// model's `bun run dev &` really takes. Real processes on the host's platform.
+describe('what a model child leaves running', () => {
+    const alive = (pid: number): boolean => {
+        try {
+            process.kill(pid, 0)
+            return true
+        } catch {
+            return false
+        }
+    }
+    const piBashTool = new URL(
+        './core/tools/bash.js',
+        import.meta.resolve('@earendil-works/pi-coding-agent')
+    ).href
+    const slashes = (p: string): string => p.replace(/\\/g, '/')
+    const keepAlive = 'setInterval(() => {}, 1 << 30)'
+
+    test("a server backgrounded through pi's bash tool ends with the child", async () => {
+        const dir = tmpDir('leftover-')
+        const serverPidFile = path.join(dir, 'server.pid')
+        const userMarker = path.join(dir, 'user-bash-env-ran')
+        const userBashEnv = path.join(dir, 'user-bash-env.sh')
+        fs.writeFileSync(userBashEnv, `echo ran > '${slashes(userMarker)}'\n`)
+        const modelChild = path.join(dir, 'model-child.mjs')
+        fs.writeFileSync(
+            modelChild,
+            [
+                `import {createLocalBashOperations} from ${JSON.stringify(piBashTool)}`,
+                'await createLocalBashOperations().exec(process.env.SERVER_COMMAND, process.cwd(), {onData: () => {}})',
+                'process.exit(0)'
+            ].join('\n')
+        )
+        // `/proc/$!/winpid` is Git Bash's map from its own pid to the Windows one.
+        const serverCommand =
+            `'${slashes(process.execPath)}' -e '${keepAlive}' & `
+            + `echo $(cat /proc/$!/winpid 2>/dev/null || echo $!) > '${slashes(serverPidFile)}'`
+        const bystander = realSpawn(process.execPath, ['-e', keepAlive], {stdio: 'ignore'})
+        strays.push(() => bystander.kill('SIGKILL'), killPidIn(serverPidFile))
+
+        const r = await runChild(
+            realSpawn as unknown as SpawnFn,
+            {
+                command: process.execPath,
+                args: [modelChild],
+                env: {...process.env, BASH_ENV: userBashEnv, SERVER_COMMAND: serverCommand}
+            },
+            dir,
+            undefined,
+            {mode: 'json-events'}
+        )
+        expect(r.exitCode).toBe(0)
+        const server = Number(fs.readFileSync(serverPidFile, 'utf8'))
+        while (alive(server)) await new Promise(resolve => setImmediate(resolve))
+        expect(fs.existsSync(userMarker)).toBe(true)
+        expect(alive(bystander.pid!)).toBe(true)
+        strays.length = 0
+        bystander.kill('SIGKILL')
+    })
+})
+
 // ─── Abort-listener lifecycle ────────────────────────────────────────────────
 
 /**
