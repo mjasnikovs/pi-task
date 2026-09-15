@@ -129,24 +129,28 @@ describe('win32: the shells BASH_ENV records', () => {
         expect(startedByShells(rows, shells)).toEqual([10060])
     })
 
-    // A cold WMI outlasted the kill grace on the windows runner.
-    test('a process table slower than the grace still reaps what it lists', async () => {
-        const system32 = fakeSystem32()
-        try {
-            const {env, reap} = trackLeftovers('win32', {}, 1)
-            fs.writeFileSync(
-                env.PI_TASK_SHELL_REGISTRY!,
-                `${shellRan}\nexited 6844 1789403248.700000\n`
-            )
-            const reaped = reap()
-            await system32.asked()
-            system32.answerProcessTable(stub)
-            await reaped
-            expect(system32.calls()).toEqual(['powershell', 'taskkill /pid 10060 /T /F'])
-        } finally {
-            system32.restore()
+    // A cold WMI outlasted the kill grace on the windows runner. Not run there: the fake
+    // powershell inherits the fake SystemRoot, and a windows process cannot start under it.
+    test.skipIf(process.platform === 'win32')(
+        'a process table slower than the grace still reaps what it lists',
+        async () => {
+            const system32 = fakeSystem32()
+            try {
+                const {env, reap} = trackLeftovers('win32', {}, 1)
+                fs.writeFileSync(
+                    env.PI_TASK_SHELL_REGISTRY!,
+                    `${shellRan}\nexited 6844 1789403248.700000\n`
+                )
+                const reaped = reap()
+                expect(await system32.asked(reaped)).toBe(true)
+                system32.answerProcessTable(stub)
+                await reaped
+                expect(system32.calls()).toEqual(['powershell', 'taskkill /pid 10060 /T /F'])
+            } finally {
+                system32.restore()
+            }
         }
-    })
+    )
 
     test('a shell with no exit on record counts only while it still holds its pid', () => {
         const shells = parseShells(shellRan)

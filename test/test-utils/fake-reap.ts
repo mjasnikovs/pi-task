@@ -60,8 +60,8 @@ export function fakeSystem32({relative = false}: {relative?: boolean} = {}): {
     /** Every taskkill and powershell invocation and `note`, in the order they happened. */
     calls: () => string[]
     note: (line: string) => void
-    /** Resolves once powershell has been asked for the process table. */
-    asked: () => Promise<void>
+    /** True once powershell was asked for the process table; false if `waiter` settled first. */
+    asked: (waiter: Promise<unknown>) => Promise<boolean>
     answerProcessTable: (rows: string) => void
     restore: () => void
 } {
@@ -87,11 +87,18 @@ export function fakeSystem32({relative = false}: {relative?: boolean} = {}): {
     return {
         calls,
         note: line => fs.appendFileSync(log, `${line}\n`),
-        asked: async () => {
+        asked: async waiter => {
+            let waiterSettled = false
+            const stop = (): void => {
+                waiterSettled = true
+            }
+            void waiter.then(stop, stop)
             while (!calls().includes('powershell')) {
+                if (waiterSettled) return false
                 const started = performance.now()
                 await new Promise(resolve => setTimeout(resolve, performance.now() - started))
             }
+            return true
         },
         answerProcessTable,
         restore: () => {
