@@ -279,6 +279,29 @@ describe('runChild json-events mode', () => {
         })
         expect(result.aborted).toBe(true)
     })
+
+    test('a loop hit in the tail flushed after the leader exited is still the verdict', async () => {
+        // The last event of a run has no newline behind it, so it reaches the sink
+        // only in the flush that runs after 'exit'. A looped child that then exits 0
+        // must not pass for a clean answer.
+        const spawn = (() => {
+            const p = makeProc()
+            queueMicrotask(() => {
+                const evt = {type: 'tool_execution_start', toolName: 'bash', args: {command: 'ls'}}
+                p.stdout!.emit('data', Buffer.from(JSON.stringify(evt)))
+                p.emit('exit', 0)
+                p.emit('close', 0)
+            })
+            return p
+        }) as unknown as SpawnFn
+        const hit: LoopHit = {call: {name: 'bash', args: {command: 'ls'}}, count: 5, windowSize: 5}
+        const result = await runChild(spawn, noopInvocation, '/tmp', undefined, {
+            mode: 'json-events',
+            onToolCall: () => hit
+        })
+        expect(result.kill).toEqual({by: 'loop', hit})
+        expect(result.aborted).toBe(true)
+    })
 })
 
 describe('summarizeToolArgs', () => {
@@ -874,12 +897,40 @@ describe('what a model child leaves running', () => {
             {mode: 'json-events'}
         )
         expect(r.exitCode).toBe(0)
-        const server = Number(fs.readFileSync(serverPidFile, 'utf8'))
-        while (alive(server)) await new Promise(resolve => setImmediate(resolve))
+        // Gone when the run settles, not merely signalled: the next phase binds its port.
+        expect(alive(Number(fs.readFileSync(serverPidFile, 'utf8')))).toBe(false)
         expect(fs.existsSync(userMarker)).toBe(true)
         expect(alive(bystander.pid!)).toBe(true)
         strays.length = 0
         bystander.kill('SIGKILL')
+    })
+})
+
+describe('the pipes are released when the run settles', () => {
+    testPosix('a grandchild that inherited stderr cannot grow the result after it', async () => {
+        const dir = tmpDir('pipe-holder-')
+        const pidFile = path.join(dir, 'writer.pid')
+        strays.push(killPidIn(pidFile))
+        let proc: ReturnType<typeof realSpawn> | undefined
+        const spawn = ((...args: Parameters<typeof realSpawn>) => {
+            proc = realSpawn(...args)
+            return proc
+        }) as unknown as SpawnFn
+        const r = await runChild(
+            spawn,
+            {
+                command: 'sh',
+                args: ['-c', `(while :; do echo x >&2; sleep 0.01; done) & echo $! > '${pidFile}'`]
+            },
+            dir,
+            undefined,
+            {mode: 'text'}
+        )
+        expect(r.exitCode).toBe(0)
+        // Settled on 'exit' with the writer still holding the pipe; the read end
+        // must be closed, or every line it writes lands in a string nobody reads.
+        expect(proc!.stdout!.destroyed).toBe(true)
+        expect(proc!.stderr!.destroyed).toBe(true)
     })
 })
 

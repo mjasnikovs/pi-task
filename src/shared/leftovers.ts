@@ -26,7 +26,7 @@ export interface Leftovers {
     /** The environment to spawn the child with. */
     env: NodeJS.ProcessEnv
     /** End whatever the child left running. Never rejects. */
-    reap(): Promise<void>
+    reap: () => Promise<void>
 }
 
 /** Start tracking a child about to be spawned with `base` as its environment. */
@@ -35,7 +35,7 @@ export function trackLeftovers(
     base: NodeJS.ProcessEnv,
     graceMs: number
 ): Leftovers {
-    if (platform === 'win32') return trackShells(base)
+    if (platform === 'win32') return trackShells(base, graceMs)
     if (platform === 'linux' || platform === 'darwin') return trackToken(platform, base, graceMs)
     return {env: base, reap: () => Promise.resolve()}
 }
@@ -61,14 +61,30 @@ function trackToken(
         platform === 'linux' ? linuxPidsWith(marker) : pidsInPsTable(darwinPsTable(), marker)
     return {
         env: {...base, [LEFTOVER_TOKEN_ENV]: token},
-        reap: () => {
-            // Found again for the SIGKILL, never remembered: a pid that died in the
-            // grace period may already be someone else's.
-            if (signalEach(find(), 'SIGTERM') > 0) {
-                setTimeout(() => signalEach(find(), 'SIGKILL'), graceMs).unref()
-            }
-            return Promise.resolve()
-        }
+        reap: () =>
+            new Promise(resolve => {
+                const started = performance.now()
+                let killed = false
+                signalEach(find(), 'SIGTERM')
+                // Found again on every pass, never remembered: a pid that died in
+                // the grace period may already be someone else's. Each pass waits
+                // as long as the scan before it took, so the wait costs half a core
+                // at most and no invented interval.
+                const poll = (): void => {
+                    const scanStart = performance.now()
+                    const left = find()
+                    const waited = performance.now() - started
+                    // A process SIGKILL cannot end (uninterruptible sleep) gets one
+                    // more grace, then the run goes on without it.
+                    if (left.length === 0 || waited >= 2 * graceMs) return resolve()
+                    if (!killed && waited >= graceMs) {
+                        signalEach(left, 'SIGKILL')
+                        killed = true
+                    }
+                    setTimeout(poll, performance.now() - scanStart).unref()
+                }
+                poll()
+            })
     }
 }
 
@@ -139,12 +155,15 @@ export const BASH_ENV_SCRIPT = [
     `if [ -n "\${${USER_BASH_ENV}:-}" ]; then . "$${USER_BASH_ENV}"; fi`,
     '__pi_task_winpid=$$',
     'if [ -r /proc/$$/winpid ]; then read -r __pi_task_winpid < /proc/$$/winpid; fi',
-    `printf 'ran %s %s\\n' "$__pi_task_winpid" "\${EPOCHREALTIME:-}" >> "$${SHELL_REGISTRY_ENV}"`,
-    `trap 'printf "exited %s %s\\n" "$__pi_task_winpid" "\${EPOCHREALTIME:-}" >> "$${SHELL_REGISTRY_ENV}"' EXIT`,
+    // EPOCHREALTIME is bash 5.0; bash 4 has whole seconds, so the run is read at
+    // the start of its second and the exit at the end of it.
+    '__pi_task_now() { if [ -n "${EPOCHREALTIME:-}" ]; then __pi_task_t=$EPOCHREALTIME; else printf -v __pi_task_t "%(%s)T" -1; __pi_task_t="$((__pi_task_t + $1)).000000"; fi; }',
+    `__pi_task_now 0; printf 'ran %s %s\\n' "$__pi_task_winpid" "$__pi_task_t" >> "$${SHELL_REGISTRY_ENV}"`,
+    `trap '__pi_task_now 1; printf "exited %s %s\\n" "$__pi_task_winpid" "$__pi_task_t" >> "$${SHELL_REGISTRY_ENV}"' EXIT`,
     ''
 ].join('\n')
 
-function trackShells(base: NodeJS.ProcessEnv): Leftovers {
+function trackShells(base: NodeJS.ProcessEnv, graceMs: number): Leftovers {
     let dir: string
     try {
         dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-task-shells-'))
@@ -167,12 +186,16 @@ function trackShells(base: NodeJS.ProcessEnv): Leftovers {
                     fs.existsSync(registry) ? fs.readFileSync(registry, 'utf8') : ''
                 )
                 if (shells.length === 0) return
-                const started = startedByShells(parseProcessTable(await processTable()), shells)
+                const table = await processTable(graceMs)
+                const started = startedByShells(parseProcessTable(table), shells)
                 await Promise.all(started.map(taskkillTree))
             } catch {
                 // best-effort, like every other reap
-            } finally {
+            }
+            try {
                 fs.rmSync(dir, {recursive: true, force: true})
+            } catch {
+                // a handle still open in there; the run must not wait on it
             }
         }
     }
@@ -248,8 +271,11 @@ export function parseProcessTable(text: string): ProcessRow[] {
     return rows
 }
 
-/** Every process as `pid ppid creation-FILETIME`, one per line. */
-function processTable(): Promise<string> {
+/**
+ * Every process as `pid ppid creation-FILETIME`, one per line. A CIM query that
+ * has not answered within the kill grace is given up on: the run is waiting.
+ */
+function processTable(graceMs: number): Promise<string> {
     const query =
         'Get-CimInstance Win32_Process -Property ProcessId,ParentProcessId,CreationDate'
         + ' | ForEach-Object { "$($_.ProcessId) $($_.ParentProcessId) $($_.CreationDate.ToFileTimeUtc())" }'
@@ -260,9 +286,13 @@ function processTable(): Promise<string> {
             ['-NoProfile', '-NonInteractive', '-Command', query],
             {stdio: ['ignore', 'pipe', 'ignore']}
         )
+        const giveUp = setTimeout(() => ps.kill(), graceMs)
         ps.stdout.on('data', (d: Buffer) => (out += d.toString()))
         ps.on('error', () => resolve(''))
-        ps.on('close', () => resolve(out))
+        ps.on('close', () => {
+            clearTimeout(giveUp)
+            resolve(out)
+        })
     })
 }
 

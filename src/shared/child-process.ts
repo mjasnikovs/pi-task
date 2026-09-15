@@ -41,8 +41,9 @@ export interface WritableLike {
 export interface ProcLike extends EventEmitter {
     /** Present only when the child was spawned with stdin 'pipe' (prompt delivery). */
     stdin: WritableLike | null
-    stdout: EventEmitter | null
-    stderr: EventEmitter | null
+    /** `destroy` is a real pipe's; a fake without one is never held open by a grandchild. */
+    stdout: (EventEmitter & {destroy?: () => unknown}) | null
+    stderr: (EventEmitter & {destroy?: () => unknown}) | null
     killed: boolean
     /** OS pid; used to signal the child's whole process GROUP (orphan reaping). May
      *  be undefined for a mock spawn or a spawn that failed. */
@@ -123,6 +124,22 @@ export function reapProcessGroup(
     } catch {
         return false
     }
+}
+
+/**
+ * The sweep every runner makes once its leader exited: SIGTERM the group now, and
+ * SIGKILL what ignored it after the grace. A group whose last member is gone
+ * answers ESRCH, and POSIX keeps the pgid reserved while any member lives.
+ */
+export function reapGroupAfterExit(
+    pid: number,
+    platform: NodeJS.Platform = process.platform
+): void {
+    if (!reapProcessGroup(pid, 'SIGTERM', {platform, leaderExited: true})) return
+    setTimeout(
+        () => reapProcessGroup(pid, 'SIGKILL', {platform, leaderExited: true}),
+        KILL_GRACE_MS
+    ).unref()
 }
 
 // ─── Result types ────────────────────────────────────────────────────────────
@@ -596,8 +613,15 @@ export function runChild(
                     }
                 }
             :   opts
+        // A loop hit is the child's own verdict, not a kill from outside, so it stands
+        // even when the tail flushed after its exit is what carried it.
         const sink =
-            sinkOpts ? new JsonEventSink(sinkOpts, hit => killProc({by: 'loop', hit})) : null
+            sinkOpts ?
+                new JsonEventSink(sinkOpts, hit => {
+                    kill ??= {by: 'loop', hit}
+                    killProc(kill)
+                })
+            :   null
 
         // Dead-backend stall guard (json-events children only; see the option docs).
         const stall = opts?.mode === 'json-events' ? opts.stall : undefined
@@ -709,7 +733,7 @@ export function runChild(
             leaderExited = true
             clearTimeout(drain)
             cleanup()
-            if (reapGroup('SIGTERM')) setTimeout(() => reapGroup('SIGKILL'), KILL_GRACE_MS).unref()
+            if (ownGroup && proc.pid) reapGroupAfterExit(proc.pid, platform)
             if (sink) sink.flush()
             const text = sink ? sink.text : undefined
             // pi waits for EOF before it runs, so a stdin error on a child nobody
@@ -726,11 +750,18 @@ export function runChild(
                 text,
                 modelError: sink?.modelError
             }
+            // A grandchild that inherited the pipes writes into them for as long as
+            // it lives; with the read ends closed that lands nowhere.
+            proc.stdout?.destroy?.()
+            proc.stderr?.destroy?.()
             // Not settled before the leftovers are gone: the next phase needs their ports.
-            void (leftovers?.reap() ?? Promise.resolve()).then(() => settle(result))
+            const done = (): void => settle(result)
+            void (leftovers?.reap() ?? Promise.resolve()).then(done, done)
         }
         proc.once('error', () => {
             void leftovers?.reap()
+            proc.stdout?.destroy?.()
+            proc.stderr?.destroy?.()
             settle({
                 stdout,
                 stderr,

@@ -24,7 +24,7 @@ const cwd = process.cwd()
 async function within<T>(ms: number, p: Promise<T>): Promise<T> {
     let t: ReturnType<typeof setTimeout> | undefined
     const deadline = new Promise<never>((_, reject) => {
-        t = setTimeout(() => reject(new Error(`spawnCommand did not settle within ${ms}ms`)), ms)
+        t = setTimeout(() => reject(new Error(`did not settle within ${ms}ms`)), ms)
     })
     try {
         return await Promise.race([p, deadline])
@@ -84,6 +84,52 @@ describe.skipIf(!posix)('spawnCommand settles on the CHILD, not on the pipe', ()
         setTimeout(() => ac.abort(), 100)
         const r = await within(2500, run)
         expect(r.status).toBe(null)
+    })
+})
+
+describe.skipIf(!posix)('what the command backgrounded ends with it', () => {
+    const alive = (pid: number): boolean => {
+        try {
+            process.kill(pid, 0)
+            return true
+        } catch {
+            return false
+        }
+    }
+    const keepAlive = 'setInterval(() => {}, 1 << 30)'
+    const daemon = `'${process.execPath}' -e '${keepAlive}' & echo $!`
+    const gone = async (pid: number): Promise<void> => {
+        while (alive(pid)) await new Promise(resolve => setImmediate(resolve))
+    }
+
+    test('a daemon a pretest started does not hold its port into the boot check', async () => {
+        const r = await within(
+            1500,
+            spawnCommand({cwd, bin: 'sh', args: ['-c', daemon], timeoutMs: 30_000})
+        )
+        expect(r.status).toBe(0)
+        const pid = Number(r.stdout.trim())
+        expect(pid).toBeGreaterThan(0)
+        try {
+            await within(3000, gone(pid))
+        } finally {
+            if (alive(pid)) process.kill(pid, 'SIGKILL')
+        }
+    })
+
+    test('the deadline kill takes the tree, not just the direct child', async () => {
+        const r = await within(
+            2500,
+            spawnCommand({cwd, bin: 'sh', args: ['-c', `${daemon}; sleep 5`], timeoutMs: 300})
+        )
+        expect(r.status).toBe(null)
+        const pid = Number(r.stdout.trim())
+        expect(pid).toBeGreaterThan(0)
+        try {
+            await within(3000, gone(pid))
+        } finally {
+            if (alive(pid)) process.kill(pid, 'SIGKILL')
+        }
     })
 })
 

@@ -30,7 +30,12 @@
  */
 
 import {spawn} from 'node:child_process'
-import {EXIT_DRAIN_MS} from '../shared/child-process.js'
+import {
+    EXIT_DRAIN_MS,
+    ownGroupSpawnOptions,
+    reapGroupAfterExit,
+    reapProcessGroup
+} from '../shared/child-process.js'
 import {isCommandNotFound, resolveRunner, runnerEnv} from './runner-resolve.js'
 
 /** What one finished command looks like, stripped of how it was spawned. */
@@ -144,6 +149,8 @@ export const spawnCommand: CommandRunner = spec =>
         let exited = false
         let endedStreams = 0
         let drain: ReturnType<typeof setTimeout> | undefined
+        // Its own process group: a pretest that backgrounds a daemon, a build that
+        // leaves a watcher, would otherwise hold their ports into the boot check.
         const child = spawn(spec.bin, spec.args, {
             cwd: spec.cwd,
             // stdin CLOSED. `spawnSync` gave the child none; the default `spawn`
@@ -151,6 +158,7 @@ export const spawnCommand: CommandRunner = spec =>
             // a `cat`-style pipeline, a tool that prompts, a pager — would block
             // until the kill timer fires instead of returning at once.
             stdio: ['ignore', 'pipe', 'pipe'],
+            ...ownGroupSpawnOptions(process.platform),
             ...(spec.env ? {env: spec.env} : {})
         })
         const done = (status: number | null, failure?: string): void => {
@@ -172,6 +180,7 @@ export const spawnCommand: CommandRunner = spec =>
             if (exited && endedStreams >= expectedStreams) done(exitStatus)
         }
         const kill = (): void => {
+            if (child.pid) reapProcessGroup(child.pid, 'SIGKILL', {leaderExited: exited})
             try {
                 child.kill('SIGKILL')
             } catch {
@@ -179,9 +188,9 @@ export const spawnCommand: CommandRunner = spec =>
             }
         }
         /**
-         * The deadline and the cancel both END the run. The kill only reaches the
-         * direct child, so this cannot wait to observe its effect — it kills, gives
-         * the pipes one drain, and reports `status: null` regardless.
+         * The deadline and the cancel both END the run. This cannot wait to observe
+         * the kill's effect — it kills, gives the pipes one drain, and reports
+         * `status: null` regardless.
          */
         const killAndSettle = (): void => {
             kill()
@@ -213,6 +222,7 @@ export const spawnCommand: CommandRunner = spec =>
         child.on('exit', (code: number | null) => {
             exited = true
             exitStatus = code
+            if (child.pid) reapGroupAfterExit(child.pid)
             // Both ends of the same question: settle now if the pipes are already
             // at EOF, otherwise settle after one short drain rather than waiting on
             // whoever else is holding them.

@@ -1,5 +1,5 @@
 import {describe, expect, test} from 'bun:test'
-import {spawnSync} from 'node:child_process'
+import {spawn, spawnSync} from 'node:child_process'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 import {
@@ -8,7 +8,8 @@ import {
     parseProcessTable,
     parseShells,
     pidsInPsTable,
-    startedByShells
+    startedByShells,
+    trackLeftovers
 } from '../../src/shared/leftovers.js'
 import {testPosix} from '../test-utils/platform.js'
 import {tmpDir} from '../test-utils/tmp-dir.js'
@@ -31,6 +32,69 @@ describe('linux: the token in /proc/<pid>/environ', () => {
     test('no process table reads as nothing to reap', () => {
         expect(linuxPidsWith('T=abc', path.join(tmpDir('no-proc-'), 'proc'))).toEqual([])
     })
+})
+
+describe('linux, darwin: reap ends when the leftover is gone', () => {
+    const keepAlive = 'setInterval(() => {}, 1 << 30)'
+    /** A process carrying the token, started the way a model's backgrounded server is. */
+    const leftover = (env: NodeJS.ProcessEnv, script: string) => {
+        const child = spawn(process.execPath, ['-e', script], {
+            env,
+            stdio: ['ignore', 'pipe', 'ignore']
+        })
+        const exited = new Promise<NodeJS.Signals | null>(resolve =>
+            child.on('exit', (_code, signal) => resolve(signal))
+        )
+        const ready = new Promise<void>(resolve => child.stdout.once('data', () => resolve()))
+        return {child, ready, exited}
+    }
+    /**
+     * Read from the kernel, not from the runtime: the 'exit' event trails the death
+     * by a few loop turns, and the reap is right to resolve on the death itself.
+     */
+    const dead = (pid: number): boolean => {
+        if (process.platform === 'linux') {
+            try {
+                return /\) [ZX]/.test(fs.readFileSync(`/proc/${pid}/stat`, 'utf8'))
+            } catch {
+                return true
+            }
+        }
+        const r = spawnSync('ps', ['-o', 'stat=', '-p', String(pid)], {encoding: 'utf8'})
+        return r.stdout.trim() === '' || r.stdout.trim().startsWith('Z')
+    }
+
+    testPosix('resolves after the leftover died, not when SIGTERM was queued', async () => {
+        const {env, reap} = trackLeftovers(process.platform, process.env, 5_000)
+        const server = leftover(env, `console.log('up'); ${keepAlive}`)
+        try {
+            await server.ready
+            await reap()
+            expect(dead(server.child.pid!)).toBe(true)
+            expect(await server.exited).toBe('SIGTERM')
+        } finally {
+            server.child.kill('SIGKILL')
+        }
+    })
+
+    testPosix(
+        'a leftover deaf to SIGTERM is SIGKILLed after the grace, then resolved',
+        async () => {
+            const {env, reap} = trackLeftovers(process.platform, process.env, 200)
+            const server = leftover(
+                env,
+                `process.on('SIGTERM', () => {}); console.log('up'); ${keepAlive}`
+            )
+            try {
+                await server.ready
+                await reap()
+                expect(dead(server.child.pid!)).toBe(true)
+                expect(await server.exited).toBe('SIGKILL')
+            } finally {
+                server.child.kill('SIGKILL')
+            }
+        }
+    )
 })
 
 describe('darwin: the token in `ps -E` rows', () => {
@@ -84,6 +148,53 @@ describe('win32: the shells BASH_ENV records', () => {
         expect(startedByShells(holder('134338768486000000'), shells)).toEqual([10060])
         expect(startedByShells(holder('134338768486800000'), shells)).toEqual([])
         expect(startedByShells(parseProcessTable(stub), shells)).toEqual([])
+    })
+
+    // rmSync fails on a file something still holds open; a reject here would hang
+    // the run that waits on it. Root skips: it can remove anything.
+    test.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
+        'reap never rejects, even when its registry cannot be removed',
+        async () => {
+            const {env, reap} = trackLeftovers('win32', {}, 100)
+            const dir = path.dirname(env.PI_TASK_SHELL_REGISTRY!)
+            const locked = path.join(dir, 'locked')
+            fs.mkdirSync(locked)
+            fs.writeFileSync(path.join(locked, 'held'), '')
+            fs.chmodSync(locked, 0o500)
+            try {
+                await expect(reap()).resolves.toBeUndefined()
+            } finally {
+                fs.chmodSync(locked, 0o700)
+                fs.rmSync(dir, {recursive: true, force: true})
+            }
+        }
+    )
+
+    // EPOCHREALTIME arrived in bash 5.0; Git for Windows shipped bash 4.4 until 2022.
+    testPosix('a bash without EPOCHREALTIME still records its run and exit', () => {
+        const dir = tmpDir('bash-env-old-')
+        const script = path.join(dir, 'bash-env.sh')
+        const registry = path.join(dir, 'shells')
+        const user = path.join(dir, 'user.sh')
+        fs.writeFileSync(script, BASH_ENV_SCRIPT)
+        fs.writeFileSync(user, 'unset EPOCHREALTIME\n')
+        const before = Date.now()
+        const r = spawnSync('bash', ['-c', 'exit 0'], {
+            env: {
+                ...process.env,
+                BASH_ENV: script,
+                PI_TASK_SHELL_REGISTRY: registry,
+                PI_TASK_USER_BASH_ENV: user
+            }
+        })
+        expect(r.status).toBe(0)
+        const shells = parseShells(fs.readFileSync(registry, 'utf8'))
+        expect(shells).toHaveLength(1)
+        const asMs = (t: bigint): number => Number((t - 116_444_736_000_000_000n) / 10_000n)
+        // Second resolution at worst: the run may read up to 1s early, the exit 1s late.
+        expect(asMs(shells[0]!.ranAt)).toBeGreaterThanOrEqual(before - 1_000)
+        expect(asMs(shells[0]!.exitedAt!)).toBeLessThanOrEqual(Date.now() + 1_000)
+        expect(shells[0]!.exitedAt! >= shells[0]!.ranAt).toBe(true)
     })
 
     // Git Bash runs the same script on the windows runner, through pi's bash tool, in
