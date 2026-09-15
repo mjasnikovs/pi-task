@@ -16,6 +16,7 @@
  */
 import {describe, expect, test} from 'bun:test'
 import {classifyCommandRun, outputTail, spawnCommand} from '../../src/task/command-run.js'
+import {dead} from '../test-utils/process-state.js'
 
 const posix = process.platform !== 'win32'
 const cwd = process.cwd()
@@ -88,18 +89,10 @@ describe.skipIf(!posix)('spawnCommand settles on the CHILD, not on the pipe', ()
 })
 
 describe.skipIf(!posix)('what the command backgrounded ends with it', () => {
-    const alive = (pid: number): boolean => {
-        try {
-            process.kill(pid, 0)
-            return true
-        } catch {
-            return false
-        }
-    }
     const keepAlive = 'setInterval(() => {}, 1 << 30)'
     const daemon = `'${process.execPath}' -e '${keepAlive}' & echo $!`
     const gone = async (pid: number): Promise<void> => {
-        while (alive(pid)) await new Promise(resolve => setImmediate(resolve))
+        while (!dead(pid)) await new Promise(resolve => setImmediate(resolve))
     }
 
     test('a daemon a pretest started does not hold its port into the boot check', async () => {
@@ -113,7 +106,7 @@ describe.skipIf(!posix)('what the command backgrounded ends with it', () => {
         try {
             await within(3000, gone(pid))
         } finally {
-            if (alive(pid)) process.kill(pid, 'SIGKILL')
+            if (!dead(pid)) process.kill(pid, 'SIGKILL')
         }
     })
 
@@ -128,7 +121,7 @@ describe.skipIf(!posix)('what the command backgrounded ends with it', () => {
         try {
             await within(3000, gone(pid))
         } finally {
-            if (alive(pid)) process.kill(pid, 'SIGKILL')
+            if (!dead(pid)) process.kill(pid, 'SIGKILL')
         }
     })
 })

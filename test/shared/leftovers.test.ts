@@ -12,6 +12,7 @@ import {
     trackLeftovers
 } from '../../src/shared/leftovers.js'
 import {testPosix} from '../test-utils/platform.js'
+import {dead} from '../test-utils/process-state.js'
 import {tmpDir} from '../test-utils/tmp-dir.js'
 
 describe('linux: the token in /proc/<pid>/environ', () => {
@@ -47,21 +48,6 @@ describe('linux, darwin: reap ends when the leftover is gone', () => {
         )
         const ready = new Promise<void>(resolve => child.stdout.once('data', () => resolve()))
         return {child, ready, exited}
-    }
-    /**
-     * Read from the kernel, not from the runtime: the 'exit' event trails the death
-     * by a few loop turns, and the reap is right to resolve on the death itself.
-     */
-    const dead = (pid: number): boolean => {
-        if (process.platform === 'linux') {
-            try {
-                return /\) [ZX]/.test(fs.readFileSync(`/proc/${pid}/stat`, 'utf8'))
-            } catch {
-                return true
-            }
-        }
-        const r = spawnSync('ps', ['-o', 'stat=', '-p', String(pid)], {encoding: 'utf8'})
-        return r.stdout.trim() === '' || r.stdout.trim().startsWith('Z')
     }
 
     testPosix('resolves after the leftover died, not when SIGTERM was queued', async () => {

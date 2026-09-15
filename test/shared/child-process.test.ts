@@ -13,6 +13,7 @@ import {spawn as realSpawn} from 'node:child_process'
 import {fakeSpawnSimple, agentEndResponse, makeProc} from '../test-utils/fake-spawn.js'
 import {fakeTaskkill, recordKills} from '../test-utils/fake-reap.js'
 import {testPosix} from '../test-utils/platform.js'
+import {dead} from '../test-utils/process-state.js'
 import {tmpDir} from '../test-utils/tmp-dir.js'
 import type {
     ChildResult,
@@ -848,14 +849,6 @@ describe('reapProcessGroup', () => {
 // pi's bash tool starts every command in a group of its own, so this is the shape a
 // model's `bun run dev &` really takes. Real processes on the host's platform.
 describe('what a model child leaves running', () => {
-    const alive = (pid: number): boolean => {
-        try {
-            process.kill(pid, 0)
-            return true
-        } catch {
-            return false
-        }
-    }
     const piBashTool = new URL(
         './core/tools/bash.js',
         import.meta.resolve('@earendil-works/pi-coding-agent')
@@ -898,9 +891,9 @@ describe('what a model child leaves running', () => {
         )
         expect(r.exitCode).toBe(0)
         // Gone when the run settles, not merely signalled: the next phase binds its port.
-        expect(alive(Number(fs.readFileSync(serverPidFile, 'utf8')))).toBe(false)
+        expect(dead(Number(fs.readFileSync(serverPidFile, 'utf8')))).toBe(true)
         expect(fs.existsSync(userMarker)).toBe(true)
-        expect(alive(bystander.pid!)).toBe(true)
+        expect(dead(bystander.pid!)).toBe(false)
         strays.length = 0
         bystander.kill('SIGKILL')
     })

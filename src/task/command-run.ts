@@ -147,6 +147,7 @@ export const spawnCommand: CommandRunner = spec =>
         let settled = false
         let exitStatus: number | null = null
         let exited = false
+        let killed = false
         let endedStreams = 0
         let drain: ReturnType<typeof setTimeout> | undefined
         // Its own process group: a pretest that backgrounds a daemon, a build that
@@ -193,6 +194,7 @@ export const spawnCommand: CommandRunner = spec =>
          * `status: null` regardless.
          */
         const killAndSettle = (): void => {
+            killed = true
             kill()
             clearTimeout(drain)
             drain = setTimeout(() => done(null), EXIT_DRAIN_MS)
@@ -221,7 +223,8 @@ export const spawnCommand: CommandRunner = spec =>
         child.on('error', (e: Error) => done(null, e.message))
         child.on('exit', (code: number | null) => {
             exited = true
-            exitStatus = code
+            // taskkill /F ends a win32 child with exit code 1, which reads as a failed check.
+            exitStatus = killed ? null : code
             if (child.pid) reapGroupAfterExit(child.pid)
             // Both ends of the same question: settle now if the pipes are already
             // at EOF, otherwise settle after one short drain rather than waiting on
