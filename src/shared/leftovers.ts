@@ -35,7 +35,7 @@ export function trackLeftovers(
     base: NodeJS.ProcessEnv,
     graceMs: number
 ): Leftovers {
-    if (platform === 'win32') return trackShells(base, graceMs)
+    if (platform === 'win32') return trackShells(base)
     if (platform === 'linux' || platform === 'darwin') return trackToken(platform, base, graceMs)
     return {env: base, reap: () => Promise.resolve()}
 }
@@ -163,7 +163,7 @@ export const BASH_ENV_SCRIPT = [
     ''
 ].join('\n')
 
-function trackShells(base: NodeJS.ProcessEnv, graceMs: number): Leftovers {
+function trackShells(base: NodeJS.ProcessEnv): Leftovers {
     let dir: string
     try {
         dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-task-shells-'))
@@ -186,8 +186,7 @@ function trackShells(base: NodeJS.ProcessEnv, graceMs: number): Leftovers {
                     fs.existsSync(registry) ? fs.readFileSync(registry, 'utf8') : ''
                 )
                 if (shells.length === 0) return
-                const table = await processTable(graceMs)
-                const started = startedByShells(parseProcessTable(table), shells)
+                const started = startedByShells(parseProcessTable(await processTable()), shells)
                 await Promise.all(started.map(taskkillTree))
             } catch {
                 // best-effort, like every other reap
@@ -272,10 +271,10 @@ export function parseProcessTable(text: string): ProcessRow[] {
 }
 
 /**
- * Every process as `pid ppid creation-FILETIME`, one per line. A CIM query that
- * has not answered within the kill grace is given up on: the run is waiting.
+ * Every process as `pid ppid creation-FILETIME`, one per line. Not bounded: a cold
+ * WMI outlasted the kill grace on the windows runner, and a query cut short reaps nothing.
  */
-function processTable(graceMs: number): Promise<string> {
+function processTable(): Promise<string> {
     const query =
         'Get-CimInstance Win32_Process -Property ProcessId,ParentProcessId,CreationDate'
         + ' | ForEach-Object { "$($_.ProcessId) $($_.ParentProcessId) $($_.CreationDate.ToFileTimeUtc())" }'
@@ -286,13 +285,9 @@ function processTable(graceMs: number): Promise<string> {
             ['-NoProfile', '-NonInteractive', '-Command', query],
             {stdio: ['ignore', 'pipe', 'ignore']}
         )
-        const giveUp = setTimeout(() => ps.kill(), graceMs)
         ps.stdout.on('data', (d: Buffer) => (out += d.toString()))
         ps.on('error', () => resolve(''))
-        ps.on('close', () => {
-            clearTimeout(giveUp)
-            resolve(out)
-        })
+        ps.on('close', () => resolve(out))
     })
 }
 
