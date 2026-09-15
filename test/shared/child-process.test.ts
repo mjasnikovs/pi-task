@@ -847,30 +847,33 @@ describe('reapProcessGroup', () => {
 })
 
 describe('the wait on leftovers', () => {
-    // A hung WMI never answers the process table.
-    test('win32: a cancel ends the wait on a process table that never answers', async () => {
-        const system32 = fakeSystem32()
+    // A hung WMI holds the win32 reap for good. A leftover deaf to SIGTERM holds the
+    // POSIX one for the grace, which is what this can stage with a real process.
+    testPosix('a cancel ends the wait on a leftover that has not died yet', async () => {
         const controller = new AbortController()
         const p = makeProc()
-        p.pid = 4242
-        let registry = ''
+        let leftover: ReturnType<typeof realSpawn> | undefined
         const spawn = ((_cmd: string, _args: unknown, options: {env: NodeJS.ProcessEnv}) => {
-            registry = options.env.PI_TASK_SHELL_REGISTRY!
+            leftover = realSpawn(
+                process.execPath,
+                [
+                    '-e',
+                    "process.on('SIGTERM', () => {}); console.log('up'); setInterval(() => {}, 1 << 30)"
+                ],
+                {env: options.env, stdio: ['ignore', 'pipe', 'ignore']}
+            )
             return p
         }) as unknown as SpawnFn
-        try {
-            const run = runChild(spawn, noopInvocation, '/tmp', controller.signal, {
-                mode: 'json-events',
-                platform: 'win32'
-            })
-            fs.writeFileSync(registry, 'ran 6844 1789403248.667522\n')
-            p.emit('close', 0)
-            await system32.asked()
-            controller.abort()
-            expect((await run).exitCode).toBe(0)
-        } finally {
-            system32.restore()
-        }
+        strays.push(() => leftover?.kill('SIGKILL'))
+        const run = runChild(spawn, noopInvocation, '/tmp', controller.signal, {
+            mode: 'json-events',
+            platform: process.platform
+        })
+        await new Promise(resolve => leftover!.stdout!.once('data', resolve))
+        p.emit('close', 0)
+        controller.abort()
+        expect((await run).exitCode).toBe(0)
+        expect(dead(leftover!.pid!)).toBe(false)
     })
 })
 
