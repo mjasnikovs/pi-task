@@ -688,10 +688,12 @@ export function runChild(
         // invocation including its full prompt, and `opts`, along with everything
         // the caller's callbacks close over.
         let settled = false
+        let endLeftoverWait: (() => void) | undefined
         const cleanup = (): void => {
             stallProbe?.stop()
             streamWatch?.stop()
             signal?.removeEventListener('abort', onAbort)
+            if (endLeftoverWait) signal?.removeEventListener('abort', endLeftoverWait)
         }
         const settle = (result: ChildResult): void => {
             cleanup()
@@ -755,8 +757,10 @@ export function runChild(
             proc.stdout?.destroy?.()
             proc.stderr?.destroy?.()
             // Not settled before the leftovers are gone: the next phase needs their ports.
-            const done = (): void => settle(result)
-            void (leftovers?.reap() ?? Promise.resolve()).then(done, done)
+            // A cancel arriving meanwhile ends the wait, not the reap.
+            endLeftoverWait = () => settle(result)
+            if (!settled) signal?.addEventListener('abort', endLeftoverWait, {once: true})
+            void (leftovers?.reap() ?? Promise.resolve()).then(endLeftoverWait, endLeftoverWait)
         }
         proc.once('error', () => {
             void leftovers?.reap()

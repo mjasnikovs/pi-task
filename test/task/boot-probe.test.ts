@@ -12,6 +12,7 @@
  */
 import {describe, expect, test} from 'bun:test'
 import {testPosix} from '../test-utils/platform.js'
+import {gone} from '../test-utils/process-state.js'
 import {tmpDir} from '../test-utils/tmp-dir.js'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
@@ -166,19 +167,8 @@ describe('runBootCheck', () => {
             + `setTimeout(()=>{},600000)`
         const r = await runBootCheck(dir, nodeScript(fixture), 300)
         expect(r.outcome).toBe('pass')
-        const pid = Number(fs.readFileSync(pidFile, 'utf8').trim())
-        // The grandchild must die with the tree, not linger. Poll briefly — kill
-        // delivery is asynchronous.
-        let alive = true
-        for (let i = 0; i < 40 && alive; i++) {
-            await new Promise(res => setTimeout(res, 50))
-            try {
-                process.kill(pid, 0)
-            } catch {
-                alive = false
-            }
-        }
-        expect(alive).toBe(false)
+        // The grandchild must die with the tree, not linger; a hang here fails the test.
+        await gone(Number(fs.readFileSync(pidFile, 'utf8').trim()))
     })
 
     // Death by a Unix signal has no Windows equivalent, so this behaviour is

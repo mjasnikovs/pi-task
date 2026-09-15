@@ -11,6 +11,7 @@ import {
     startedByShells,
     trackLeftovers
 } from '../../src/shared/leftovers.js'
+import {fakeSystem32} from '../test-utils/fake-reap.js'
 import {testPosix} from '../test-utils/platform.js'
 import {dead} from '../test-utils/process-state.js'
 import {tmpDir} from '../test-utils/tmp-dir.js'
@@ -126,6 +127,25 @@ describe('win32: the shells BASH_ENV records', () => {
             [stub, '11000 6844 134338768490000000', '9000 6844 134338768400000000'].join('\r\n')
         )
         expect(startedByShells(rows, shells)).toEqual([10060])
+    })
+
+    // A cold WMI outlasted the kill grace on the windows runner.
+    test('a process table slower than the grace still reaps what it lists', async () => {
+        const system32 = fakeSystem32()
+        try {
+            const {env, reap} = trackLeftovers('win32', {}, 1)
+            fs.writeFileSync(
+                env.PI_TASK_SHELL_REGISTRY!,
+                `${shellRan}\nexited 6844 1789403248.700000\n`
+            )
+            const reaped = reap()
+            await system32.asked()
+            system32.answerProcessTable(stub)
+            await reaped
+            expect(system32.calls()).toEqual(['powershell', 'taskkill /pid 10060 /T /F'])
+        } finally {
+            system32.restore()
+        }
     })
 
     test('a shell with no exit on record counts only while it still holds its pid', () => {
