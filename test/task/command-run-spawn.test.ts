@@ -16,7 +16,8 @@
  */
 import {describe, expect, test} from 'bun:test'
 import {classifyCommandRun, outputTail, spawnCommand} from '../../src/task/command-run.js'
-import {dead} from '../test-utils/process-state.js'
+import {testPosix} from '../test-utils/platform.js'
+import {dead, gone} from '../test-utils/process-state.js'
 
 const posix = process.platform !== 'win32'
 const cwd = process.cwd()
@@ -88,29 +89,41 @@ describe.skipIf(!posix)('spawnCommand settles on the CHILD, not on the pipe', ()
     })
 })
 
-describe.skipIf(!posix)('what the command backgrounded ends with it', () => {
+// `sh` on the windows runner is Git Bash; `/proc/$!/winpid` maps its pid to the Windows one.
+describe('what the command backgrounded ends with it', () => {
     const keepAlive = 'setInterval(() => {}, 1 << 30)'
-    const daemon = `'${process.execPath}' -e '${keepAlive}' & echo $!`
-    const gone = async (pid: number): Promise<void> => {
-        while (!dead(pid)) await new Promise(resolve => setImmediate(resolve))
+    const bun = process.execPath.replace(/\\/g, '/')
+    const daemon = `'${bun}' -e '${keepAlive}' & echo $(cat /proc/$!/winpid 2>/dev/null || echo $!)`
+    const detachedDaemon =
+        `'${bun}' -e "const c = require('node:child_process').spawn(`
+        + `process.execPath, ['-e', '${keepAlive}'], {detached: true, stdio: 'ignore'}); `
+        + `console.log(c.pid); c.unref()"`
+
+    for (const {shape, command, run} of [
+        {shape: 'in its group', command: daemon, run: test},
+        // POSIX only: on win32 its parent exits first, and taskkill /T walks down live parents.
+        {shape: 'out of its group', command: detachedDaemon, run: testPosix}
+    ]) {
+        run(`a daemon a pretest started ${shape} is gone when the run settles`, async () => {
+            // Bounded by the test timeout: a cold WMI on the windows runner takes seconds.
+            const r = await spawnCommand({
+                cwd,
+                bin: 'sh',
+                args: ['-c', command],
+                timeoutMs: 30_000
+            })
+            expect(r.status).toBe(0)
+            const pid = Number(r.stdout.trim())
+            expect(pid).toBeGreaterThan(0)
+            try {
+                expect(dead(pid)).toBe(true)
+            } finally {
+                if (!dead(pid)) process.kill(pid, 'SIGKILL')
+            }
+        })
     }
 
-    test('a daemon a pretest started does not hold its port into the boot check', async () => {
-        const r = await within(
-            1500,
-            spawnCommand({cwd, bin: 'sh', args: ['-c', daemon], timeoutMs: 30_000})
-        )
-        expect(r.status).toBe(0)
-        const pid = Number(r.stdout.trim())
-        expect(pid).toBeGreaterThan(0)
-        try {
-            await within(3000, gone(pid))
-        } finally {
-            if (!dead(pid)) process.kill(pid, 'SIGKILL')
-        }
-    })
-
-    test('the deadline kill takes the tree, not just the direct child', async () => {
+    testPosix('the deadline kill takes the tree, not just the direct child', async () => {
         const r = await within(
             2500,
             spawnCommand({cwd, bin: 'sh', args: ['-c', `${daemon}; sleep 5`], timeoutMs: 300})

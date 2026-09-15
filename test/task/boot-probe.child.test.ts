@@ -6,7 +6,7 @@ import {
     type BootDeps,
     type BootSpawnOptions
 } from '../../src/task/boot-probe.js'
-import {fakeTaskkill, recordKills} from '../test-utils/fake-reap.js'
+import {fakeSystem32, recordKills} from '../test-utils/fake-reap.js'
 import {testPosix} from '../test-utils/platform.js'
 
 /**
@@ -421,7 +421,7 @@ describe('the boot reap', () => {
     })
 
     test('win32: taskkill once, while the boot child still lives', async () => {
-        const tk = fakeTaskkill()
+        const tk = fakeSystem32()
         try {
             const killed = await recordKills(() => passThenExitOn('win32'))
             expect(killed).toEqual([])

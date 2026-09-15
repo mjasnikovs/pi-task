@@ -29,13 +29,15 @@
  * the gate's boot half, while its command half had none.
  */
 
-import {spawn} from 'node:child_process'
+import {spawn, type ChildProcess, type SpawnOptions} from 'node:child_process'
 import {
     EXIT_DRAIN_MS,
+    KILL_GRACE_MS,
     ownGroupSpawnOptions,
     reapGroupAfterExit,
     reapProcessGroup
 } from '../shared/child-process.js'
+import {trackLeftovers} from '../shared/leftovers.js'
 import {isCommandNotFound, resolveRunner, runnerEnv} from './runner-resolve.js'
 
 /** What one finished command looks like, stripped of how it was spawned. */
@@ -62,7 +64,7 @@ export interface CommandSpec {
      * rather than the live `process.env`.
      */
     env?: Record<string, string | undefined>
-    /** The caller's cancel. Kills the child; the run reads as `status: null`. */
+    /** The caller's cancel. Kills a running child, whose run then reads as `status: null`. */
     signal?: AbortSignal
 }
 
@@ -123,6 +125,14 @@ class BoundedOutput {
     }
 }
 
+/** What a runner spawns with. Tests hand in a fake child, and another platform's rules. */
+export interface CommandSpawner {
+    spawn: (bin: string, args: string[], options: SpawnOptions) => ChildProcess
+    platform: NodeJS.Platform
+}
+
+const HOST_SPAWNER: CommandSpawner = {spawn, platform: process.platform}
+
 /**
  * The real runner: one bounded child, output collected, never rejects.
  *
@@ -140,48 +150,64 @@ class BoundedOutput {
  * pipe. Waiting for `close` is therefore waiting for something no timeout can
  * reach. `exit` settles the run, and the deadline settles it itself.
  */
-export const spawnCommand: CommandRunner = spec =>
+export const spawnCommand = (
+    spec: CommandSpec,
+    spawner: CommandSpawner = HOST_SPAWNER
+): Promise<CommandRun> =>
     new Promise<CommandRun>(resolve => {
+        const {platform} = spawner
         const out = new BoundedOutput()
         const err = new BoundedOutput()
+        let result: CommandRun | undefined
         let settled = false
+        let cutShort = false
         let exitStatus: number | null = null
         let exited = false
         let killed = false
         let endedStreams = 0
         let drain: ReturnType<typeof setTimeout> | undefined
-        // Its own process group: a pretest that backgrounds a daemon, a build that
-        // leaves a watcher, would otherwise hold their ports into the boot check.
-        const child = spawn(spec.bin, spec.args, {
+        // Its own process group, and descendants found by what they inherit: a pretest
+        // that backgrounds a daemon, a build that leaves a watcher, would otherwise
+        // hold their ports into the boot check.
+        const leftovers = trackLeftovers(platform, spec.env ?? process.env, KILL_GRACE_MS)
+        const child = spawner.spawn(spec.bin, spec.args, {
             cwd: spec.cwd,
             // stdin CLOSED. `spawnSync` gave the child none; the default `spawn`
             // stdio is a live pipe nobody ever ends, so a check that reads stdin —
             // a `cat`-style pipeline, a tool that prompts, a pager — would block
             // until the kill timer fires instead of returning at once.
             stdio: ['ignore', 'pipe', 'pipe'],
-            ...ownGroupSpawnOptions(process.platform),
-            ...(spec.env ? {env: spec.env} : {})
+            ...ownGroupSpawnOptions(platform),
+            env: leftovers.env
         })
-        const done = (status: number | null, failure?: string): void => {
-            if (settled) return
+        const settle = (): void => {
+            if (settled || !result) return
             settled = true
             clearTimeout(timer)
-            clearTimeout(drain)
             spec.signal?.removeEventListener('abort', killAndSettle)
-            resolve({
+            resolve(result)
+        }
+        const done = (status: number | null, failure?: string): void => {
+            if (result) return
+            clearTimeout(drain)
+            result = {
                 failedToStart: failure !== undefined,
                 ...(failure === undefined ? {} : {failureMessage: failure}),
                 status,
                 stdout: out.toString(),
                 stderr: err.toString()
-            })
+            }
+            // Not settled before the leftovers are gone: the boot check binds their
+            // ports. The deadline and the cancel still end the wait.
+            void leftovers.reap().then(settle)
+            if (cutShort) settle()
         }
         const expectedStreams = (child.stdout ? 1 : 0) + (child.stderr ? 1 : 0)
         const settleIfDrained = (): void => {
             if (exited && endedStreams >= expectedStreams) done(exitStatus)
         }
         const kill = (): void => {
-            if (child.pid) reapProcessGroup(child.pid, 'SIGKILL', {leaderExited: exited})
+            if (child.pid) reapProcessGroup(child.pid, 'SIGKILL', {platform, leaderExited: exited})
             try {
                 child.kill('SIGKILL')
             } catch {
@@ -191,9 +217,12 @@ export const spawnCommand: CommandRunner = spec =>
         /**
          * The deadline and the cancel both END the run. This cannot wait to observe
          * the kill's effect — it kills, gives the pipes one drain, and reports
-         * `status: null` regardless.
+         * `status: null` regardless. A leader that already exited keeps its status.
          */
         const killAndSettle = (): void => {
+            cutShort = true
+            if (result) return settle()
+            if (exited) return
             killed = true
             kill()
             clearTimeout(drain)
@@ -223,14 +252,15 @@ export const spawnCommand: CommandRunner = spec =>
         child.on('error', (e: Error) => done(null, e.message))
         child.on('exit', (code: number | null) => {
             exited = true
-            // taskkill /F ends a win32 child with exit code 1, which reads as a failed check.
-            exitStatus = killed ? null : code
-            if (child.pid) reapGroupAfterExit(child.pid)
+            // A win32 kill ends the child with exit code 1, the code a failed check exits
+            // with too. A POSIX kill leaves no code, so a code there is the child's own.
+            exitStatus = killed && platform === 'win32' && code === 1 ? null : code
+            if (child.pid) reapGroupAfterExit(child.pid, platform)
             // Both ends of the same question: settle now if the pipes are already
             // at EOF, otherwise settle after one short drain rather than waiting on
             // whoever else is holding them.
             settleIfDrained()
-            if (!settled) {
+            if (!result) {
                 clearTimeout(drain)
                 drain = setTimeout(() => done(exitStatus), EXIT_DRAIN_MS)
             }

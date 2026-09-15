@@ -29,7 +29,12 @@ export interface Leftovers {
     reap: () => Promise<void>
 }
 
-/** Start tracking a child about to be spawned with `base` as its environment. */
+/**
+ * Start tracking a child about to be spawned with `base` as its environment.
+ * `graceMs` is POSIX's, between SIGTERM and SIGKILL. win32 has no grace to give:
+ * `taskkill /F` returns once the tree is dead, and its port free (40 of 40 on the
+ * windows runner).
+ */
 export function trackLeftovers(
     platform: NodeJS.Platform,
     base: NodeJS.ProcessEnv,

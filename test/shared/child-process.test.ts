@@ -11,7 +11,7 @@ import {
 } from '../../src/shared/child-process.js'
 import {spawn as realSpawn} from 'node:child_process'
 import {fakeSpawnSimple, agentEndResponse, makeProc} from '../test-utils/fake-spawn.js'
-import {fakeTaskkill, recordKills} from '../test-utils/fake-reap.js'
+import {fakeSystem32, recordKills} from '../test-utils/fake-reap.js'
 import {testPosix} from '../test-utils/platform.js'
 import {dead} from '../test-utils/process-state.js'
 import {tmpDir} from '../test-utils/tmp-dir.js'
@@ -639,7 +639,7 @@ describe('runChild process-group reaping', () => {
     // Once the child has exited Windows may hand its pid to an unrelated process,
     // and `taskkill /T /F` would kill that one and everything under it.
     test('win32: a child that exits on its own is never taskkilled', async () => {
-        const tk = fakeTaskkill()
+        const tk = fakeSystem32()
         jest.useFakeTimers()
         try {
             const {spawn} = recordingSpawn(4242)
@@ -660,7 +660,7 @@ describe('runChild process-group reaping', () => {
 
     // taskkill walks the tree down from a live root.
     test('win32: a killed child is taskkilled once, before its own kill', async () => {
-        const tk = fakeTaskkill()
+        const tk = fakeSystem32()
         try {
             const killed = await recordKills(() => abortOn('win32', () => tk.note('kill')))
             expect(killed).toEqual([])
@@ -673,7 +673,7 @@ describe('runChild process-group reaping', () => {
     // A grandchild holding the inherited pipes keeps 'close' away long after the
     // leader exited. The run ends with the leader, and a kill landing after it is moot.
     test('win32: the run ends when the leader exits, though its pipes stay open', async () => {
-        const tk = fakeTaskkill()
+        const tk = fakeSystem32()
         const controller = new AbortController()
         const p = makeProc()
         p.pid = 4242
@@ -708,7 +708,7 @@ describe('runChild process-group reaping', () => {
 
     // A spawn seam need not report 'exit'; 'close' still means the leader is gone.
     test('win32: a leader seen only through close is not taskkilled after it', async () => {
-        const tk = fakeTaskkill()
+        const tk = fakeSystem32()
         const controller = new AbortController()
         const spawn = (() => {
             const p = makeProc()
@@ -764,7 +764,7 @@ describe('runChild process-group reaping', () => {
 
 describe('reapProcessGroup', () => {
     test('win32: one forced tree kill through System32 taskkill', async () => {
-        const tk = fakeTaskkill()
+        const tk = fakeSystem32()
         try {
             const killed = await recordKills(() =>
                 reapProcessGroup(4242, 'SIGTERM', {platform: 'win32', leaderExited: false})
@@ -777,7 +777,7 @@ describe('reapProcessGroup', () => {
     })
 
     test('win32: nothing once the leader has exited', async () => {
-        const tk = fakeTaskkill()
+        const tk = fakeSystem32()
         try {
             const killed = await recordKills(() =>
                 reapProcessGroup(4242, 'SIGTERM', {platform: 'win32', leaderExited: true})
@@ -805,7 +805,7 @@ describe('reapProcessGroup', () => {
             stdio: 'ignore'
         })
         strays.push(() => target.kill('SIGKILL'))
-        const tk = fakeTaskkill({relative: true})
+        const tk = fakeSystem32({relative: true})
         try {
             await recordKills(() =>
                 reapProcessGroup(target.pid!, 'SIGTERM', {platform: 'win32', leaderExited: false})
@@ -843,6 +843,34 @@ describe('reapProcessGroup', () => {
         reapProcessGroup(leader.pid!, 'SIGKILL', {leaderExited: false})
         await closed
         strays.length = 0
+    })
+})
+
+describe('the wait on leftovers', () => {
+    // A hung WMI never answers the process table.
+    test('win32: a cancel ends the wait on a process table that never answers', async () => {
+        const system32 = fakeSystem32()
+        const controller = new AbortController()
+        const p = makeProc()
+        p.pid = 4242
+        let registry = ''
+        const spawn = ((_cmd: string, _args: unknown, options: {env: NodeJS.ProcessEnv}) => {
+            registry = options.env.PI_TASK_SHELL_REGISTRY!
+            return p
+        }) as unknown as SpawnFn
+        try {
+            const run = runChild(spawn, noopInvocation, '/tmp', controller.signal, {
+                mode: 'json-events',
+                platform: 'win32'
+            })
+            fs.writeFileSync(registry, 'ran 6844 1789403248.667522\n')
+            p.emit('close', 0)
+            await system32.asked()
+            controller.abort()
+            expect((await run).exitCode).toBe(0)
+        } finally {
+            system32.restore()
+        }
     })
 })
 
