@@ -56,6 +56,7 @@ import {attributeEnforceFailure} from './enforce-attribution.js'
 // come from accept-debt.ts directly — the latter because its writer and its
 // re-check-side parser (extractDeletedDebtPath) have to move together.
 import {crossTaskDeletionReason, type DebtOrigin} from './accept-debt.js'
+import type {FixContext} from './fix-context.js'
 import {clampOutput} from './clamp-output.js'
 import {cancelCheckpoint} from './cancel-points.js'
 import {updateTaskFrontMatter} from './task-io.js'
@@ -82,7 +83,7 @@ export interface GateDeps {
             onStart?: (taskId: string) => void | Promise<void>
             planContext?: string
             planKey?: string
-            fixInstruction?: string
+            fixContext?: FixContext
             healthBaseline?: (ctx: ExtensionCommandContext) => Promise<HealthBaseline | null>
         }
     ) => Promise<RunSingleTaskResult>
@@ -618,15 +619,20 @@ export async function resolveVerifyGate(
                     && recOutcome.rationale.length > 0
                     && recOutcome.rationale !== failReason
                 ) ?
-                    `\n\nDIAGNOSIS (a read-only investigation of this failure found):\n${recOutcome.rationale}`
+                    recOutcome.rationale
                 :   ''
-            const fixInstruction = `${failReason}${diagnosis}${
-                choice.guidance ? `\n\nUser guidance: ${choice.guidance}` : ''
-            }`
             const fixRes = await deps.runTask(active, p.cwd, p.title, {
                 resumeId: p.taskId,
                 planContext: p.planContext,
-                fixInstruction
+                fixContext: {
+                    outcome: verified,
+                    disposition,
+                    probes: verified.probes ?? {},
+                    attempt: autoFixCount,
+                    contradiction,
+                    ...(diagnosis === '' ? {} : {diagnosis}),
+                    ...(choice.guidance === undefined ? {} : {guidance: choice.guidance})
+                }
             })
             active = fixRes.ctx ?? active
             // The re-run's ending, mapped to this loop's own terminal kinds. A

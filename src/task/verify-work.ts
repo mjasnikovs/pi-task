@@ -53,6 +53,10 @@ import {
     type HealthBaseline,
     type HealthSignal
 } from './health-baseline.js'
+import {parseSpec, sliceSpecSection, type Spec} from './spec-model.js'
+import {qaKindsFromRecord} from './qa-transcript.js'
+import {annotateConstraints, anyBinding, renderConstraintPolicy} from './constraint-policy.js'
+import {suppressionVerifyFindings, type SuppressionHit} from './suppression-probe.js'
 
 /**
  * The verification child gets exactly two tools: `read` and `bash`.
@@ -87,6 +91,7 @@ export interface VerifyPass {
     unobserved?: undefined
     crossTaskDeletions?: undefined
     inheritedHealth?: string
+    probes?: ProbeFindings
 }
 
 /**
@@ -115,6 +120,10 @@ export interface VerifyFail {
      *  then ships in the next commit and the final gate must re-check it. */
     crossTaskDeletions?: CrossTaskDeletion[]
     inheritedHealth?: string
+    /** What the deterministic probes found for THIS verdict, carried out so an
+     *  AUTOFIX re-run is told what the gate already knows (see fix-context.ts)
+     *  instead of re-deriving it from the one-line reason. */
+    probes?: ProbeFindings
 }
 
 /**
@@ -187,32 +196,12 @@ export function isStaticClass(cls: VerifyFailClass | undefined): boolean {
 }
 
 /**
- * Slice the delivered spec (GOAL / CONSTRAINTS / ACCEPTANCE / VERIFY) out of a
- * task file body. The compose and critique phases write the section named `spec`,
- * so the composed spec lives under `## spec` and runs to the next line matching
- * `## ` plus non-space (`## phase timings`); a `### ` subheading stays inside.
- * Returns null when there is no spec section or it is blank (a task that never
- * reached compose), which the caller treats as a pass — nothing to verify against.
+ * The delivered spec's TEXT, for the children that must read its prose verbatim.
+ * The slicing itself lives in spec-model.ts beside the parser, so "the spec
+ * section" is one definition rather than one per consumer.
  */
 export function extractSpecForVerification(taskBody: string): string | null {
-    const lines = taskBody.split('\n')
-    let start = -1
-    for (let i = 0; i < lines.length; i++) {
-        if (/^##\s+spec\s*$/i.test(lines[i])) {
-            start = i + 1
-            break
-        }
-    }
-    if (start === -1) return null
-    let end = lines.length
-    for (let i = start; i < lines.length; i++) {
-        if (/^##\s+\S/.test(lines[i])) {
-            end = i
-            break
-        }
-    }
-    const spec = lines.slice(start, end).join('\n').trim()
-    return spec.length > 0 ? spec : null
+    return sliceSpecSection(taskBody)
 }
 
 /**
@@ -256,6 +245,7 @@ export interface ProbeRaw {
     runnerGlob: string[]
     testAssembly: string[]
     repoHealth: string[]
+    suppressionWidening: SuppressionHit[]
 }
 
 /** Stable identity of one probe channel: table row ↔ findings-bag key. */
@@ -493,27 +483,33 @@ const PROBE_ADAPTERS: readonly ProbeAdapter[] = [
         block: findings => [
             'PROHIBITION NOTICE (deterministic, computed by the orchestrator from the',
             "spec's own constraint lines and the task's diff): this task MODIFIED paths",
-            'the spec explicitly forbids modifying:',
+            'the spec forbids modifying, each tagged with the weight of the constraint',
+            'that forbids it:',
             ...findings.map(f => `- ${f}`),
-            'Read the exact constraint wording in the spec. Unless that wording itself',
-            'states an exception that covers this change, this is a violated prohibition:',
-            'rule 4b applies and the verdict is FAIL naming the forbidden path — even if',
-            'every test passes and the change looks harmless.',
+            ...(anyBinding(findings) ?
+                [
+                    'Read the exact constraint wording in the spec. Unless that wording itself',
+                    'states an exception that covers this change, a BINDING one is a violated',
+                    'prohibition: rule 4b applies and the verdict is FAIL naming the forbidden',
+                    'path — even if every test passes and the change looks harmless.'
+                ]
+            :   [
+                    'Every one of these is ADVISORY — automation, not a person, wrote the',
+                    'constraint that forbids it (rule 4b). Report each in your findings, and do',
+                    'NOT fail the work for it unless an ACCEPTANCE criterion also fails. The',
+                    'acceptance criteria are the bar here.'
+                ]),
             ''
         ],
         rule: [
-            '4b. SPEC PROHIBITIONS ARE PART OF THE BAR — YOU HAVE NO WAIVER AUTHORITY: when the',
-            '   spec explicitly forbids something ("Do NOT modify X", "MUST NOT touch Y") and the',
-            '   shipped work does it anyway, that is a FAIL naming the violated constraint. You',
-            '   may not excuse a violation because it is additive, small, harmless, an improvement,',
-            '   or because every test still passes — "it works anyway" is exactly the waiver you do',
-            "   not have; relaxing a constraint is the spec owner's call, not yours. Check the",
-            "   task's own diff (git) against the spec's prohibitions — a forbidden file can be",
-            '   modified without any test noticing. Only two outcomes are not a FAIL: the',
-            '   violation was fully REVERTED (the shipped tree no longer violates), or the',
-            '   prohibition\'s own wording states an exception ("except…", "beyond what is needed',
-            '   for…") that covers the change — judged against that stated exception, not against',
-            '   your view of harmlessness.'
+            ...renderConstraintPolicy('4b.'),
+            '   Applying that to a PROHIBITION ("Do NOT modify X", "MUST NOT touch Y"): check the',
+            "   task's own diff against the spec's prohibitions — a forbidden file can be",
+            '   modified without any test noticing. For a BINDING one, two outcomes are not a',
+            '   FAIL: the violation was fully REVERTED (the shipped tree no longer violates), or',
+            '   the prohibition\'s own wording states an exception ("except…", "beyond what is',
+            '   needed for…") that covers the change — judged against that stated exception, not',
+            '   against your view of harmlessness.'
         ]
     }),
     /**
@@ -767,6 +763,43 @@ const PROBE_ADAPTERS: readonly ProbeAdapter[] = [
             'fails where the test passes, report FAIL and name the wiring seam.',
             ''
         ]
+    }),
+    /**
+     * Deterministic suppression-widening probe (see suppression-probe.ts): checker
+     * suppressions this task NET added, per file. The child cannot find these by
+     * running the checks — a suppression's whole purpose is that the check goes
+     * quiet — so the count has to arrive as a finding (0034 shipped sixteen and
+     * every gate reported success).
+     */
+    probeAdapter({
+        key: 'suppressionWidening',
+        stage: 'suppression probe',
+        empty: [],
+        findings: suppressionVerifyFindings,
+        ruleId: '4i',
+        block: findings => [
+            'SUPPRESSION WIDENING NOTICE (deterministic, computed by the orchestrator by',
+            "counting each suppression pattern's added minus removed lines in this task's",
+            'diff): this task added checker suppressions:',
+            ...findings.map(f => `- ${f}`),
+            'A suppression makes a checker SILENT, not satisfied. You cannot discover this',
+            "by running the project's checks — they are green because of these lines. For",
+            'each, read the surrounding code and decide whether the underlying defect was',
+            'FIXED or merely silenced, and whether the spec asked for the suppression at',
+            'all (rule 4i).',
+            ''
+        ],
+        rule: [
+            '4i. A SILENCED CHECKER IS NOT A SATISFIED ONE — when the SUPPRESSION WIDENING',
+            '   NOTICE above names added suppressions (`@ts-expect-error`, `eslint-disable`,',
+            '   `# noqa`, `//nolint`, `#[allow(…)]`, `as unknown as` …), the green check they',
+            '   produce is not evidence about the code under them. Judge each one: a',
+            '   suppression the spec explicitly asked for, or one narrowly scoped to a',
+            '   documented third-party defect the task cannot fix, is fine and you say so. A',
+            '   suppression that exists so a checker would stop reporting a defect this task',
+            '   introduced is that defect, still shipped — verdict FAIL naming the file and the',
+            '   finding it hides. A blanket file-level disable is never the narrow case.'
+        ]
     })
 ]
 
@@ -810,6 +843,16 @@ const RULE_1_ALREADY_RUN = [
 ]
 
 /**
+ * The spec as a VALUE, with each constraint's `[from:]` tag resolved against the
+ * task's own Q&A record. Shared by the verify prompt and the resolution judge, so
+ * one constraint cannot carry two weights.
+ */
+export function specValue(spec: string, qaRecord?: string): Spec {
+    const kinds = qaRecord === undefined ? [] : qaKindsFromRecord(qaRecord)
+    return parseSpec(spec, n => kinds[n - 1] ?? null)
+}
+
+/**
  * Build the verification child's prompt. Kept pure so the wording is unit-tested
  * without spawning pi. The contract: run the spec's own verification in the real
  * workspace, judge against ACCEPTANCE, and end on exactly one verdict line.
@@ -828,6 +871,10 @@ export function buildVerifyPrompt(
         envRunId?: string
         /** Cross-slice interface facts the design pins — see contracts.ts. */
         contracts?: string
+        /** The task file's rendered Q&A, which is what resolves a constraint's
+         *  `[from: Q<n>]` tag to the kind of answer that produced it. Absent ⇒
+         *  every tagged constraint reads as `derived`, which is advisory. */
+        qaRecord?: string
     } = {}
 ): string {
     const {envNotes, envRunId, contracts} = context
@@ -847,6 +894,15 @@ export function buildVerifyPrompt(
         envNotes && envNotes.trim().length > 0 ? [buildEnvNotesBlock(envNotes, envRunId)] : []
     const contractsBlock =
         contracts && contracts.trim().length > 0 ? [buildContractsVerifyBlock(contracts)] : []
+    const weights = annotateConstraints(specValue(spec, context.qaRecord).constraints)
+    const weightsBlock =
+        weights === null ?
+            []
+        :   [
+                "THE SPEC'S CONSTRAINTS, BY WEIGHT (rule 4b says what each weight is worth):",
+                weights,
+                ''
+            ]
     return [
         'You are a strict verification pass running right after an AI coding agent',
         'finished a task and committed it. The agent is known to mark work "done"',
@@ -862,6 +918,7 @@ export function buildVerifyPrompt(
         '',
         ...envBlock,
         ...contractsBlock,
+        ...weightsBlock,
         ...noticeBlocks,
         'How to verify — verify the REAL, shipped deliverable exactly as an unaided fresh',
         'checkout (or CI run) would experience it:',
@@ -1146,6 +1203,10 @@ export interface VerificationDeps {
      * `/task` runs, or a design pinning no shared boundary).
      */
     contracts?: () => Promise<string>
+    /** The task file's `## grill Q&A` text, which resolves each constraint's
+     *  provenance tag (see `specValue`). ABSENT ⇒ every tagged constraint is
+     *  advisory, which is the safe reading of a provenance nobody can confirm. */
+    qaRecord?: string
 }
 
 /**
@@ -1203,6 +1264,15 @@ export async function runWorkVerification(deps: VerificationDeps): Promise<Verif
         findings[adapter.key] = result.findings
         rawResults.set(adapter.key, result.raw)
     }
+    // Everything the gate now knows deterministically, carried on the outcome so
+    // an AUTOFIX re-run is TOLD it (fix-context.ts) rather than re-deriving it —
+    // which is what a re-run told only "lint fails" does by widening suppressions.
+    // Only channels that FOUND something: a bag of empty arrays is not knowledge,
+    // and every consumer would have to filter it back out.
+    const found = Object.fromEntries(
+        Object.entries(findings).filter(([, lines]) => lines.length > 0)
+    ) as ProbeFindings
+    const probed = Object.keys(found).length === 0 ? {} : {probes: found}
     // The one probe whose RAW value is needed beyond the prompt: cross-task deletion
     // findings ride on a FAIL outcome (structured) so an ACCEPT can record them as
     // durable debts. The row's `empty` is `[]`, so this is always an array.
@@ -1238,6 +1308,7 @@ export async function runWorkVerification(deps: VerificationDeps): Promise<Verif
                 VERIFY_TOOLS,
                 buildVerifyPrompt(deps.spec, findings, {
                     envNotes,
+                    ...(deps.qaRecord === undefined ? {} : {qaRecord: deps.qaRecord}),
                     ...(deps.envNotes?.runId === undefined ? {} : {envRunId: deps.envNotes.runId}),
                     contracts
                 }),
@@ -1252,7 +1323,8 @@ export async function runWorkVerification(deps: VerificationDeps): Promise<Verif
                 ok: false,
                 failClass: 'harness-fault',
                 reason: `${VERIFY_FAIL_PREFIX['harness-fault']} ${msg}`,
-                ...inherited
+                ...inherited,
+                ...probed
             }
         }
         // Capture the environment facts the child shared — regardless of verdict
@@ -1279,11 +1351,12 @@ export async function runWorkVerification(deps: VerificationDeps): Promise<Verif
                 reason:
                     'verify child mutated repo state and its verdict was discarded '
                     + `(state restored: ${mutation.detail.slice(0, 200)})`,
-                ...inherited
+                ...inherited,
+                ...probed
             }
         }
         const verdict = parseVerifyVerdict(text)
-        if (verdict.pass) return {ok: true, ...inherited}
+        if (verdict.pass) return {ok: true, ...inherited, ...probed}
         if (verdict.detail === 'no verdict emitted' && attempt === 1) continue
         // Structured cross-task deletion findings ride on every FAIL outcome: if the
         // human ACCEPTs the failing artifact, the deletions ship in the next commit
@@ -1299,7 +1372,8 @@ export async function runWorkVerification(deps: VerificationDeps): Promise<Verif
                 failClass: 'unobserved',
                 reason: `work unobserved: ${verdict.detail}`,
                 ...deletions,
-                ...inherited
+                ...inherited,
+                ...probed
             }
         }
         return {
@@ -1309,7 +1383,8 @@ export async function runWorkVerification(deps: VerificationDeps): Promise<Verif
                 verdict.detail === 'no verdict emitted' ? ' (after verify retry)' : ''
             }`,
             ...deletions,
-            ...inherited
+            ...inherited,
+            ...probed
         }
     }
 }

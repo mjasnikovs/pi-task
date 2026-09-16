@@ -69,6 +69,7 @@ import {
     HEALTH_BASELINE_SECTION,
     type HealthBaseline
 } from './health-baseline.js'
+import {formatFixBanner, type FixContext} from './fix-context.js'
 import {runGatesForTask, type GateDeps} from './task-gates.js'
 import {parseVerifyBlock} from './spec-validation.js'
 import {findDeliveryPhantoms, formatApiOverrideBanner} from '../workers/phantom-imports.js'
@@ -203,14 +204,14 @@ export interface TaskRunnerOptions {
      */
     planKey?: string
     /**
-     * Marks this run as a verify-FAIL re-attempt. When set (only by /task-auto's
-     * autofix path, with `resumeId` pointing at the already-composed task), the
-     * text — the verify gate's failure reason plus any guidance the user typed —
-     * is prepended to the delivered spec as a RE-ATTEMPT banner, so the
-     * implementer fixes the specific failure and re-satisfies the VERIFY block
-     * rather than blindly redoing the task. Empty/undefined on a first attempt.
+     * Marks this run as a verify-FAIL re-attempt (set only by the gate loop's
+     * autofix path, with `resumeId` pointing at the already-composed task):
+     * everything the gate knows about the failure — its class, the attempt
+     * number, what the deterministic probes found, any spec contradiction —
+     * rendered ahead of the delivered spec by `formatFixBanner`. Undefined on a
+     * first attempt.
      */
-    fixInstruction?: string
+    fixContext?: FixContext
     /**
      * The repo-health baseline for the tree this task starts from
      * (health-baseline.ts), written to `## health baseline` once the task file
@@ -243,7 +244,7 @@ export class TaskRunner {
     private readonly _onStart: ((taskId: string) => void | Promise<void>) | undefined
     private readonly _planContext: string | undefined
     private readonly _planKey: string | undefined
-    private readonly _fixInstruction: string | undefined
+    private readonly _fixContext: FixContext | undefined
     private readonly _healthBaseline:
         ((ctx: ExtensionCommandContext) => Promise<HealthBaseline | null>) | undefined
     /** See {@link TaskRunnerOptions.implAwaited}. */
@@ -275,7 +276,7 @@ export class TaskRunner {
         this._onStart = opts.onStart
         this._planContext = opts.planContext
         this._planKey = opts.planKey
-        this._fixInstruction = opts.fixInstruction
+        this._fixContext = opts.fixContext
         this._healthBaseline = opts.healthBaseline
         this._implAwaited = opts.implAwaited ?? false
         this._startedAt = Date.now()
@@ -659,13 +660,9 @@ export class TaskRunner {
         // specific failure and re-satisfies the VERIFY block, rather than redoing
         // the task from scratch (or repeating the same mistake).
         let fixBanner = ''
-        if (this._fixInstruction && this._fixInstruction.trim().length > 0) {
+        if (this._fixContext) {
             this._deps.logDebug?.('impl-handoff RE-ATTEMPT banner prepended (verify FAIL fix)')
-            fixBanner =
-                'RE-ATTEMPT — your previous implementation of this task FAILED verification.\n'
-                + "Fix the cause below, then make the spec's VERIFY block pass. Do NOT start over;\n"
-                + 'change only what is needed to resolve the failure.\n\n'
-                + `VERIFICATION FAILURE:\n${this._fixInstruction.trim()}`
+            fixBanner = formatFixBanner(this._fixContext)
         }
         const banners = [fixBanner, apiBanner].filter(b => b && b.length > 0).join('\n\n')
         return banners ? `${banners}\n\n${this._pc.spec}` : this._pc.spec
@@ -676,13 +673,7 @@ export class TaskRunner {
 
 export interface RunSingleTaskOptions extends Pick<
     TaskRunnerOptions,
-    | 'resumeId'
-    | 'seams'
-    | 'onStart'
-    | 'planContext'
-    | 'planKey'
-    | 'fixInstruction'
-    | 'healthBaseline'
+    'resumeId' | 'seams' | 'onStart' | 'planContext' | 'planKey' | 'fixContext' | 'healthBaseline'
 > {
     /** Await the session going idle after the spec is delivered, so the caller
      *  blocks until the agent has implemented it. Default false. */
@@ -811,7 +802,7 @@ export async function runSingleTask(
                 onStart: opts.onStart,
                 planContext: opts.planContext,
                 planKey: opts.planKey,
-                fixInstruction: opts.fixInstruction,
+                fixContext: opts.fixContext,
                 healthBaseline: opts.healthBaseline,
                 implAwaited: opts.waitForImplementation
             })
@@ -866,7 +857,7 @@ export const gateRunTask: RunTaskFn = (c, cwd, t, opts) =>
         onStart: opts?.onStart,
         planContext: opts?.planContext,
         planKey: opts?.planKey,
-        fixInstruction: opts?.fixInstruction,
+        fixContext: opts?.fixContext,
         healthBaseline: opts?.healthBaseline
         // NO `seams` here, deliberately. Threading them would need a field on
         // `GateParams` and another on `GateDeps`, and nothing — production or

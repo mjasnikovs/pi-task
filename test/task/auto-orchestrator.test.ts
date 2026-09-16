@@ -27,6 +27,7 @@ import * as fsp from 'node:fs/promises'
 import * as path from 'node:path'
 import {existsSync} from 'node:fs'
 import {spawnSync} from 'node:child_process'
+import type {FixContext} from '../../src/task/fix-context.js'
 
 // Sequential clarify is adaptive: planAuto re-calls 'auto-clarify' after every
 // answer until it returns NONE. This helper feeds the given clarify responses in
@@ -822,12 +823,12 @@ test('runAutoLoop: AUTOFIX loops back to the gate uncapped until the work verifi
         const {ctx} = handle
         await writeTaskFile(dir, autoFm('TASK_AUTO_0001'), buildAutoBody('feat', '(none)', ['A']))
         const commits: string[] = []
-        const fixInstructions: Array<string | undefined> = []
+        const fixContexts: Array<FixContext | undefined> = []
         let verifyCalls = 0
         const d: AutoDeps = {
             runChild: () => Promise.resolve(''),
             runTask: (_c, _cwd, _t, opts) => {
-                fixInstructions.push(opts?.fixInstruction)
+                fixContexts.push(opts?.fixContext)
                 return Promise.resolve({taskId: 'TASK_0006', end: {kind: 'completed'}})
             },
             commit: (_cwd, message) => {
@@ -857,13 +858,13 @@ test('runAutoLoop: AUTOFIX loops back to the gate uncapped until the work verifi
         handle.queueSelect(AUTOFIX_LABEL)
         await runAutoLoop(ctx, dir, 'TASK_AUTO_0001', d)
         const {frontMatter, body} = await readTaskFile(dir, 'TASK_AUTO_0001')
-        // Initial impl (no fixInstruction) + three autofix re-runs, each carrying
-        // the verify failure as its fixInstruction.
-        expect(fixInstructions).toHaveLength(4)
-        expect(fixInstructions[0]).toBeUndefined()
-        expect(fixInstructions.slice(1).every(f => f?.includes('bun run build exited 1'))).toBe(
-            true
-        )
+        // Initial impl (no fix context) + three autofix re-runs, each carrying
+        // the verify failure as its fix context.
+        expect(fixContexts).toHaveLength(4)
+        expect(fixContexts[0]).toBeUndefined()
+        expect(
+            fixContexts.slice(1).every(f => f?.outcome.reason?.includes('bun run build exited 1'))
+        ).toBe(true)
         // Verify ran four times (initial + three re-runs); the 4th PASS checks off.
         expect(verifyCalls).toBe(4)
         expect(frontMatter.state).toBe('completed')

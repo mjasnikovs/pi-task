@@ -28,6 +28,8 @@
  */
 import {USER_CANCELLED} from './child-runner.js'
 import type {SpecContradiction} from './gate-resolution.js'
+import {annotateConstraints, renderConstraintPolicy} from './constraint-policy.js'
+import {specValue} from './verify-work.js'
 
 /** The observe-only contract handed to the child. The same string as
  *  verify-work's VERIFY_TOOLS, so both passes are told the same thing. */
@@ -64,7 +66,8 @@ export interface ResolutionOutcome {
  * unit-tested without spawning pi. The contract it states: investigate the real
  * workspace and end on exactly one `VERIFY-RESOLUTION:` line.
  */
-export function buildResolutionPrompt(spec: string, failReason: string): string {
+export function buildResolutionPrompt(spec: string, failReason: string, qaRecord?: string): string {
+    const weights = annotateConstraints(specValue(spec, qaRecord).constraints)
     return [
         "A strict verification gate just FAILED an AI coding agent's task and the",
         'run paused. You are the reviewer who decides what to recommend next. The',
@@ -77,6 +80,13 @@ export function buildResolutionPrompt(spec: string, failReason: string): string 
         'THE TASK SPEC (its ACCEPTANCE criteria and VERIFY block were the contract):',
         spec.trim(),
         '',
+        ...(weights === null ?
+            []
+        :   [
+                "THE SPEC'S CONSTRAINTS, BY WEIGHT (rule 5 below says what each weight is worth):",
+                weights,
+                ''
+            ]),
         "THE GATE'S FAILURE REASON:",
         failReason.trim(),
         '',
@@ -118,6 +128,10 @@ export function buildResolutionPrompt(spec: string, failReason: string): string 
         "   spec's CONSTRAINTS forbid this task from modifying, neither verdict above",
         '   is true: a re-run happens under the same freeze and cannot converge. Report',
         '   the contradiction instead, naming the frozen path and the criterion.',
+        // The SAME policy the verify child was held to (constraint-policy.ts). Two
+        // children reading one spec must not weigh its constraints differently —
+        // that disagreement is what made a grill-invented constraint unwaivable.
+        ...renderConstraintPolicy('5.'),
         '',
         'When done, output EXACTLY ONE of these as the final line:',
         '  VERIFY-RESOLUTION: AUTOFIX <one sentence why the work must be re-done>',
@@ -253,6 +267,9 @@ export interface ResolutionDeps {
     signal?: AbortSignal
     /** The composed spec the task was verified against. */
     spec: string
+    /** The task's rendered Q&A, which resolves each constraint's provenance tag —
+     *  the same input the verify child got, so both weigh the spec alike. */
+    qaRecord?: string
     /** The verify gate's FAIL reason (VerifyOutcome.reason). */
     failReason: string
     /** Runs the research child and returns its assistant text. Injected so the
@@ -272,7 +289,7 @@ export async function researchResolution(deps: ResolutionDeps): Promise<Resoluti
     try {
         text = await deps.runChild(
             RESOLUTION_TOOLS,
-            buildResolutionPrompt(deps.spec, deps.failReason),
+            buildResolutionPrompt(deps.spec, deps.failReason, deps.qaRecord),
             deps.signal
         )
     } catch (err) {

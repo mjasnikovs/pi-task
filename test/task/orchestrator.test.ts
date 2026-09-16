@@ -492,19 +492,37 @@ describe('runSingleTask', () => {
         })
     })
 
-    test('runSingleTask: fixInstruction prepends a RE-ATTEMPT banner to the delivered spec', async () => {
+    test('runSingleTask: a fixContext prepends a RE-ATTEMPT banner to the delivered spec', async () => {
         await withTmpTaskDir(async cwd => {
             const {ctx, captured} = makeFakeCtx(cwd)
             const {end} = await runSingleTask(ctx, cwd, 'run lint', {
                 seams: happy(),
-                fixInstruction: 'work did not verify: bun run build exited 1'
+                fixContext: {
+                    outcome: {
+                        ok: false,
+                        failClass: 'model-verdict',
+                        reason: 'work did not verify: bun run build exited 1'
+                    },
+                    disposition: {
+                        rule: 'autofix',
+                        action: 'autofix',
+                        debtOrigin: null,
+                        reason: 'autofix recommended'
+                    },
+                    probes: {suppressionWidening: ['src/a.ts — 2 net-new `@ts-ignore` lines']},
+                    attempt: 2
+                }
             })
             expect(end).toEqual({kind: 'completed'})
             const delivered = captured.sentMessages.at(-1)?.spec ?? ''
-            // The implementer is told this is a re-attempt and given the failure,
+            // The implementer is told this is a re-attempt and given the failure —
+            // its class, which attempt this is, and what the probes already found —
             // ahead of the composed spec it still receives in full.
             expect(delivered).toContain('RE-ATTEMPT')
             expect(delivered).toContain('bun run build exited 1')
+            expect(delivered).toContain('model-verdict')
+            expect(delivered).toContain('ATTEMPT 2')
+            expect(delivered).toContain('net-new `@ts-ignore`')
             expect(delivered).toContain(COMPOSE_SPEC.trim())
         })
     })

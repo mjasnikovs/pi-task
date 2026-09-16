@@ -26,6 +26,8 @@
  * violated.
  */
 import type {ChangedFile} from './substitution-probe.js'
+import {parseSpec, type ConstraintProvenance, type QaResolver} from './spec-model.js'
+import {weightTag} from './constraint-policy.js'
 
 /** One "do not modify X" constraint extracted from the spec text. */
 export interface Prohibition {
@@ -34,6 +36,10 @@ export interface Prohibition {
     /** The full spec line carrying the prohibition, so the verify child judges
      *  against the EXACT wording — including any exception clause it states. */
     constraint: string
+    /** Where the constraint carrying this ban came from. An advisory one is
+     *  reported and does not decide the verdict alone — 0043 failed on a ban a
+     *  grill auto-answer invented. */
+    provenance: ConstraintProvenance
 }
 
 /**
@@ -63,19 +69,42 @@ function looksLikePath(token: string): boolean {
  * Prose-only prohibitions ("do not modify server-side code" with no path named)
  * extract nothing — the prompt-level rule still covers them.
  */
-export function extractProhibitions(spec: string): Prohibition[] {
+export function extractProhibitions(spec: string, resolve?: QaResolver): Prohibition[] {
     const out: Prohibition[] = []
     const seen = new Set<string>()
-    for (const line of spec.split('\n')) {
-        if (!PROHIBITION_RE.test(line)) continue
-        for (const m of line.matchAll(/`([^`]+)`/g)) {
+    for (const {text, provenance} of prohibitionCandidates(spec, resolve)) {
+        if (!PROHIBITION_RE.test(text)) continue
+        for (const m of text.matchAll(/`([^`]+)`/g)) {
             const token = m[1].trim()
             if (!looksLikePath(token) || seen.has(token)) continue
             seen.add(token)
-            out.push({path: token, constraint: line.trim()})
+            out.push({path: token, constraint: text.trim(), provenance})
         }
     }
     return out
+}
+
+/**
+ * The lines a ban can live on: the spec's parsed CONSTRAINTS, each with its own
+ * provenance — or, for text that parses to no constraints at all, every line at
+ * `derived`.
+ *
+ * The fallback is not a courtesy to malformed specs. Half this probe's callers
+ * hand it a bare constraint list or a fragment rather than a four-section spec,
+ * and a probe that saw nothing in those would silently stop finding the
+ * violations it was built for.
+ */
+function prohibitionCandidates(
+    spec: string,
+    resolve?: QaResolver
+): Array<{text: string; provenance: ConstraintProvenance}> {
+    const parsed = parseSpec(spec, resolve)
+    if (parsed.constraints.length > 0) {
+        return parsed.constraints.flatMap(c =>
+            c.text.split('\n').map(text => ({text, provenance: c.provenance}))
+        )
+    }
+    return spec.split('\n').map(text => ({text, provenance: 'derived' as ConstraintProvenance}))
 }
 
 /** Normalise a path for comparison: strip leading ./ and trailing /. */
@@ -101,7 +130,8 @@ export function findProhibitionViolations(
         })
         if (!hit) continue
         findings.push(
-            `${f.path} — modified by this task, but the spec forbids it: "${hit.constraint}"`
+            `${f.path} ${weightTag(hit.provenance)} — modified by this task, but the spec `
+                + `forbids it: "${hit.constraint}"`
         )
     }
     return findings

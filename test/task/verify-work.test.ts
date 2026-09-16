@@ -156,14 +156,14 @@ describe('buildVerifyPrompt', () => {
         expect(buildVerifyPrompt('GOAL\nx')).not.toContain('SELF-VERIFICATION NOTICE')
     })
 
-    test('forbids violation excusal: a violated spec prohibition is a FAIL, no waiver authority', () => {
+    test('forbids violation excusal: a violated BINDING prohibition is a FAIL, no waiver authority', () => {
         // The class: the child sees a spec prohibition visibly violated, waives it as
         // "additive, tests pass with it", and PASSes. The verdict on a violated
-        // prohibition is not the verifier's to relax.
+        // BINDING prohibition is not the verifier's to relax — and rule 4b now says
+        // which prohibitions those are (constraint-policy.ts).
         const p = buildVerifyPrompt('GOAL\nx')
-        expect(p).toContain('NO WAIVER AUTHORITY')
-        expect(p).toMatch(/additive, small, harmless/)
-        expect(p).toMatch(/because every test still passes/)
+        expect(p).toMatch(/you have no waiver authority over it/)
+        expect(p).toMatch(/"it works anyway" is exactly/)
         expect(p).toMatch(/fully REVERTED/)
         expect(p).toMatch(/wording states an exception/)
     })
@@ -297,12 +297,14 @@ describe('buildVerifyPrompt', () => {
     })
 
     test('injects deterministic prohibition findings under the no-waiver rule', () => {
+        // The weight tag is part of the finding now (constraint-policy.ts): a
+        // BINDING one keeps the no-waiver wording, an advisory one does not.
         const findings = [
-            'src/server/index.ts — modified by this task, but the spec forbids it: "Do NOT modify `src/server/index.ts`"'
+            'src/server/index.ts [binding: typed] — modified by this task, but the spec forbids it: "Do NOT modify `src/server/index.ts`"'
         ]
         const p = buildVerifyPrompt('GOAL\nx', {prohibition: findings})
         expect(p).toContain('PROHIBITION NOTICE')
-        expect(p).toContain('- src/server/index.ts — modified by this task')
+        expect(p).toContain('- src/server/index.ts [binding: typed] — modified by this task')
         expect(p).toContain('rule 4b applies')
         // No findings → no block at all (empty array and undefined alike).
         expect(buildVerifyPrompt('GOAL\nx', {prohibition: []})).not.toContain('PROHIBITION NOTICE')

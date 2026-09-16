@@ -78,7 +78,11 @@ describe('findProhibitionViolations', () => {
             {path: 'src/server/index.ts', addedLines: 12}
         ])
         expect(findings).toHaveLength(1)
-        expect(findings[0]).toContain('src/server/index.ts — modified by this task')
+        // The weight tag rides on the finding: an untagged constraint is advisory,
+        // which is what a verify notice reads to decide whether it is a FAIL.
+        expect(findings[0]).toContain(
+            'src/server/index.ts [advisory: derived] — modified by this task'
+        )
         expect(findings[0]).toContain('Do NOT modify')
     })
     test('directory prohibitions cover files beneath them', () => {
