@@ -59,19 +59,42 @@ import {crossTaskDeletionVerifyFindings, type CrossTaskDeletion} from './task-pr
  */
 const VERIFY_TOOLS = 'read,bash'
 
-export interface VerifyOutcome {
-    /** true → the work verified (or verification disabled / nothing to verify).
-     *  false → the child reported the work does NOT satisfy its spec, or the pass
-     *  could not run / produced no verdict. */
-    ok: boolean
-    /** Short, human-readable reason. Always set when ok === false; on the pass
-     *  path set to the no-op cause ('disabled', 'no spec to verify'). */
+/**
+ * The work verified, or there was nothing to verify.
+ *
+ * The FAIL-only fields are declared `?: undefined` rather than omitted: a pass may
+ * not carry them (`{ok: true, failClass: …}` is still a compile error), but a
+ * caller holding the bare union can still READ them without narrowing first, which
+ * is how every consumer asks "was this unobserved?" in one expression.
+ */
+export interface VerifyPass {
+    ok: true
+    /** The NO-OP cause ('disabled', 'no spec to verify'). Absent on a genuine
+     *  pass, which is the only signal the enforce pass may edit against. */
     reason?: string
-    /** True when the FAIL is specifically an UNOBSERVED outcome (rule 5c): a
-     *  spec-required behavioral check could not run because its tooling is absent.
-     *  The gate routes this straight to the human picker instead of an unattended
-     *  AUTOFIX re-run, which cannot provision a missing tool. Only meaningful when
-     *  ok === false. */
+    failClass?: undefined
+    unobserved?: undefined
+    crossTaskDeletions?: undefined
+}
+
+/**
+ * The work did NOT satisfy its spec, or the pass could not run.
+ *
+ * `failClass` is REQUIRED. Optional, it travelled as the prefix of `reason` and
+ * every downstream classifier recovered it by re-typing that literal, so a reword
+ * of the mint disarmed them with no compile error — and one site (the
+ * mutation-guard FAIL) simply never set it, which left the decision table with no
+ * class to route on. `VERIFY_FAIL_PREFIX` owns the display strings so mint and
+ * match cannot drift.
+ */
+export interface VerifyFail {
+    ok: false
+    failClass: VerifyFailClass
+    /** Short, human-readable reason, minted under the class's prefix. */
+    reason: string
+    /** Rule 5c: a spec-required behavioral check could not run because its tooling
+     *  is absent. Sets the AUTOFIX budget to zero on any class — an unattended
+     *  re-run cannot provision a missing tool. */
     unobserved?: boolean
     /** The deterministic cross-task deletion findings (see task-provenance.ts) that
      *  were live when this verdict was produced: sibling tasks' committed
@@ -79,17 +102,9 @@ export interface VerifyOutcome {
      *  can record each as a durable debt if the user ACCEPTs anyway — the deletion
      *  then ships in the next commit and the final gate must re-check it. */
     crossTaskDeletions?: CrossTaskDeletion[]
-    /**
-     * WHICH KIND of FAIL this is, as data. Only meaningful when ok === false.
-     *
-     * Without it the class travels only as the PREFIX of `reason`, and every
-     * downstream classifier has to recover it by re-typing that literal — a
-     * reword of the mint would then disarm them with no compile error.
-     * `VERIFY_FAIL_PREFIX` owns the strings so mint and match cannot drift, and
-     * `verifyFailClass` prefers this field over the prefix.
-     */
-    failClass?: VerifyFailClass
 }
+
+export type VerifyOutcome = VerifyPass | VerifyFail
 
 /**
  * The kinds of verify FAIL. `VERIFY_FAIL_PREFIX` below is a
@@ -127,9 +142,10 @@ export const VERIFY_FAIL_PREFIX: Record<VerifyFailClass, string> = {
  * mints its `static checks:` line through a different path entirely. This is the
  * only place in src/ that tests a reason against a prefix.
  */
-export function verifyFailClass(
-    o: Pick<VerifyOutcome, 'failClass' | 'reason'>
-): VerifyFailClass | undefined {
+export function verifyFailClass(o: {
+    failClass?: VerifyFailClass
+    reason?: string
+}): VerifyFailClass | undefined {
     if (o.failClass) return o.failClass
     return failClassOfReason(o.reason ?? '')
 }
@@ -1096,6 +1112,9 @@ export async function runWorkVerification(deps: VerificationDeps): Promise<Verif
             if (attempt === 1) continue
             return {
                 ok: false,
+                // The child judged a tree it had itself changed — the FAULT is the
+                // pass, not the work, so no implementation re-run can move it.
+                failClass: 'harness-fault',
                 reason:
                     'verify child mutated repo state and its verdict was discarded '
                     + `(state restored: ${mutation.detail.slice(0, 200)})`

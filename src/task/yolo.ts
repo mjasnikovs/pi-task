@@ -9,13 +9,15 @@
  * WHY PER-SITE, NOT ONE HOOK (the trap this module exists to avoid): the single
  * interactive choke point is SessionUI.ask() (remote/bridge.ts) — auto-picking
  * "index 0" inside it would be one tiny patch, and it would be wrong. One way the
- * verify-FAIL picker is reached is after MAX_AUTO_AUTOFIX unattended autofix
- * attempts have all failed, and it STILL tints AUTOFIX as recommended, because the
- * research still recommends it. A central hook would pick AUTOFIX forever and
- * defeat the exact cap that exists to break a non-converging loop. So every site
- * decides for itself, BEFORE ask() is called — which also means the prompt
- * notification (bridge.ts holds exactly one pushNotify, inside ask()) is
- * suppressed structurally, with zero suppression code.
+ * verify-FAIL picker is reached is after every unattended autofix attempt has
+ * failed, and it STILL tints AUTOFIX as recommended, because the research still
+ * recommends it. A central hook would pick AUTOFIX forever and defeat the exact
+ * cap that exists to break a non-converging loop. So every site decides for
+ * itself, BEFORE ask() is called — which also means the prompt notification
+ * (bridge.ts holds exactly one pushNotify, inside ask()) is suppressed
+ * structurally, with zero suppression code. The verify gate's own site is
+ * gate-resolution.ts's decision table, which reads {@link isYoloMode} as its
+ * `unattended` input.
  *
  * Guard direction (repo constraint): an auto-pick may cost time, never work.
  * Anything this module cannot stand behind — no recommendation to take, an answer
@@ -28,7 +30,6 @@
  */
 import {getConfig} from '../config/config.js'
 import type {AutoAnswer} from './parsers.js'
-import type {ResolutionChoice} from './verify-resolution.js'
 import type {FinalGateChoice} from './final-gate-fix.js'
 
 /**
@@ -100,21 +101,6 @@ export function yoloPickAutoAnswer(enabled: boolean, auto: AutoAnswer): YoloPick
             unsafe: 'the suggested answer names an unverified API identifier — needs a human'
         })
     })
-}
-
-/**
- * The verify-FAIL picker policy: ACCEPT (and write a debt), never AUTOFIX.
- *
- * Not a preference — a bound. task-gates.ts consults this only after its own
- * unattended paths are exhausted: `autoFixNow` has run AUTOFIX up to
- * MAX_AUTO_AUTOFIX times while the research recommended it, and the YOLO rescue has
- * spent its one attempt on an ACCEPT recommendation with an untouched budget.
- * Answering AUTOFIX here would restart that budget from the very site that proves
- * it ran out. So YOLO takes the terminal option and records the defect under the
- * `'yolo-accepted'` debt origin, which a human decision never produces.
- */
-export function yoloVerifyResolution(enabled: boolean): ResolutionChoice | null {
-    return enabled ? {action: 'accept'} : null
 }
 
 /**

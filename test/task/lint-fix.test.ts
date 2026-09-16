@@ -210,7 +210,8 @@ test('runBoundedLintFix: child edit to a clean frozen path → reverted, not app
     // Belt: the child was told; suspenders: the edit was mechanically undone.
     expect(prompt).toContain('SPEC-FROZEN PATHS')
     expect(r.ok).toBe(false)
-    expect(r.reason).toContain('frozen-path')
+    expect(r.class).toBe('frozen-path')
+    expect(r.contradiction?.frozenPath).toBe('tsconfig.json')
     expect(r.reason).toContain('tsconfig.json')
     expect(calls.some(c => c[0] === 'checkout' && c.includes('HEAD'))).toBe(true)
     expect(calls.some(c => c[0] === 'clean')).toBe(true)
@@ -393,12 +394,12 @@ test('runBoundedLintFix: child error → not applied; user cancel propagates', a
     ).rejects.toThrow('__user_cancelled__')
 })
 
-test('runBoundedLintFix: non-convergence whose output names a frozen path → frozen-path: reason (honest-BLOCKED trace)', async () => {
+test('runBoundedLintFix: non-convergence whose output names a frozen path → frozen-path class + contradiction (honest-BLOCKED trace)', async () => {
     // The child was honest — it never touched tsconfig.json, so the frozen guard
     // has nothing to revert — but the check stays red and typed-ESLint's own
     // output names the frozen path. The findings can only be fixed by an edit
-    // this task's spec forbids: report it under the same `frozen-path:` prefix
-    // so the gate loop routes to the picker instead of burning AUTOFIX rounds.
+    // this task's spec forbids: report the `frozen-path` class with the
+    // contradiction the gate's decision table exits on.
     const {git, calls} = fakeGit({
         diff: ['src/a.ts', 'src/a.ts'],
         'ls-files': ['', ''],
@@ -418,7 +419,11 @@ test('runBoundedLintFix: non-convergence whose output names a frozen path → fr
         })
     )
     expect(r.ok).toBe(false)
-    expect(r.reason).toMatch(/^frozen-path:/)
+    expect(r.class).toBe('frozen-path')
+    expect(r.contradiction).toEqual({
+        frozenPath: 'tsconfig.json',
+        criterion: '`bun run lint` exited 1'
+    })
     expect(r.reason).toContain('tsconfig.json')
     expect(r.reason).toContain('did not converge')
     // No guard trip: nothing was reverted (the child made no frozen edit).

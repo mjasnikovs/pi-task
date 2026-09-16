@@ -5,12 +5,11 @@ import {
     runGatesForTask,
     resolveVerifyGate,
     runEnforcePass,
-    yoloAcceptReason,
-    MAX_AUTO_AUTOFIX,
     type GateDeps,
     type GateParams
 } from '../../src/task/task-gates.js'
-import {ACCEPT_LABEL} from '../../src/task/verify-resolution.js'
+import {AUTOFIX_BUDGET} from '../../src/task/gate-resolution.js'
+import {ACCEPT_LABEL, parseResolutionVerdict} from '../../src/task/verify-resolution.js'
 import {crossTaskDeletionReason, type DebtOrigin} from '../../src/task/accept-debt.js'
 import {getConfig} from '../../src/config/config.js'
 import {YOLO_STAMP} from '../../src/task/yolo.js'
@@ -178,7 +177,9 @@ test('runGatesForTask: enforce edits that REGRESS verify are reverted', async ()
             verify: () => {
                 verifyCalls += 1
                 return Promise.resolve(
-                    verifyCalls === 1 ? {ok: true} : {ok: false, reason: 'tsc 3 errors'}
+                    verifyCalls === 1 ?
+                        {ok: true}
+                    :   {ok: false, failClass: 'model-verdict', reason: 'tsc 3 errors'}
                 )
             },
             enforce: () => Promise.resolve({ok: true}),
@@ -205,7 +206,8 @@ test('runGatesForTask: verify FAIL + user dismisses → paused, no check-off, no
                 commits.push(m)
                 return Promise.resolve({committed: true})
             },
-            verify: () => Promise.resolve({ok: false, reason: 'build exited 1'}),
+            verify: () =>
+                Promise.resolve({ok: false, failClass: 'model-verdict', reason: 'build exited 1'}),
             // ACCEPT is the recommendation that surfaces the picker; dismissing it pauses.
             recommend: () => Promise.resolve({recommend: 'accept', rationale: 'broken'})
         })
@@ -236,7 +238,12 @@ test('runGatesForTask: verify FAIL + ACCEPT → proceeds, commits, done', async 
                 commits.push(m)
                 return Promise.resolve({committed: true})
             },
-            verify: () => Promise.resolve({ok: false, reason: 'over-strict check'}),
+            verify: () =>
+                Promise.resolve({
+                    ok: false,
+                    failClass: 'model-verdict',
+                    reason: 'over-strict check'
+                }),
             recommend: () => Promise.resolve({recommend: 'accept', rationale: 'valid file'})
         })
         handle.queueSelect(ACCEPT_LABEL)
@@ -255,7 +262,12 @@ test('runGatesForTask: verify FAIL + ACCEPT records a durable ACCEPT-debt (run 8
         const {ctx} = handle
         const debts: Array<{taskId: string; reason: string}> = []
         const deps = makeDeps({
-            verify: () => Promise.resolve({ok: false, reason: 'modified frozen path src/main.tsx'}),
+            verify: () =>
+                Promise.resolve({
+                    ok: false,
+                    failClass: 'model-verdict',
+                    reason: 'modified frozen path src/main.tsx'
+                }),
             recommend: () => Promise.resolve({recommend: 'accept', rationale: 'user call'}),
             recordDebt: debtSinks({
                 accepted: (taskId, reason) => debts.push({taskId, reason})
@@ -278,6 +290,7 @@ test('runGatesForTask: ACCEPT with cross-task deletions records one debt per del
             verify: () =>
                 Promise.resolve({
                     ok: false,
+                    failClass: 'model-verdict',
                     reason: 'work did not verify: deleted sibling deliverables',
                     crossTaskDeletions: [
                         {path: 'playwright-ct.config.ts', owner: 'TASK_0020'},
@@ -319,7 +332,11 @@ test('runGatesForTask: an AUTOFIX that converges records NO accept-debt', async 
         const deps = makeDeps({
             verify: () => {
                 verifyCalls += 1
-                return Promise.resolve(verifyCalls === 1 ? {ok: false, reason: 'x'} : {ok: true})
+                return Promise.resolve(
+                    verifyCalls === 1 ?
+                        {ok: false, failClass: 'model-verdict', reason: 'x'}
+                    :   {ok: true}
+                )
             },
             recommend: () => Promise.resolve({recommend: 'autofix', rationale: 'real bug'}),
             recordDebt: debtSinks({
@@ -346,7 +363,9 @@ test('runGatesForTask: recommended AUTOFIX loops back UNATTENDED (no picker) unt
             verify: () => {
                 verifyCalls += 1
                 return Promise.resolve(
-                    verifyCalls <= 2 ? {ok: false, reason: 'build exited 1'} : {ok: true}
+                    verifyCalls <= 2 ?
+                        {ok: false, failClass: 'model-verdict', reason: 'build exited 1'}
+                    :   {ok: true}
                 )
             },
             recommend: () => Promise.resolve({recommend: 'autofix', rationale: 'real defect'})
@@ -382,6 +401,7 @@ test('runGatesForTask: UNOBSERVED verify FAIL forces the picker — never unatte
             verify: () =>
                 Promise.resolve({
                     ok: false,
+                    failClass: 'unobserved',
                     unobserved: true,
                     reason: 'work unobserved: browser smoke requires an absent runner'
                 }),
@@ -401,7 +421,7 @@ test('runGatesForTask: UNOBSERVED verify FAIL forces the picker — never unatte
     })
 })
 
-test('runGatesForTask: recommended AUTOFIX that keeps FAILing shows the picker after MAX_AUTO_AUTOFIX', async () => {
+test('runGatesForTask: recommended AUTOFIX that keeps FAILing shows the picker once the budget is spent', async () => {
     await withTmpTaskDir(async dir => {
         const handle = makeFakeCtx(dir)
         const {ctx, captured} = handle
@@ -412,14 +432,15 @@ test('runGatesForTask: recommended AUTOFIX that keeps FAILing shows the picker a
                 return Promise.resolve({taskId: 'TASK_0006', end: {kind: 'completed'}})
             },
             // Never converges, and the research keeps recommending AUTOFIX.
-            verify: () => Promise.resolve({ok: false, reason: 'still broken'}),
+            verify: () =>
+                Promise.resolve({ok: false, failClass: 'model-verdict', reason: 'still broken'}),
             recommend: () => Promise.resolve({recommend: 'autofix', rationale: 'defect'})
         })
         // The cap-fallback picker is dismissed (no queueSelect) → paused.
         const r = await runGatesForTask(ctx, deps, baseParams({cwd: dir}))
         expect(r.kind).toBe('paused')
-        // Exactly MAX_AUTO_AUTOFIX unattended re-runs, THEN the picker is shown once.
-        expect(runTaskCalls).toBe(MAX_AUTO_AUTOFIX)
+        // Exactly AUTOFIX_BUDGET['model-verdict'] unattended re-runs, THEN the picker is shown once.
+        expect(runTaskCalls).toBe(AUTOFIX_BUDGET['model-verdict'])
         expect(captured.selects).toHaveLength(1)
     })
 })
@@ -431,7 +452,8 @@ test('runGatesForTask: AUTOFIX re-run that fails → failed result with reason',
         const deps = makeDeps({
             runTask: () =>
                 Promise.resolve({taskId: 'TASK_0006', end: {kind: 'failed', reason: 'model died'}}),
-            verify: () => Promise.resolve({ok: false, reason: 'build exited 1'}),
+            verify: () =>
+                Promise.resolve({ok: false, failClass: 'model-verdict', reason: 'build exited 1'}),
             recommend: () => Promise.resolve({recommend: 'autofix', rationale: 'defect'})
         })
         // Recommended AUTOFIX runs unattended; its impl failure propagates.
@@ -446,7 +468,7 @@ test('runGatesForTask: AUTOFIX re-run interrupted / session-cancelled propagate'
         const interruptedHandle = makeFakeCtx(dir)
         const interruptedDeps = makeDeps({
             runTask: () => Promise.resolve({taskId: 'TASK_0006', end: {kind: 'interrupted'}}),
-            verify: () => Promise.resolve({ok: false, reason: 'x'}),
+            verify: () => Promise.resolve({ok: false, failClass: 'model-verdict', reason: 'x'}),
             recommend: () => Promise.resolve({recommend: 'autofix', rationale: 'y'})
         })
         const r1 = await runGatesForTask(
@@ -459,7 +481,7 @@ test('runGatesForTask: AUTOFIX re-run interrupted / session-cancelled propagate'
         const cancelledHandle = makeFakeCtx(dir)
         const cancelledDeps = makeDeps({
             runTask: () => Promise.resolve({taskId: 'TASK_0006', end: {kind: 'no-session'}}),
-            verify: () => Promise.resolve({ok: false, reason: 'x'}),
+            verify: () => Promise.resolve({ok: false, failClass: 'model-verdict', reason: 'x'}),
             recommend: () => Promise.resolve({recommend: 'autofix', rationale: 'y'})
         })
         const r2 = await runGatesForTask(cancelledHandle.ctx, cancelledDeps, baseParams({cwd: dir}))
@@ -544,7 +566,8 @@ test('record: FAIL → ACCEPT path records verdict, recommendation, acceptance, 
                 trail.push(line)
                 return Promise.resolve()
             },
-            verify: () => Promise.resolve({ok: false, reason: 'build exited 1'}),
+            verify: () =>
+                Promise.resolve({ok: false, failClass: 'model-verdict', reason: 'build exited 1'}),
             recommend: () => Promise.resolve({recommend: 'accept', rationale: 'over-strict'}),
             enforce: () => Promise.resolve({ok: true})
         })
@@ -576,7 +599,9 @@ test('record: enforce regression is recorded as re-verify FAILED → REVERTED', 
                 verifyCalls += 1
                 // First verify (gate) passes; re-verify after enforce regresses.
                 return Promise.resolve(
-                    verifyCalls === 1 ? {ok: true} : {ok: false, reason: 'onClick handler gone'}
+                    verifyCalls === 1 ?
+                        {ok: true}
+                    :   {ok: false, failClass: 'model-verdict', reason: 'onClick handler gone'}
                 )
             },
             enforce: () => Promise.resolve({ok: true}),
@@ -614,7 +639,9 @@ test('record: enforce-revert FAIL is persisted as a durable defect for the final
             verify: () => {
                 verifyCalls += 1
                 return Promise.resolve(
-                    verifyCalls === 1 ? {ok: true} : {ok: false, reason: diagnosis}
+                    verifyCalls === 1 ?
+                        {ok: true}
+                    :   {ok: false, failClass: 'model-verdict', reason: diagnosis}
                 )
             },
             enforce: () => Promise.resolve({ok: true}),
@@ -672,7 +699,9 @@ function rootCauseDeps(over: Partial<GateDeps> = {}): {
             // 1st = the pre-enforce PASS (so enforce runs in EDIT mode);
             // 2nd = the post-enforce re-verify, red on the foreign defect.
             return Promise.resolve(
-                verifyCalls === 1 ? {ok: true} : {ok: false, reason: RUN14_TEARDOWN_FAIL}
+                verifyCalls === 1 ?
+                    {ok: true}
+                :   {ok: false, failClass: 'model-verdict', reason: RUN14_TEARDOWN_FAIL}
             )
         },
         enforce: () => Promise.resolve({ok: true}),
@@ -795,7 +824,8 @@ function attributionDeps(over: Partial<GateDeps> = {}): {
         // (it must pass, or enforce never reaches edit mode); `reVerify` is the
         // DIFFERENTIAL this suite is actually about.
         verify: () => Promise.resolve({ok: true}),
-        reVerify: () => Promise.resolve({ok: false, reason: RUN18_CT_FAIL}),
+        reVerify: () =>
+            Promise.resolve({ok: false, failClass: 'model-verdict', reason: RUN18_CT_FAIL}),
         enforce: () => Promise.resolve({ok: true}),
         revert: c => {
             reverted.push(c)
@@ -853,6 +883,7 @@ test('enforce: a FAIL naming a file the ENFORCE COMMIT touched still REVERTS', a
             reVerify: () =>
                 Promise.resolve({
                     ok: false,
+                    failClass: 'model-verdict',
                     reason:
                         'work did not verify: `bunx tsc --noEmit` exits 2 — '
                         + 'src/client/pages/Admin.tsx:84:21 error TS2554'
@@ -899,7 +930,12 @@ test('verify ACCEPT: a root-caused FAIL queues the repair alongside the accept-d
         const accepted: string[] = []
         const deps = makeDeps({
             record: () => Promise.resolve(),
-            verify: () => Promise.resolve({ok: false, reason: RUN14_TEARDOWN_FAIL}),
+            verify: () =>
+                Promise.resolve({
+                    ok: false,
+                    failClass: 'model-verdict',
+                    reason: RUN14_TEARDOWN_FAIL
+                }),
             recommend: () => Promise.resolve({recommend: 'accept', rationale: 'pre-existing'}),
             recordDebt: debtSinks({accepted: (_id, reason) => accepted.push(reason)}),
             recordRepairCandidate: (_c, candidate) => {
@@ -967,13 +1003,17 @@ test('lint-fix: repo-health FAIL → one bounded fix, re-verify PASS, no picker'
                 verifyCalls++
                 return Promise.resolve(
                     verifyCalls === 1 ?
-                        {ok: false, reason: 'repo health: `bun run lint` exited 1'}
+                        {
+                            ok: false,
+                            failClass: 'repo-health',
+                            reason: 'repo health: `bun run lint` exited 1'
+                        }
                     :   {ok: true}
                 )
             },
             lintFix: () => {
                 fixCalls++
-                return Promise.resolve({ok: true})
+                return Promise.resolve({ok: true, class: 'converged' as const})
             },
             // The picker must never open: recommend would be its first step.
             recommend: () => Promise.reject(new Error('picker path must not run'))
@@ -997,10 +1037,18 @@ test('lint-fix: not applied → falls through to the picker; attempted only once
                 return Promise.resolve()
             },
             verify: () =>
-                Promise.resolve({ok: false, reason: 'repo health: `bun run lint` exited 1'}),
+                Promise.resolve({
+                    ok: false,
+                    failClass: 'repo-health',
+                    reason: 'repo health: `bun run lint` exited 1'
+                }),
             lintFix: () => {
                 fixCalls++
-                return Promise.resolve({ok: false, reason: 'revert-guard: fix pass discarded work'})
+                return Promise.resolve({
+                    ok: false,
+                    class: 'not-applied' as const,
+                    reason: 'revert-guard: fix pass discarded work'
+                })
             },
             recommend: () => Promise.resolve({recommend: 'autofix', rationale: 'static findings'})
         })
@@ -1017,10 +1065,15 @@ test('lint-fix: NOT attempted for a non-health verify FAIL', async () => {
         const {ctx} = makeFakeCtx(dir)
         let fixCalls = 0
         const deps = makeDeps({
-            verify: () => Promise.resolve({ok: false, reason: 'work did not verify: route 500s'}),
+            verify: () =>
+                Promise.resolve({
+                    ok: false,
+                    failClass: 'model-verdict',
+                    reason: 'work did not verify: route 500s'
+                }),
             lintFix: () => {
                 fixCalls++
-                return Promise.resolve({ok: true})
+                return Promise.resolve({ok: true, class: 'converged' as const})
             },
             recommend: () => Promise.resolve({recommend: 'autofix', rationale: 'broken'})
         })
@@ -1190,7 +1243,11 @@ test('enforce with no code edits skips the enforce commit AND the differential r
                 return Promise.resolve(
                     verifyCalls === 1 ?
                         {ok: true}
-                    :   {ok: false, reason: 'pre-existing bug found on the second look'}
+                    :   {
+                            ok: false,
+                            failClass: 'model-verdict',
+                            reason: 'pre-existing bug found on the second look'
+                        }
                 )
             },
             enforce: () => Promise.resolve({ok: true, reason: 'no guideline files'}),
@@ -1283,7 +1340,9 @@ test("runGatesForTask: the recommend child's diagnosis rides into the AUTOFIX fi
             verify: () => {
                 verifyCalls += 1
                 return Promise.resolve(
-                    verifyCalls === 1 ? {ok: false, reason: 'suite fails'} : {ok: true}
+                    verifyCalls === 1 ?
+                        {ok: false, failClass: 'model-verdict', reason: 'suite fails'}
+                    :   {ok: true}
                 )
             },
             recommend: () =>
@@ -1317,7 +1376,9 @@ test('runGatesForTask: no recommend dep → fixInstruction stays the bare failur
             verify: () => {
                 verifyCalls += 1
                 return Promise.resolve(
-                    verifyCalls === 1 ? {ok: false, reason: 'build exited 1'} : {ok: true}
+                    verifyCalls === 1 ?
+                        {ok: false, failClass: 'model-verdict', reason: 'build exited 1'}
+                    :   {ok: true}
                 )
             }
         })
@@ -1328,12 +1389,26 @@ test('runGatesForTask: no recommend dep → fixInstruction stays the bare failur
     })
 })
 
-// ─── Frozen-blocked routing ──────────────────
+// ─── Spec-contradiction routing ──────────────────
+//
+// A contradiction is the one input no re-run and no picker answer can move, so it
+// exits the loop on the round that proved it — attended or not. What used to
+// happen here (force the picker, keep the loop alive) cost 0053 three rounds.
 
-test('frozen-blocked: lint-fix frozen-path rejection → no unattended AUTOFIX, no recommend research, durable debt, picker forced', async () => {
+const FROZEN_LINT_FIX = {
+    ok: false as const,
+    class: 'frozen-path' as const,
+    contradiction: {
+        criterion: 'repo health: `bun run lint` exited 1',
+        frozenPath: 'tsconfig.json'
+    },
+    reason: "frozen-path: fix child modified spec-frozen path(s) (tsconfig.json) — reverted; the static findings need a fix that respects the spec's constraints"
+}
+
+test('spec-contradiction: lint-fix frozen-path rejection → accepted on round one, no AUTOFIX, no recommend research, durable debt', async () => {
     await withTmpTaskDir(async dir => {
         const handle = makeFakeCtx(dir)
-        const {ctx} = handle
+        const {ctx, captured} = handle
         const trail: string[] = []
         const debts: Array<{taskId: string; reason: string}> = []
         let runTaskCalls = 0
@@ -1348,68 +1423,79 @@ test('frozen-blocked: lint-fix frozen-path rejection → no unattended AUTOFIX, 
                 return Promise.resolve()
             },
             verify: () =>
-                Promise.resolve({ok: false, reason: 'repo health: `bun run lint` exited 1'}),
-            lintFix: () =>
                 Promise.resolve({
                     ok: false,
-                    reason: "frozen-path: fix child modified spec-frozen path(s) (tsconfig.json) — reverted; the static findings need a fix that respects the spec's constraints"
+                    failClass: 'repo-health',
+                    reason: 'repo health: `bun run lint` exited 1'
                 }),
+            lintFix: () => Promise.resolve(FROZEN_LINT_FIX),
             // The deterministic rejection already proved the contradiction — the
             // recommendation research must be skipped entirely.
             recommend: () => Promise.reject(new Error('recommend must not run')),
             recordDebt: debtSinks({
-                'frozen-blocked': (taskId, reason) => debts.push({taskId, reason}),
+                'spec-contradiction': (taskId, reason) => debts.push({taskId, reason}),
                 accepted: () => {
                     acceptDebts++
                 }
             })
         })
-        handle.queueSelect(ACCEPT_LABEL)
         const r = await runGatesForTask(ctx, deps, baseParams({cwd: dir}))
         expect(r.kind).toBe('done')
         // No unattended impl re-run: it is under the same freeze and cannot converge.
         expect(runTaskCalls).toBe(0)
+        // …and no picker either: there is nothing for a human to choose between.
+        expect(captured.selects).toHaveLength(0)
         // One durable debt, static-class (repo health: prefix) with the contradiction named.
         expect(debts).toHaveLength(1)
         expect(debts[0].taskId).toBe('TASK_0006')
         expect(debts[0].reason).toMatch(/^repo health:/)
-        expect(debts[0].reason).toContain('frozen-path:')
-        // The ACCEPT branch must not double-enter the already-recorded defect.
+        expect(debts[0].reason).toContain('tsconfig.json')
+        // Never the class that asserts a human weighed the failing artifact.
         expect(acceptDebts).toBe(0)
-        expect(
-            trail.some(l => l.includes('cross-task') && l.includes('unattended AUTOFIX skipped'))
-        ).toBe(true)
+        expect(trail.some(l => /^resolution: auto-ACCEPTED/.test(l))).toBe(true)
     })
 })
 
-test('frozen-blocked: picker dismissed → paused, debt still recorded (the contradiction is real regardless)', async () => {
+test('spec-contradiction: the judge BLOCKED-BY-FROZEN marker mints one too', async () => {
     await withTmpTaskDir(async dir => {
-        const {ctx} = makeFakeCtx(dir)
+        const {ctx, captured} = makeFakeCtx(dir)
         const debts: string[] = []
+        let runTaskCalls = 0
         const deps = makeDeps({
+            runTask: () => {
+                runTaskCalls++
+                return Promise.resolve({taskId: 'TASK_0006', end: {kind: 'completed'}})
+            },
             verify: () =>
-                Promise.resolve({ok: false, reason: 'repo health: `bun run lint` exited 1'}),
-            lintFix: () =>
                 Promise.resolve({
                     ok: false,
-                    reason: "frozen-path: static findings implicate spec-frozen path(s) (tsconfig.json) — did not converge (`bun run lint` exited 1); a fix under this task's constraints cannot converge"
+                    failClass: 'model-verdict',
+                    reason: 'work did not verify: no @theme token survives compilation'
                 }),
-            recommend: () => Promise.reject(new Error('recommend must not run')),
-            recordDebt: debtSinks({'frozen-blocked': (_t, reason) => debts.push(reason)})
+            recommend: () =>
+                Promise.resolve(
+                    parseResolutionVerdict(
+                        'VERIFY-RESOLUTION: BLOCKED-BY-FROZEN src/client/index.css — at least one '
+                            + 'OKLCH token appears verbatim in the compiled CSS'
+                    )
+                ),
+            recordDebt: debtSinks({'spec-contradiction': (_t, reason) => debts.push(reason)})
         })
-        // No queueSelect → picker dismissed → paused.
         const r = await runGatesForTask(ctx, deps, baseParams({cwd: dir}))
-        expect(r.kind).toBe('paused')
+        expect(r.kind).toBe('done')
+        expect(runTaskCalls).toBe(0)
+        expect(captured.selects).toHaveLength(0)
         expect(debts).toHaveLength(1)
+        expect(debts[0]).toContain('src/client/index.css')
     })
 })
 
-test('frozen-blocked: an ordinary (non-frozen) lint-fix rejection still auto-AUTOFIXes as before', async () => {
+test('spec-contradiction: an ordinary (non-frozen) lint-fix rejection still auto-AUTOFIXes as before', async () => {
     await withTmpTaskDir(async dir => {
         const {ctx} = makeFakeCtx(dir)
         let runTaskCalls = 0
         let verifyCalls = 0
-        let frozenDebts = 0
+        let contradictionDebts = 0
         const deps = makeDeps({
             runTask: () => {
                 runTaskCalls++
@@ -1419,24 +1505,32 @@ test('frozen-blocked: an ordinary (non-frozen) lint-fix rejection still auto-AUT
                 verifyCalls++
                 return Promise.resolve(
                     verifyCalls <= 1 ?
-                        {ok: false, reason: 'repo health: `bun run lint` exited 1'}
+                        {
+                            ok: false,
+                            failClass: 'repo-health',
+                            reason: 'repo health: `bun run lint` exited 1'
+                        }
                     :   {ok: true}
                 )
             },
             lintFix: () =>
-                Promise.resolve({ok: false, reason: 'did not converge: `bun run lint` exited 1'}),
+                Promise.resolve({
+                    ok: false,
+                    class: 'not-applied' as const,
+                    reason: 'did not converge: `bun run lint` exited 1'
+                }),
             recommend: () => Promise.resolve({recommend: 'autofix', rationale: 'fixable statics'}),
             recordDebt: debtSinks({
-                'frozen-blocked': () => {
-                    frozenDebts++
+                'spec-contradiction': () => {
+                    contradictionDebts++
                 }
             })
         })
         const r = await runGatesForTask(ctx, deps, baseParams({cwd: dir}))
         expect(r.kind).toBe('done')
-        // The unattended AUTOFIX path stays intact for reasons without the prefix.
+        // The unattended AUTOFIX path stays intact for a rejection with no contradiction.
         expect(runTaskCalls).toBe(1)
-        expect(frozenDebts).toBe(0)
+        expect(contradictionDebts).toBe(0)
     })
 })
 
@@ -1463,7 +1557,12 @@ test('runGatesForTask: YOLO auto-ACCEPTS a verify FAIL the picker would show —
         const yoloDebts: Array<{taskId: string; reason: string}> = []
         const humanDebts: unknown[] = []
         const deps = makeDeps({
-            verify: () => Promise.resolve({ok: false, reason: 'over-strict check'}),
+            verify: () =>
+                Promise.resolve({
+                    ok: false,
+                    failClass: 'model-verdict',
+                    reason: 'over-strict check'
+                }),
             recommend: () => Promise.resolve({recommend: 'accept', rationale: 'valid file'}),
             recordDebt: debtSinks({
                 accepted: (taskId, reason) => humanDebts.push({taskId, reason}),
@@ -1489,7 +1588,12 @@ test('runGatesForTask: without the flag the SAME FAIL still shows the picker', a
         const {ctx, captured} = handle
         const yoloDebts: unknown[] = []
         const deps = makeDeps({
-            verify: () => Promise.resolve({ok: false, reason: 'over-strict check'}),
+            verify: () =>
+                Promise.resolve({
+                    ok: false,
+                    failClass: 'model-verdict',
+                    reason: 'over-strict check'
+                }),
             recommend: () => Promise.resolve({recommend: 'accept', rationale: 'valid file'}),
             recordDebt: debtSinks({
                 'yolo-accepted': (taskId, reason) => yoloDebts.push({taskId, reason})
@@ -1503,7 +1607,7 @@ test('runGatesForTask: without the flag the SAME FAIL still shows the picker', a
     })
 })
 
-test('runGatesForTask: YOLO cannot exceed MAX_AUTO_AUTOFIX — it accepts, never re-enters autofix', async () => {
+test('runGatesForTask: YOLO cannot exceed the autofix budget — it accepts, never re-enters autofix', async () => {
     // A central "auto-pick the recommended card" hook would answer AUTOFIX at the
     // picker — AUTOFIX is still the recommended card there — and loop forever,
     // defeating the very cap that exists to break a non-converging fix.
@@ -1518,7 +1622,8 @@ test('runGatesForTask: YOLO cannot exceed MAX_AUTO_AUTOFIX — it accepts, never
                 return Promise.resolve({taskId: 'TASK_0006', end: {kind: 'completed'}})
             },
             // Never converges: every verify FAILs, and the research keeps saying AUTOFIX.
-            verify: () => Promise.resolve({ok: false, reason: 'still broken'}),
+            verify: () =>
+                Promise.resolve({ok: false, failClass: 'model-verdict', reason: 'still broken'}),
             recommend: () => Promise.resolve({recommend: 'autofix', rationale: 'real defect'}),
             recordDebt: debtSinks({
                 'yolo-accepted': (taskId, reason) => yoloDebts.push({taskId, reason})
@@ -1529,7 +1634,7 @@ test('runGatesForTask: YOLO cannot exceed MAX_AUTO_AUTOFIX — it accepts, never
             expect(r.kind).toBe('done')
         })
         // Exactly the unattended budget — the auto-ACCEPT then terminates the loop.
-        expect(runTaskCalls).toBe(MAX_AUTO_AUTOFIX)
+        expect(runTaskCalls).toBe(AUTOFIX_BUDGET['model-verdict'])
         expect(yoloDebts).toHaveLength(1)
         expect(captured.selects).toHaveLength(0)
     })
@@ -1540,7 +1645,12 @@ test('runGatesForTask: the YOLO accept stamps the durable gate trail', async () 
         const {ctx} = makeFakeCtx(dir)
         const trail: string[] = []
         const deps = makeDeps({
-            verify: () => Promise.resolve({ok: false, reason: 'over-strict check'}),
+            verify: () =>
+                Promise.resolve({
+                    ok: false,
+                    failClass: 'model-verdict',
+                    reason: 'over-strict check'
+                }),
             recommend: () => Promise.resolve({recommend: 'accept', rationale: 'valid file'}),
             record: (_c, _id, line) => {
                 trail.push(line)
@@ -1559,96 +1669,13 @@ test('runGatesForTask: the YOLO accept stamps the durable gate trail', async () 
     })
 })
 
-// ─── The auto-ACCEPT trail names its real branch, and YOLO spends one ────────
-//     unattended attempt before shipping a defect the judge merely blessed.
+// ─── A judge ACCEPT is never overridden ─────────────────────────────────────
+//
+// The rescue that used to run "one attempt first" is gone. It spent 41 minutes on
+// 0034 and shipped 16 suppressions over a verdict a read+bash pass had already
+// reached against the real workspace.
 
-test('yoloAcceptReason: each of the four branches names ITSELF', () => {
-    expect(
-        yoloAcceptReason({
-            isUnobserved: true,
-            isFrozenBlocked: false,
-            recommend: 'autofix',
-            autoFixCount: 0
-        })
-    ).toBe('verify UNOBSERVED — tooling absent, an unattended re-run cannot provision it')
-    expect(
-        yoloAcceptReason({
-            isUnobserved: false,
-            isFrozenBlocked: true,
-            recommend: 'accept',
-            autoFixCount: 0
-        })
-    ).toContain('repo-health blocked by a spec-frozen path')
-    expect(
-        yoloAcceptReason({
-            isUnobserved: false,
-            isFrozenBlocked: false,
-            recommend: 'autofix',
-            autoFixCount: MAX_AUTO_AUTOFIX
-        })
-    ).toBe(`autofix budget spent (${MAX_AUTO_AUTOFIX}/${MAX_AUTO_AUTOFIX})`)
-    expect(
-        yoloAcceptReason({
-            isUnobserved: false,
-            isFrozenBlocked: false,
-            recommend: 'accept',
-            autoFixCount: 0
-        })
-    ).toBe(`judge recommended ACCEPT (autofix budget 0/${MAX_AUTO_AUTOFIX} unused)`)
-    // …and the rescue's own aftermath: an ACCEPT with the budget partly spent.
-    expect(
-        yoloAcceptReason({
-            isUnobserved: false,
-            isFrozenBlocked: false,
-            recommend: 'accept',
-            autoFixCount: 1
-        })
-    ).toBe(`judge recommended ACCEPT (autofix budget 1/${MAX_AUTO_AUTOFIX} already spent)`)
-})
-
-test('runGatesForTask: YOLO spends ONE attempt before accepting a judge-blessed FAIL', async () => {
-    // Recommend ACCEPT with no budget spent would ship the defect having
-    // attempted nothing. One attempt runs first.
-    await withTmpTaskDir(async dir => {
-        const {ctx, captured} = makeFakeCtx(dir)
-        const trail: string[] = []
-        let runTaskCalls = 0
-        const yoloDebts: unknown[] = []
-        const deps = makeDeps({
-            runTask: () => {
-                runTaskCalls++
-                return Promise.resolve({taskId: 'TASK_0006', end: {kind: 'completed'}})
-            },
-            // Converges on the re-run: FAIL first, PASS after the one attempt.
-            verify: () =>
-                Promise.resolve(
-                    runTaskCalls === 0 ? {ok: false, reason: 'real defect'} : {ok: true}
-                ),
-            recommend: () => Promise.resolve({recommend: 'accept', rationale: 'ship it'}),
-            record: (_c, _i, line) => {
-                trail.push(line)
-                return Promise.resolve()
-            },
-            recordDebt: debtSinks({'yolo-accepted': () => yoloDebts.push(1)})
-        })
-        await withYolo(async () => {
-            const r = await runGatesForTask(ctx, deps, baseParams({cwd: dir}))
-            expect(r.kind).toBe('done')
-        })
-        expect(runTaskCalls).toBe(1)
-        // The defect never ships: no accept, no debt, no picker.
-        expect(yoloDebts).toEqual([])
-        expect(captured.selects).toHaveLength(0)
-        expect(trail.some(l => /^resolution: auto-ACCEPTED/.test(l))).toBe(false)
-        const rescue = trail.find(l => /^resolution: auto-AUTOFIX/.test(l))
-        expect(rescue).toContain(YOLO_STAMP)
-        expect(rescue).toContain(`1/${MAX_AUTO_AUTOFIX}`)
-        // The unattended branch never claims a person picked it.
-        expect(trail.some(l => /user chose AUTOFIX/.test(l))).toBe(false)
-    })
-})
-
-test('runGatesForTask: the rescue is bounded to ONE attempt, then accepts as before', async () => {
+test('runGatesForTask: a judge ACCEPT is kept — YOLO accepts it without spending an attempt', async () => {
     await withTmpTaskDir(async dir => {
         const {ctx, captured} = makeFakeCtx(dir)
         const trail: string[] = []
@@ -1659,7 +1686,12 @@ test('runGatesForTask: the rescue is bounded to ONE attempt, then accepts as bef
                 runTaskCalls++
                 return Promise.resolve({taskId: 'TASK_0006', end: {kind: 'completed'}})
             },
-            verify: () => Promise.resolve({ok: false, reason: 'over-strict check'}),
+            verify: () =>
+                Promise.resolve({
+                    ok: false,
+                    failClass: 'model-verdict',
+                    reason: 'over-strict check'
+                }),
             recommend: () => Promise.resolve({recommend: 'accept', rationale: 'valid file'}),
             record: (_c, _i, line) => {
                 trail.push(line)
@@ -1673,44 +1705,17 @@ test('runGatesForTask: the rescue is bounded to ONE attempt, then accepts as bef
             const r = await runGatesForTask(ctx, deps, baseParams({cwd: dir}))
             expect(r.kind).toBe('done')
         })
-        // ONE extra attempt, not MAX_AUTO_AUTOFIX.
-        expect(runTaskCalls).toBe(1)
-        // inv-debt-preserved: same debt, same origin, same reason.
-        expect(yoloDebts).toEqual([{taskId: 'TASK_0006', reason: 'over-strict check'}])
+        expect(runTaskCalls).toBe(0)
         expect(captured.selects).toHaveLength(0)
+        expect(yoloDebts).toEqual([{taskId: 'TASK_0006', reason: 'over-strict check'}])
         const accept = trail.find(l => /^resolution: auto-ACCEPTED/.test(l))
-        expect(accept).toContain(`autofix budget 1/${MAX_AUTO_AUTOFIX} already spent`)
+        expect(accept).toContain('judge recommended ACCEPT')
+        expect(accept).toContain(`0/${AUTOFIX_BUDGET['model-verdict']}`)
         expect(accept).toContain(YOLO_STAMP)
     })
 })
 
-test('runGatesForTask: a recommender that flips to AUTOFIX cannot restart the budget after a rescue', async () => {
-    // An ACCEPT recommendation must never bootstrap the full unattended loop from
-    // the site that terminates it.
-    await withTmpTaskDir(async dir => {
-        const {ctx} = makeFakeCtx(dir)
-        let runTaskCalls = 0
-        const recommends = ['accept', 'autofix', 'autofix', 'autofix'] as const
-        let recIdx = 0
-        const deps = makeDeps({
-            runTask: () => {
-                runTaskCalls++
-                return Promise.resolve({taskId: 'TASK_0006', end: {kind: 'completed'}})
-            },
-            verify: () => Promise.resolve({ok: false, reason: 'still broken'}),
-            recommend: () =>
-                Promise.resolve({recommend: recommends[Math.min(recIdx++, 3)], rationale: 'r'}),
-            recordDebt: () => Promise.resolve()
-        })
-        await withYolo(async () => {
-            const r = await runGatesForTask(ctx, deps, baseParams({cwd: dir}))
-            expect(r.kind).toBe('done')
-        })
-        expect(runTaskCalls).toBe(1)
-    })
-})
-
-test('runGatesForTask: an UNOBSERVED FAIL never triggers the rescue', async () => {
+test('runGatesForTask: an UNOBSERVED FAIL spends no attempt under YOLO either', async () => {
     // inv-no-unobserved-autofix: an unattended re-run cannot install the tooling
     // whose absence made the check UNOBSERVED.
     await withTmpTaskDir(async dir => {
@@ -1725,6 +1730,7 @@ test('runGatesForTask: an UNOBSERVED FAIL never triggers the rescue', async () =
             verify: () =>
                 Promise.resolve({
                     ok: false,
+                    failClass: 'unobserved',
                     unobserved: true,
                     reason: 'work unobserved: docker absent'
                 }),
@@ -1742,13 +1748,11 @@ test('runGatesForTask: an UNOBSERVED FAIL never triggers the rescue', async () =
         })
         expect(runTaskCalls).toBe(0)
         const accept = trail.find(l => /^resolution: auto-ACCEPTED/.test(l))
-        expect(accept).toContain('verify UNOBSERVED — tooling absent')
+        expect(accept).toContain('verify UNOBSERVED')
     })
 })
 
-test('runGatesForTask: a frozen-blocked repo-health FAIL never triggers the rescue', async () => {
-    // inv-no-frozen-autofix: the fix needs a path this spec freezes,
-    // so an impl re-run under the same freeze cannot converge.
+test('runGatesForTask: a harness fault spends no attempt — the work is not what failed', async () => {
     await withTmpTaskDir(async dir => {
         const {ctx} = makeFakeCtx(dir)
         const trail: string[] = []
@@ -1759,9 +1763,12 @@ test('runGatesForTask: a frozen-blocked repo-health FAIL never triggers the resc
                 return Promise.resolve({taskId: 'TASK_0006', end: {kind: 'completed'}})
             },
             verify: () =>
-                Promise.resolve({ok: false, reason: 'repo health: `bun run lint` exited 2'}),
-            lintFix: () => Promise.resolve({ok: false, reason: 'frozen-path: tsconfig.json'}),
-            recommend: () => Promise.resolve({recommend: 'accept', rationale: 'x'}),
+                Promise.resolve({
+                    ok: false,
+                    failClass: 'harness-fault',
+                    reason: 'verification pass could not run: provider died'
+                }),
+            recommend: () => Promise.resolve({recommend: 'autofix', rationale: 'x'}),
             record: (_c, _i, line) => {
                 trail.push(line)
                 return Promise.resolve()
@@ -1773,12 +1780,11 @@ test('runGatesForTask: a frozen-blocked repo-health FAIL never triggers the resc
             expect(r.kind).toBe('done')
         })
         expect(runTaskCalls).toBe(0)
-        const accept = trail.find(l => /^resolution: auto-ACCEPTED/.test(l))
-        expect(accept).toContain('repo-health blocked by a spec-frozen path')
+        expect(trail.some(l => l.includes('harness fault'))).toBe(true)
     })
 })
 
-test('runGatesForTask: without YOLO the rescue never fires — the picker still decides', async () => {
+test('runGatesForTask: without YOLO a judge ACCEPT still reaches the picker', async () => {
     await withTmpTaskDir(async dir => {
         const {ctx, captured} = makeFakeCtx(dir)
         let runTaskCalls = 0
@@ -1787,7 +1793,12 @@ test('runGatesForTask: without YOLO the rescue never fires — the picker still 
                 runTaskCalls++
                 return Promise.resolve({taskId: 'TASK_0006', end: {kind: 'completed'}})
             },
-            verify: () => Promise.resolve({ok: false, reason: 'over-strict check'}),
+            verify: () =>
+                Promise.resolve({
+                    ok: false,
+                    failClass: 'model-verdict',
+                    reason: 'over-strict check'
+                }),
             recommend: () => Promise.resolve({recommend: 'accept', rationale: 'valid file'}),
             recordDebt: () => Promise.resolve()
         })
@@ -1796,6 +1807,24 @@ test('runGatesForTask: without YOLO the rescue never fires — the picker still 
         expect(r.kind).toBe('paused')
         expect(captured.selects).toHaveLength(1)
         expect(runTaskCalls).toBe(0)
+    })
+})
+
+test('runGatesForTask: a dismissed picker records a `dismissed` debt — the defect is real either way', async () => {
+    await withTmpTaskDir(async dir => {
+        const {ctx} = makeFakeCtx(dir)
+        const dismissed: Array<{taskId: string; reason: string}> = []
+        const deps = makeDeps({
+            verify: () =>
+                Promise.resolve({ok: false, failClass: 'model-verdict', reason: 'route 500s'}),
+            recommend: () => Promise.resolve({recommend: 'accept', rationale: 'x'}),
+            recordDebt: debtSinks({
+                dismissed: (taskId, reason) => dismissed.push({taskId, reason})
+            })
+        })
+        const r = await runGatesForTask(ctx, deps, baseParams({cwd: dir}))
+        expect(r.kind).toBe('paused')
+        expect(dismissed).toEqual([{taskId: 'TASK_0006', reason: 'route 500s'}])
     })
 })
 
@@ -1853,7 +1882,12 @@ describe('runEnforcePass — branches the joined function could not reach', () =
                     debts.push(reason)
                     return Promise.resolve()
                 },
-                reVerify: () => Promise.resolve({ok: false, reason: 'the suite now fails'})
+                reVerify: () =>
+                    Promise.resolve({
+                        ok: false,
+                        failClass: 'model-verdict',
+                        reason: 'the suite now fails'
+                    })
             }),
             params,
             line => {
@@ -1958,7 +1992,12 @@ describe('resolveVerifyGate — the verify half, without the enforce half', () =
         const step = await resolveVerifyGate(
             handle.ctx,
             makeDeps({
-                verify: () => Promise.resolve({ok: false, reason: 'the suite fails'}),
+                verify: () =>
+                    Promise.resolve({
+                        ok: false,
+                        failClass: 'model-verdict',
+                        reason: 'the suite fails'
+                    }),
                 recommend: () => Promise.resolve({recommend: 'accept', rationale: 'ship it'})
             }),
             params,
@@ -1981,7 +2020,7 @@ test('runGatesForTask: an AUTOFIX re-run the USER cancelled is reported as cance
         const {ctx} = makeFakeCtx(dir)
         const deps = makeDeps({
             runTask: () => Promise.resolve({taskId: 'TASK_0006', end: {kind: 'cancelled'}}),
-            verify: () => Promise.resolve({ok: false, reason: 'x'}),
+            verify: () => Promise.resolve({ok: false, failClass: 'model-verdict', reason: 'x'}),
             recommend: () => Promise.resolve({recommend: 'autofix', rationale: 'y'})
         })
         const r = await runGatesForTask(ctx, deps, baseParams({cwd: dir}))

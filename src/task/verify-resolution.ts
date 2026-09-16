@@ -14,10 +14,9 @@
  * INVESTIGATE the real workspace: a genuine defect in the work (→ AUTOFIX), or
  * an artifact the gate misjudged (→ ACCEPT).
  *
- * The recommendation also decides whether a human is asked at all. In
- * task-gates.ts an AUTOFIX recommendation is applied UNATTENDED, bounded by
- * MAX_AUTO_AUTOFIX; the picker is reached on an ACCEPT recommendation, once that
- * bound is spent, or when the FAIL is UNOBSERVED or frozen-blocked.
+ * The recommendation is one input to gate-resolution.ts's decision table, which
+ * alone decides whether a human is asked. This module never overrides itself: an
+ * ACCEPT reached here stands.
  *
  * Tools: `read` + `bash`, the same string as verify-work's VERIFY_TOOLS. That is
  * a CONTRACT, not a capability — `bash` can write. gate-child.ts marks the
@@ -28,6 +27,7 @@
  * rather than blessing it.
  */
 import {USER_CANCELLED} from './child-runner.js'
+import type {SpecContradiction} from './gate-resolution.js'
 
 /** The observe-only contract handed to the child. The same string as
  *  verify-work's VERIFY_TOOLS, so both passes are told the same thing. */
@@ -36,12 +36,27 @@ const RESOLUTION_TOOLS = 'read,bash'
 /** Which card the picker tints RECOMMENDED. */
 export type ResolutionRecommendation = 'autofix' | 'accept'
 
+/**
+ * The marker a judge emits INSTEAD of a recommendation when it finds the two
+ * gates contradict each other: the acceptance criterion can only be met by
+ * editing a path the same spec freezes.
+ *
+ * It exists because the judge was previously offered AUTOFIX or ACCEPT and
+ * nothing else, so a contradiction it had already diagnosed came back as
+ * "AUTOFIX" and the loop spent its whole budget re-deriving it (0053).
+ */
+export const BLOCKED_BY_FROZEN = 'BLOCKED-BY-FROZEN'
+
 export interface ResolutionOutcome {
     /** The card to recommend. Defaults to 'autofix' (conservative: re-do, don't
      *  bless) when the research could not run or emitted no verdict. */
     recommend: ResolutionRecommendation
     /** Short, human-readable rationale shown under the picker. Always set. */
     rationale: string
+    /** Set only by the BLOCKED-BY-FROZEN marker: the criterion the spec's own
+     *  freeze makes unreachable. Outranks `recommend` in the gate's decision
+     *  table — no re-run and no picker answer can resolve a contradiction. */
+    contradiction?: SpecContradiction
 }
 
 /**
@@ -99,26 +114,47 @@ export function buildResolutionPrompt(spec: string, failReason: string): string 
         '   when you run it — that is AUTOFIX. When you cannot positively confirm the',
         '   artifact works, recommend AUTOFIX: re-doing the work is the safe default;',
         '   blessing broken work is the failure mode this whole gate exists to stop.',
+        '4. If the ONLY edit that could satisfy the failing criterion is to a file the',
+        "   spec's CONSTRAINTS forbid this task from modifying, neither verdict above",
+        '   is true: a re-run happens under the same freeze and cannot converge. Report',
+        '   the contradiction instead, naming the frozen path and the criterion.',
         '',
         'When done, output EXACTLY ONE of these as the final line:',
         '  VERIFY-RESOLUTION: AUTOFIX <one sentence why the work must be re-done>',
         '  VERIFY-RESOLUTION: ACCEPT <one sentence why the artifact is good as-is>',
+        `  VERIFY-RESOLUTION: ${BLOCKED_BY_FROZEN} <frozen path> — <the criterion it blocks>`,
         'Output the verdict line verbatim — it is parsed mechanically.'
     ].join('\n')
 }
 
 /**
- * Parse the child's recommendation out of the LAST
- * `VERIFY-RESOLUTION: AUTOFIX|ACCEPT` marker, case-insensitively. Last match
- * wins: the model reasons before concluding, and a bash command it runs can
- * print the token back, so an earlier occurrence is not the verdict.
+ * The path/criterion separator the marker's contract states. An em dash is what
+ * the prompt shows; a model that retypes it as an en dash or a spaced hyphen
+ * means the same thing, and losing a contradiction over a dash costs the whole
+ * autofix budget.
+ */
+const CONTRADICTION_SEP = /\s+[—–]\s+|\s+-{1,2}\s+/
+
+/**
+ * Parse the child's verdict out of the LAST `VERIFY-RESOLUTION:` marker,
+ * case-insensitively. Last match wins: the model reasons before concluding, and a
+ * bash command it runs can print the token back, so an earlier occurrence is not
+ * the verdict.
  *
  * No marker → AUTOFIX (re-do rather than bless), with a rationale saying the
  * research was inconclusive. A marker with no trailing sentence gets a stock
  * rationale, so `rationale` is never empty.
+ *
+ * A BLOCKED-BY-FROZEN marker yields a CONTRADICTION plus an `accept`
+ * recommendation, which is what the gate does with it once the contradiction is
+ * recorded as debt. A marker that names no path is not a usable contradiction and
+ * degrades to that recommendation alone.
  */
 export function parseResolutionVerdict(text: string): ResolutionOutcome {
-    const re = /VERIFY-RESOLUTION:\s*(AUTOFIX|ACCEPT)\b[ \t]*(.*)/gi
+    const re = new RegExp(
+        `VERIFY-RESOLUTION:\\s*(AUTOFIX|ACCEPT|${BLOCKED_BY_FROZEN})\\b[ \\t]*(.*)`,
+        'gi'
+    )
     let last: RegExpExecArray | null = null
     for (let m = re.exec(text); m !== null; m = re.exec(text)) last = m
     if (!last) {
@@ -127,12 +163,29 @@ export function parseResolutionVerdict(text: string): ResolutionOutcome {
             rationale: 'research inconclusive — defaulting to re-doing the work'
         }
     }
-    const recommend: ResolutionRecommendation =
-        last[1].toUpperCase() === 'ACCEPT' ? 'accept' : 'autofix'
+    const verdict = last[1].toUpperCase()
+    const tail = last[2].trim()
+    if (verdict === BLOCKED_BY_FROZEN) return blockedVerdict(tail)
+    const recommend: ResolutionRecommendation = verdict === 'ACCEPT' ? 'accept' : 'autofix'
     const rationale =
-        last[2].trim()
+        tail
         || (recommend === 'accept' ? 'artifact judged acceptable' : 'work judged to need fixing')
     return {recommend, rationale}
+}
+
+function blockedVerdict(tail: string): ResolutionOutcome {
+    const sep = CONTRADICTION_SEP.exec(tail)
+    const frozenPath = (sep ? tail.slice(0, sep.index) : (tail.split(/\s+/)[0] ?? '')).trim()
+    const criterion = sep ? tail.slice(sep.index + sep[0].length).trim() : ''
+    const rationale =
+        frozenPath.length > 0 ?
+            `blocked by spec-frozen \`${frozenPath}\`${criterion ? `: ${criterion}` : ''}`
+        :   'judged blocked by a spec-frozen path, but the marker named none'
+    return {
+        recommend: 'accept',
+        rationale,
+        ...(frozenPath.length > 0 ? {contradiction: {criterion, frozenPath}} : {})
+    }
 }
 
 // ─── Picker plumbing ─────────────────────────────────────────────────────────

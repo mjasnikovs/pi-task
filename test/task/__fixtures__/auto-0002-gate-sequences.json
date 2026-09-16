@@ -1,0 +1,37 @@
+{
+    "_note": "Transcribed read-only from ~/hub/mx5-n/.pi-tasks/TASK_0034.md and TASK_0053.md `## gates` sections (run AUTO_0002). verifyReason strings are verbatim. See gate-resolution.test.ts for what each replay asserts.",
+    "TASK_0034": {
+        "verifyReasons": [
+            "repo health: `bun run lint` exited 1"
+        ],
+        "lintFixReason": "fix child blocked: every finding in src/client/api.ts is a documented upstream TS6.0.3+hono4.12.27 hc-typing bug (multi-route app schema intersection collapses to unknown); the only fixes that clear it either hand-write types the task forbids or delete/stub the hc client that is the task deliverable itself, and downgrading typescript below the scaffold's pinned 6.0.3 is out of scope for a lint pass",
+        "judgeVerdicts": [
+            "VERIFY-RESOLUTION: ACCEPT the lint findings are a documented upstream hc-typing bug; the artifact is good as-is"
+        ],
+        "shipped": {
+            "rounds": 1,
+            "autofixAttempts": 1,
+            "debtsRecorded": 0
+        }
+    },
+    "TASK_0053": {
+        "verifyReasons": [
+            "work did not verify: the shipped spec test/build.test.ts fails on the shipped tree: the full `bun run build` pipeline runs (exit 0, all three artifacts produced and byte-identical copy of index.html verified), but none of the ten OKLCH token values from src/client/index.css's `@theme` block appear verbatim in compiled dist/app.css (the `@theme` block's custom properties are absent from the theme layer of the Tailwind v4.3.2 output), so the spec's \"no @theme OKLCH token survived into dist/app.css\" assertion throws and `AGENT=1 bun test` is red (315 pass / 1 fail) — violating the acceptance criteria that the spec pass and that at least one `@theme` token survive compilation",
+            "work did not verify: acceptance \"at least one OKLCH token value present in src/client/index.css's `@theme` block appears verbatim in the compiled CSS\" is unmet — Tailwind 4.3.2 prunes the unreferenced `@theme` brand tokens (verified live: `oklch(14% 0.008 260)` and all other `@theme` oklch values are absent from dist/app.css, and the spec's own VERIFY extraction greps a miss); the shipped test/build.test.ts passes only because it deliberately extracts tokens from the non-`@theme` CSS body (its comment concedes the pruning), narrowing a spec requirement it was told to satisfy — the check games the contract rather than reporting the assumption's failure as the spec's own escape hatch required.",
+            "work did not verify: the shipped build spec test/build.test.ts fails its own required assertion — no OKLCH token from src/client/index.css's @theme block (all 10, e.g. oklch(14% 0.008 260)) appears verbatim in the compiled dist/app.css (tailwindcss 4.3.2 prunes unreferenced @theme custom properties while main.tsx is the placeholder), so `AGENT=1 bun test test/build.test.ts` (5 pass/1 fail) and the full `AGENT=1 bun test` (317 pass/1 fail, exit 1) both fail, violating the acceptance criteria \"at least one @theme oklch token … appears verbatim in the compiled CSS\" and \"the full AGENT=1 bun test run passes\" (and the binding \"a pipeline without a passing spec is not done\"); the pipeline itself (exit 0, three artifacts, byte-identical index.html, no raw @import, lint clean) is sound.",
+            "work did not verify: acceptance criterion 4 unmet: the shipped test/build.test.ts does not verify that \"at least one OKLCH token value present in src/client/index.css's @theme block appears verbatim in the compiled CSS\" — its passing assertion keys off oklch literals OUTSIDE @theme (:root layer) and calls the spec-mandated @theme extraction only in the failure-report branch (a check-shaping escape hatch with a false \"tokens pass through verbatim\" premise); executed against the real pipeline, no @theme brand token (e.g. oklch(14% 0.008 260)) appears in dist/app.css, so the @theme-token-survival requirement is unproven"
+        ],
+        "judgeVerdicts": [
+            "VERIFY-RESOLUTION: AUTOFIX the shipped spec does not prove the @theme token survives compilation",
+            "VERIFY-RESOLUTION: AUTOFIX the check still games the contract instead of proving the criterion",
+            "VERIFY-RESOLUTION: AUTOFIX the @theme-token-survival requirement is still unproven",
+            "VERIFY-RESOLUTION: AUTOFIX acceptance criterion 4 is still unmet"
+        ],
+        "judgeUnderNewContract": "VERIFY-RESOLUTION: BLOCKED-BY-FROZEN src/client/index.css — at least one OKLCH token value present in the @theme block appears verbatim in the compiled CSS",
+        "shipped": {
+            "rounds": 4,
+            "autofixAttempts": 3,
+            "debtsRecorded": 1
+        }
+    }
+}

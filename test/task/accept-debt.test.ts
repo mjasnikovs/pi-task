@@ -507,6 +507,36 @@ describe("recordDebt origin 'yolo-accepted' — an auto-pick never masquerades a
     })
 })
 
+describe('the origins WS1 added round-trip and describe distinctly', () => {
+    const NEW_ORIGINS = [
+        'spec-contradiction',
+        'dismissed',
+        'inherited-health',
+        'abandoned'
+    ] as const
+
+    test('each reads back under its own origin, never degraded to the legacy class', async () => {
+        for (const origin of NEW_ORIGINS) {
+            const cwd = makeCwd()
+            await recordDebt(cwd, 'TASK_0009', 'repo health: `bun run lint` exited 1', origin)
+            const [debt] = await readAcceptDebts(cwd)
+            expect(debt.origin).toBe(origin)
+            expect(parseAcceptDebts(fs.readFileSync(acceptDebtFile(cwd), 'utf8'))[0].origin).toBe(
+                origin
+            )
+        }
+    })
+
+    test('no two of them describe the same way — a label collision hides a class', async () => {
+        const cwd = makeCwd()
+        for (const origin of NEW_ORIGINS) {
+            await recordDebt(cwd, `TASK_000${NEW_ORIGINS.indexOf(origin)}`, 'x', origin)
+        }
+        const said = (await readAcceptDebts(cwd)).map(describeDebt)
+        expect(new Set(said).size).toBe(NEW_ORIGINS.length)
+    })
+})
+
 /**
  * The VERIFY-COMMAND class.
  *

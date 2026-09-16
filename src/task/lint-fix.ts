@@ -64,12 +64,23 @@ import {parseChangedFrozenFiles, pathNamedIn, revertFrozenPaths} from './frozen-
 import {runFixChild} from './fix-child.js'
 import {parseTreeChanges, type TreeChangeSummary} from './write-guard.js'
 import {findCrossTaskDeletions} from './task-provenance.js'
+import type {SpecContradiction} from './gate-resolution.js'
 
 export interface LintFixResult {
     /** true → findings fixed, repo health passes, work preserved. */
     ok: boolean
+    /**
+     * WHAT this pass proved, as data. `frozen-path` used to travel as a
+     * `frozen-path:` prefix on `reason`, which the gate loop recovered by
+     * re-typing the literal — a reword of either side silently disarmed the
+     * cross-task-contradiction routing.
+     */
+    class: 'converged' | 'frozen-path' | 'not-applied'
     /** why the fix was not applied (guard trip, no convergence, child error). */
     reason?: string
+    /** Set exactly on `frozen-path`: the criterion and the frozen path whose edit
+     *  is the only way to meet it, for the gate's decision table. */
+    contradiction?: SpecContradiction
 }
 
 export interface LintFixDeps {
@@ -314,6 +325,7 @@ export async function runBoundedLintFix(deps: LintFixDeps): Promise<LintFixResul
         deps.log?.(`lint-fix REVERT-GUARD — discarded ${violations.length} work file(s)`)
         return {
             ok: false,
+            class: 'not-applied',
             reason:
                 `revert-guard: fix pass discarded work (${violations.slice(0, 3).join(', ')}`
                 + `${violations.length > 3 ? ', …' : ''}) — fix ${snapshot ? 'rolled back' : 'REJECTED but no snapshot to restore'}`
@@ -347,6 +359,7 @@ export async function runBoundedLintFix(deps: LintFixDeps): Promise<LintFixResul
                 deps.log?.(`lint-fix CROSS-TASK-DELETION GUARD — ${named[0]}`)
                 return {
                     ok: false,
+                    class: 'not-applied',
                     reason:
                         `cross-task-deletion: fix child DELETED sibling task deliverable(s) `
                         + `(${named.slice(0, 3).join('; ')}${crossDeletions.length > 3 ? '; …' : ''}) `
@@ -374,6 +387,8 @@ export async function runBoundedLintFix(deps: LintFixDeps): Promise<LintFixResul
                 )
                 return {
                     ok: false,
+                    class: 'frozen-path',
+                    contradiction: {criterion: deps.failReason, frozenPath: frozenViolations[0]},
                     reason:
                         `frozen-path: fix child modified spec-frozen path(s) `
                         + `(${frozenViolations.slice(0, 3).join(', ')}`
@@ -387,7 +402,7 @@ export async function runBoundedLintFix(deps: LintFixDeps): Promise<LintFixResul
 
     if (end.kind === 'error') {
         deps.log?.(`lint-fix child failed — ${end.msg}`)
-        return {ok: false, reason: `fix child failed: ${end.msg}`}
+        return {ok: false, class: 'not-applied', reason: `fix child failed: ${end.msg}`}
     }
     if (end.kind === 'blocked') deps.log?.(`lint-fix BLOCKED — ${end.note}`)
 
@@ -409,16 +424,16 @@ export async function runBoundedLintFix(deps: LintFixDeps): Promise<LintFixResul
     const health = await deps.repoHealth()
     if (!health.ok) {
         if (end.kind === 'blocked') {
-            return {ok: false, reason: `fix child blocked: ${end.note}`}
+            return {ok: false, class: 'not-applied', reason: `fix child blocked: ${end.note}`}
         }
         // FROZEN-PATH TRACE on non-convergence: when the child was honest — it did
         // NOT touch the frozen path, so the guard above never tripped — but the
         // check is still red and its own output NAMES a frozen path (the typed
         // ESLint message quoted in this file's header), the findings can only be
-        // fixed by an edit this task's spec forbids. Report it under the same
-        // `frozen-path:` prefix as the guard trip, so the gate loop can route
-        // straight to the human picker instead of burning unattended AUTOFIX
-        // rounds an impl re-run under the same freeze cannot converge out of.
+        // fixed by an edit this task's spec forbids. Report the same
+        // `frozen-path` class as the guard trip, so the gate's decision table
+        // exits on round one instead of burning unattended AUTOFIX rounds an impl
+        // re-run under the same freeze cannot converge out of.
         const implicated = frozen.filter(p =>
             pathNamedIn(`${health.reason}\n${health.output ?? ''}`, p)
         )
@@ -426,6 +441,8 @@ export async function runBoundedLintFix(deps: LintFixDeps): Promise<LintFixResul
             deps.log?.(`lint-fix FROZEN-PATH TRACE — ${implicated.slice(0, 3).join(', ')}`)
             return {
                 ok: false,
+                class: 'frozen-path',
+                contradiction: {criterion: health.reason, frozenPath: implicated[0]},
                 reason:
                     `frozen-path: static findings implicate spec-frozen path(s) `
                     + `(${implicated.slice(0, 3).join(', ')}`
@@ -433,7 +450,7 @@ export async function runBoundedLintFix(deps: LintFixDeps): Promise<LintFixResul
                     + `(${health.reason}); a fix under this task's constraints cannot converge`
             }
         }
-        return {ok: false, reason: `did not converge: ${health.reason}`}
+        return {ok: false, class: 'not-applied', reason: `did not converge: ${health.reason}`}
     }
-    return {ok: true, reason: guardNote}
+    return {ok: true, class: 'converged', ...(guardNote === undefined ? {} : {reason: guardNote})}
 }
