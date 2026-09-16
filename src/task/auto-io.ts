@@ -401,6 +401,8 @@ export async function insertTaskAfter(
         const entry = parseEntryLine(lines[i], entries.length)
         if (!entry) continue
         entries.push(entry)
+        // A negative afterIndex means "before the first entry".
+        if (entries.length === 1 && afterIndex < 0) insertAt = i
         if (entries.length - 1 <= afterIndex) insertAt = i + 1
     }
     // An out-of-range afterIndex is not an error: the loop above leaves `insertAt`
@@ -418,6 +420,21 @@ export async function insertTaskAfter(
     )
     await setTaskSection(cwd, id, 'tasks', lines.join('\n'))
     return true
+}
+
+/**
+ * Insert a NEW unchecked entry directly BEFORE the `index`th checkbox — the
+ * position a health repair needs: the task about to run must wait until the red
+ * it would build on is fixed. Same monotonic, duplicate-refusing splice as
+ * {@link insertTaskAfter}.
+ */
+export function insertTaskBefore(
+    cwd: string,
+    id: string,
+    index: number,
+    title: string
+): Promise<boolean> {
+    return insertTaskAfter(cwd, id, index - 1, title)
 }
 
 /**

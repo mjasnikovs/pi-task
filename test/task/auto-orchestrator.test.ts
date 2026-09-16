@@ -20,7 +20,14 @@ import {readTaskFile, writeTaskFile} from '../../src/task/task-io.js'
 import {runLogPath} from '../../src/task/state-dir.js'
 import {parseTaskList, buildAutoBody, type TaskEntry} from '../../src/task/auto-io.js'
 import {ACCEPT_LABEL, AUTOFIX_LABEL} from '../../src/task/verify-resolution.js'
-import {readAcceptDebts, type AcceptDebt} from '../../src/task/accept-debt.js'
+import {
+    closeHealthDebts,
+    readAcceptDebts,
+    recordDebt,
+    type AcceptDebt
+} from '../../src/task/accept-debt.js'
+import {classifyHealthDelta} from '../../src/task/health-baseline.js'
+import type {HealthOutcome} from '../../src/task/repo-health-check.js'
 import {ENTRY_ATTEMPT_BUDGET} from '../../src/task/gate-resolution.js'
 import {readOwnedRequirements} from '../../src/task/requirements.js'
 import type {CommitResult} from '../../src/task/auto-commit.js'
@@ -3658,3 +3665,291 @@ test('orientFeature: a dead backend during extraction is not swallowed', async (
         expect(err).toBeInstanceOf(ChildFailureError)
     })
 })
+
+// ─── Health repair at the checkpoint (health-repair.ts) ──────────────────────
+//
+// Red enters the tree by three doors — an accepted regression, a leftover the
+// checkpoint sweeps in, a repo red at run start — and none of them is a gate. The
+// pre-task checkpoint measures health for the baseline anyway; a red result there
+// splices a repair entry BEFORE the task about to run.
+
+const API = 'src/client/api.ts'
+const LINT = 'bun run lint'
+
+function lintHealth(red: boolean, cwd: string): HealthOutcome {
+    return red ?
+            {
+                ok: false,
+                reason: `\`${LINT}\` exited 1`,
+                ecosystem: 'node',
+                commands: [{cmd: LINT, outcome: 'fail', exitCode: 1}],
+                output: `${cwd}/${API}\n  12:3  error  Unsafe assignment  @typescript-eslint/no-unsafe-assignment`
+            }
+        :   {
+                ok: true,
+                reason: 'node: static checks passed',
+                ecosystem: 'node',
+                commands: [],
+                output: ''
+            }
+}
+
+/**
+ * A run whose tree health is a single mutable flag. Each task's verify compares
+ * the health at verify time against the baseline captured at its checkpoint,
+ * exactly as runWorkVerification does, so the loop is exercised end to end
+ * without a shell.
+ */
+function healthRun(plan: {red: (title: string) => boolean | undefined}): {
+    deps: AutoDeps
+    ran: string[]
+    trail: string[]
+    ids: Map<string, string>
+} {
+    let treeRed = false
+    const baselines = new Map<string, HealthOutcome>()
+    const ran: string[] = []
+    const trail: string[] = []
+    const ids = new Map<string, string>()
+    let n = 6
+    let current = ''
+    const deps: AutoDeps = {
+        runChild: () => Promise.resolve(''),
+        runTask: (_c, _cwd, title) => {
+            ran.push(title)
+            current = title
+            const id = `TASK_${String(n++).padStart(4, '0')}`
+            ids.set(title, id)
+            const red = plan.red(title)
+            if (red !== undefined) treeRed = red
+            return Promise.resolve({taskId: id, end: {kind: 'completed'}})
+        },
+        commit: () => Promise.resolve({committed: true}),
+        captureHealthBaseline: (_c, cwd, label) => {
+            const h = lintHealth(treeRed, cwd)
+            baselines.set(label, h)
+            return Promise.resolve({at: 'T', treeHash: null, outcome: h})
+        },
+        verify: (_c, cwd) => {
+            const after = lintHealth(treeRed, cwd)
+            if (after.ok) return Promise.resolve({ok: true})
+            const delta = classifyHealthDelta(baselines.get(current) ?? null, after)
+            if (delta === 'regressed') {
+                return Promise.resolve({
+                    ok: false,
+                    failClass: 'repo-health',
+                    reason: `repo health: ${after.reason}`,
+                    health: after
+                })
+            }
+            return Promise.resolve({
+                ok: true,
+                inheritedHealth: `repo health: ${after.reason} — already failing before this task`
+            })
+        },
+        recommend: () => Promise.resolve({recommend: 'accept', rationale: 'upstream typing bug'}),
+        repoFiles: () => Promise.resolve([API, 'src/server/index.ts']),
+        introducedBy: (_cwd, rel) => Promise.resolve(rel === API ? (ids.get('A') ?? null) : null),
+        recordDebt,
+        closeHealthDebts,
+        record: (_cwd, _id, line) => {
+            trail.push(line)
+            return Promise.resolve()
+        }
+    }
+    return {deps, ran, trail, ids}
+}
+
+const REPAIR_A = `repair ${API}: \`${LINT}\` exits 1 (introduced by TASK_0006)`
+
+test('runAutoLoop: A regresses lint and is ACCEPTED → a repair runs before B, and B inherits nothing', async () => {
+    await withTmpTaskDir(async dir => {
+        const handle = makeFakeCtx(dir)
+        const {ctx, captured} = handle
+        await writeTaskFile(
+            dir,
+            autoFm('TASK_AUTO_0001'),
+            buildAutoBody('feat', '(none)', ['A', 'B'])
+        )
+        const {deps, ran, trail, ids} = healthRun({
+            red: title =>
+                title === 'A' ? true
+                : title.startsWith('repair ') ? false
+                : undefined
+        })
+        // Attended: the picker names what ACCEPT queues, and that is the card picked.
+        handle.queueSelect(`${ACCEPT_LABEL}; queues a repair for ${API} (\`${LINT}\`)`)
+        await runAutoLoop(ctx, dir, 'TASK_AUTO_0001', deps)
+        expect(ran).toEqual(['A', REPAIR_A, 'B'])
+        const {frontMatter, body} = await readTaskFile(dir, 'TASK_AUTO_0001')
+        expect(frontMatter.state).toBe('completed')
+        const entries = parseTaskList(body)
+        expect(entries.map(e => e.title)).toEqual(['A', REPAIR_A, 'B'])
+        expect(entries.every(e => e.done)).toBe(true)
+        // The spliced entry keeps the line grammar: its own key, its own id.
+        expect(entries[1].key).toBe('P03')
+        expect(entries[1].producedId).toBe(ids.get(REPAIR_A))
+        // A's accepted red is closed by the repair, under the repair's id; nothing
+        // inherited it, because nothing ran on the red.
+        const debts = await readAcceptDebts(dir)
+        expect(debts.map(d => [d.taskId, d.origin ?? 'accepted', d.resolvedBy])).toEqual([
+            ['TASK_0006', 'accepted', ids.get(REPAIR_A)]
+        ])
+        expect(
+            trail.some(l =>
+                l.startsWith(`plan: \`${LINT}\` is red at the checkpoint before step 2`)
+            )
+        ).toBe(true)
+        expect(trail.some(l => l.startsWith('accept: repo health regressed by this task'))).toBe(
+            true
+        )
+        expect(
+            trail.some(l =>
+                /^accept-debt: closed 1 debt\(s\) on `bun run lint` — TASK_0006 — repaired by/.test(
+                    l
+                )
+            )
+        ).toBe(true)
+        expect(
+            captured.notifies.some(n =>
+                /queued a repair for src\/client\/api\.ts to run first/.test(n.msg)
+            )
+        ).toBe(true)
+    })
+})
+
+test('runAutoLoop: a repair that fails is accepted once; B then inherits the red and nothing re-splices', async () => {
+    await withTmpTaskDir(async dir => {
+        const handle = makeFakeCtx(dir)
+        const {ctx} = handle
+        await writeTaskFile(
+            dir,
+            autoFm('TASK_AUTO_0001'),
+            buildAutoBody('feat', '(none)', ['A', 'B'])
+        )
+        // The repair leaves the tree red: its own verify FAILs (a model-verdict class
+        // once the health probe reads the red as pre-existing), and is accepted.
+        const {deps, ran} = healthRun({red: title => (title === 'A' ? true : undefined)})
+        const inner = deps.verify!
+        deps.verify = async (c, cwd, title, id) => {
+            const v = await inner(c, cwd, title, id)
+            if (title.startsWith('repair ') && v.ok) {
+                return {
+                    ok: false,
+                    failClass: 'model-verdict',
+                    reason: 'work did not verify: `bun run lint` still red',
+                    ...(v.inheritedHealth ? {inheritedHealth: v.inheritedHealth} : {})
+                }
+            }
+            return v
+        }
+        handle.queueSelect(`${ACCEPT_LABEL}; queues a repair for ${API} (\`${LINT}\`)`)
+        handle.queueSelect(ACCEPT_LABEL)
+        await runAutoLoop(ctx, dir, 'TASK_AUTO_0001', deps)
+        expect(ran).toEqual(['A', REPAIR_A, 'B'])
+        const {frontMatter, body} = await readTaskFile(dir, 'TASK_AUTO_0001')
+        // B ran on a red baseline, was not failed, and no second repair was spliced.
+        expect(frontMatter.state).toBe('completed')
+        expect(parseTaskList(body).map(e => e.title)).toEqual(['A', REPAIR_A, 'B'])
+        const debts = await readAcceptDebts(dir)
+        expect(debts.every(d => d.resolvedBy === undefined)).toBe(true)
+        expect(debts.map(d => d.origin ?? 'accepted').sort()).toEqual([
+            'accepted',
+            'accepted',
+            'inherited-health',
+            'inherited-health'
+        ])
+    })
+})
+
+test('runAutoLoop: red at run start (a swept leftover) → the repair runs before the first task', async () => {
+    await withTmpTaskDir(async dir => {
+        const {ctx} = makeFakeCtx(dir)
+        await writeTaskFile(dir, autoFm('TASK_AUTO_0001'), buildAutoBody('feat', '(none)', ['A']))
+        let treeRed = true
+        const ran: string[] = []
+        const deps: AutoDeps = {
+            runChild: () => Promise.resolve(''),
+            runTask: (_c, _cwd, title) => {
+                ran.push(title)
+                if (title.startsWith('repair ')) treeRed = false
+                return Promise.resolve({taskId: `TASK_000${ran.length}`, end: {kind: 'completed'}})
+            },
+            commit: () => Promise.resolve({committed: true}),
+            captureHealthBaseline: (_c, cwd) =>
+                Promise.resolve({at: 'T', treeHash: null, outcome: lintHealth(treeRed, cwd)}),
+            repoFiles: () => Promise.resolve([API]),
+            introducedBy: () => Promise.resolve(null)
+        }
+        await runAutoLoop(ctx, dir, 'TASK_AUTO_0001', deps)
+        expect(ran).toEqual([
+            `repair ${API}: \`${LINT}\` exits 1 (no task in this run owns it)`,
+            'A'
+        ])
+    })
+})
+
+test('buildStepFence: a health-repair entry carries the health fence, not the root-cause one', () => {
+    const entries: TaskEntry[] = [
+        {index: 0, title: 'A', done: true},
+        {index: 1, title: REPAIR_A, done: false},
+        {index: 2, title: 'B', done: false}
+    ]
+    const fence = buildStepFence(entries, 1)
+    expect(fence).toContain(`REPAIR TASK — this step exists ONLY to make \`${LINT}\` pass again`)
+    expect(fence).toContain('Do NOT suppress')
+    expect(fence).not.toContain("made OTHER tasks' verification fail")
+})
+
+/**
+ * REPLAY of run mx5-n (read-only fixture): TASK_0033 left `src/client/api.ts`
+ * red and unfinished; TASK_0034 was the next task to start and got blamed. Under
+ * the checkpoint flow the red is seen before 0034 runs, a repair for the file is
+ * spliced between them, and 0034 starts on the repaired tree.
+ */
+const MX5_TASKS = path.join(process.env.HOME ?? '', 'hub', 'mx5-n', '.pi-tasks')
+const mx5Present =
+    existsSync(path.join(MX5_TASKS, 'TASK_0033.md'))
+    && existsSync(path.join(MX5_TASKS, 'TASK_0034.md'))
+
+test.skipIf(!mx5Present)(
+    'replay mx5-n TASK_0033 → TASK_0034: 0034 is never blamed; a repair for src/client/api.ts sits between them',
+    async () => {
+        const t34 = await fsp.readFile(path.join(MX5_TASKS, 'TASK_0034.md'), 'utf8')
+        const titleOf = (raw: string): string => /^title: (.+)$/m.exec(raw)?.[1]?.trim() ?? ''
+        const title34 = titleOf(t34)
+        const title33 = 'Implement `src/client/api.ts` — typed `hc<AppType>` client'
+        expect(title34.length).toBeGreaterThan(0)
+        // What the fixture's own gate trail says the red was.
+        expect(t34).toContain('verify: FAIL — repo health: `bun run lint` exited 1')
+        expect(t34).toContain('every finding in src/client/api.ts')
+        await withTmpTaskDir(async dir => {
+            const {ctx} = makeFakeCtx(dir)
+            await writeTaskFile(
+                dir,
+                autoFm('TASK_AUTO_0002'),
+                buildAutoBody('feat', '(none)', [title33, title34])
+            )
+            const {deps, ran, trail, ids} = healthRun({
+                // 0033 ships the red unfinished; the repair clears it.
+                red: title =>
+                    title === title33 ? true
+                    : title.startsWith('repair ') ? false
+                    : undefined
+            })
+            // 0033's own gate never ran in the fixture — its red was a leftover. Model
+            // that: 0033's verify passes on nothing, the red simply sits in the tree.
+            const inner = deps.verify!
+            deps.verify = (c, cwd, title, id) =>
+                title === title33 ? Promise.resolve({ok: true}) : inner(c, cwd, title, id)
+            deps.introducedBy = (_cwd, rel) => Promise.resolve(rel === API ? 'TASK_0033' : null)
+            await runAutoLoop(ctx, dir, 'TASK_AUTO_0002', deps)
+            const repair = `repair ${API}: \`${LINT}\` exits 1 (introduced by TASK_0033)`
+            expect(ran).toEqual([title33, repair, title34])
+            // 0034 was never blamed: no FAIL, no inherited debt, no debt at all in its name.
+            expect((await readAcceptDebts(dir)).map(d => d.taskId)).not.toContain(ids.get(title34))
+            expect(trail.some(l => l.includes(`is red at the checkpoint before step 2`))).toBe(true)
+            expect(trail.filter(l => l.startsWith('verify: FAIL'))).toEqual([])
+        })
+    }
+)

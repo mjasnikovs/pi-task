@@ -35,6 +35,7 @@ import {
     beginTaskAttempt,
     recordTaskEnd,
     insertTaskAfter,
+    insertTaskBefore,
     findResumableAutoDetailed,
     type TaskEntry
 } from './auto-io.js'
@@ -50,7 +51,13 @@ import {
     buildRepairScopeFence,
     extractFailingCommand
 } from './root-cause-repair.js'
-import {writeTaskFile, readTaskFile, updateTaskFrontMatter, taskFilePath} from './task-io.js'
+import {
+    writeTaskFile,
+    readTaskFile,
+    readSection,
+    updateTaskFrontMatter,
+    taskFilePath
+} from './task-io.js'
 // Re-exported as well as used: the @-mention helpers moved to their own module so
 // the research phase can select a cited spec doc without importing this one, and
 // the planning call sites still name them here.
@@ -74,6 +81,19 @@ import {getParentContextWindow} from './context-usage.js'
 import {ChildStatus, runPlanningChild, statusCallbacks} from './child-status.js'
 import {buildGateDeps, collectTreeChanges} from './gate-deps.js'
 import {runGatesForTask, type GateDeps} from './task-gates.js'
+import {
+    buildHealthRepairFence,
+    buildHealthRepairTitle,
+    healthRedSubject,
+    parseHealthRepairTitle,
+    planCoversHealthRed
+} from './health-repair.js'
+import {
+    HEALTH_BASELINE_SECTION,
+    parseHealthBaseline,
+    type HealthBaseline
+} from './health-baseline.js'
+import type {HealthOutcome} from './repo-health-check.js'
 import {runFinalGateStage, type FinalGateStageDeps} from './run-final-gate.js'
 import {gitUnmergedPaths, gitStashRef} from './auto-commit.js'
 import {runFinalIntegrationGate, deriveOpenDebts} from './final-gate.js'
@@ -467,6 +487,8 @@ export function buildScopeFence(entries: readonly TaskEntry[], currentIndex: num
 export function buildStepFence(entries: readonly TaskEntry[], currentIndex: number): string {
     const base = buildScopeFence(entries, currentIndex)
     const title = entries[currentIndex]?.title ?? ''
+    const healthRepair = parseHealthRepairTitle(title)
+    if (healthRepair) return `${base}\n\n${buildHealthRepairFence(healthRepair)}`
     const repairFile = parseRepairTitleFile(title)
     if (!repairFile) return base
     return `${base}\n\n${buildRepairScopeFence(repairFile, extractFailingCommand(title))}`
@@ -525,6 +547,76 @@ async function schedulePendingRepairs(
     } catch {
         // the plan is best-effort here; the underlying debt is already recorded
     }
+}
+
+/**
+ * A red health check at the pre-task checkpoint becomes a repair entry spliced
+ * BEFORE the task about to run (health-repair.ts). Returns whether the plan
+ * changed — the caller then re-reads it and runs the repair first. No splice when
+ * the plan already covers this red (a repair that ran and failed included): the
+ * task then proceeds and inherits it, as the baseline differential intends.
+ */
+async function spliceHealthRepair(
+    cwd: string,
+    id: string,
+    next: TaskEntry,
+    entries: readonly TaskEntry[],
+    health: HealthOutcome,
+    ctx: ExtensionCommandContext,
+    deps: AutoDeps
+): Promise<boolean> {
+    try {
+        const red = healthRedSubject(health, cwd, (await deps.repoFiles?.(cwd)) ?? null)
+        if (!red) return false
+        if (
+            planCoversHealthRed(
+                entries.map(e => e.title),
+                red
+            )
+        )
+            return false
+        const owners: string[] = []
+        for (const f of red.files) {
+            const owner = await deps.introducedBy?.(cwd, f)
+            if (owner && !owners.includes(owner)) owners.push(owner)
+        }
+        const title = buildHealthRepairTitle({...red, owners})
+        if (!(await insertTaskBefore(cwd, id, next.index, title))) return false
+        await deps.record?.(
+            cwd,
+            id,
+            `plan: \`${red.command}\` is red at the checkpoint before step ${next.index + 1} — inserted repair step first: ${title}`
+        )
+        notifyRun(
+            ctx,
+            `${id}: \`${red.command}\` is red before "${next.title}" — queued a repair for `
+                + `${red.files.length > 0 ? red.files.join(', ') : 'it'} to run first.`,
+            'warning'
+        )
+        return true
+    } catch {
+        return false
+    }
+}
+
+/**
+ * The health baseline a task starts from: the one its (resumed) task file already
+ * holds, else a fresh capture at the checkpoint. Null when neither is available.
+ */
+async function baselineAtCheckpoint(
+    ctx: ExtensionCommandContext,
+    cwd: string,
+    resumeId: string | undefined,
+    label: string,
+    deps: AutoDeps
+): Promise<HealthBaseline | null> {
+    if (resumeId) {
+        const stored = await readSection(cwd, resumeId, HEALTH_BASELINE_SECTION).catch(() => null)
+        const parsed = parseHealthBaseline(stored)
+        if (parsed) return parsed
+    }
+    if (!deps.captureHealthBaseline) return null
+    return deps.captureHealthBaseline(ctx, cwd, label)
 }
 
 /**
@@ -1755,16 +1847,30 @@ export async function runAutoLoop(
             // the tree clean: what the project's own statics say now is what this task
             // INHERITED, and the verify gate attributes a red check against it instead
             // of failing the task for a sibling's defect (health-baseline.ts). The
-            // inner task file does not exist yet, so the capture is handed to the
+            // inner task file does not exist yet, so the result is handed to the
             // runner, which writes the section once its id is allocated.
-            const capture = deps.captureHealthBaseline
-            const healthBaseline =
-                capture ?
-                    {
-                        healthBaseline: (taskCtx: ExtensionCommandContext) =>
-                            capture(taskCtx, cwd, next.title)
-                    }
-                :   {}
+            //
+            // A RED baseline is also the one moment every way red enters the tree
+            // is visible before anything builds on it — an accepted regression, a
+            // leftover the checkpoint just committed, a repo red at run start — so
+            // it is where the repair is scheduled (health-repair.ts).
+            const baseline = await baselineAtCheckpoint(active, cwd, resumeId, next.title, deps)
+            if (
+                baseline
+                && !baseline.outcome.ok
+                && (await spliceHealthRepair(
+                    cwd,
+                    id,
+                    next,
+                    entries,
+                    baseline.outcome,
+                    active,
+                    deps
+                ))
+            ) {
+                continue
+            }
+            const healthBaseline = baseline ? {healthBaseline: () => Promise.resolve(baseline)} : {}
             // Stash ref before the task: compared after the gates so a stash pushed
             // during the task (impl model or any child) and left behind is called
             // out instead of silently waiting to detonate in a later task.

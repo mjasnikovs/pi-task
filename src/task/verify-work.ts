@@ -91,6 +91,7 @@ export interface VerifyPass {
     unobserved?: undefined
     crossTaskDeletions?: undefined
     inheritedHealth?: string
+    health?: undefined
     probes?: ProbeFindings
 }
 
@@ -120,6 +121,9 @@ export interface VerifyFail {
      *  then ships in the next commit and the final gate must re-check it. */
     crossTaskDeletions?: CrossTaskDeletion[]
     inheritedHealth?: string
+    /** The health result behind a `repo-health` FAIL: which command, and what its
+     *  output named. What an ACCEPT of this FAIL hands to the repair channel. */
+    health?: HealthSignal & {output?: string}
     /** What the deterministic probes found for THIS verdict, carried out so an
      *  AUTOFIX re-run is told what the gate already knows (see fix-context.ts)
      *  instead of re-deriving it from the one-line reason. */
@@ -1146,7 +1150,7 @@ export interface VerificationDeps {
      * FAIL (the existing verify-FAIL outcome → the AUTOFIX/ACCEPT/dismiss picker).
      * Injected so tests fake it; ABSENT → skipped (a pass), keeping the pass path a
      * pure no-op for callers/tests that do not wire it. */
-    repoHealth?: () => Promise<{ok: boolean; reason: string} & HealthSignal>
+    repoHealth?: () => Promise<{ok: boolean; reason: string; output?: string} & HealthSignal>
     /**
      * What those same checks said BEFORE this task ran (see health-baseline.ts).
      * Consulted only when `repoHealth` comes back red, and it is what decides
@@ -1243,7 +1247,12 @@ export async function runWorkVerification(deps: VerificationDeps): Promise<Verif
         if (!h.ok) {
             const baseline = deps.healthBaseline ? await deps.healthBaseline() : null
             if (classifyHealthDelta(baseline?.outcome ?? null, h) === 'regressed') {
-                return {ok: false, failClass: 'repo-health', reason: `repo health: ${h.reason}`}
+                return {
+                    ok: false,
+                    failClass: 'repo-health',
+                    reason: `repo health: ${h.reason}`,
+                    health: h
+                }
             }
             pre.repoHealth = inheritedHealthFindings(h)
             inheritedHealth = `repo health: ${h.reason} — already failing before this task`

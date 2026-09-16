@@ -230,9 +230,15 @@ export interface ResolutionChoice {
  * labels — {@link classifyResolutionAnswer} accepts both.
  */
 export function resolutionOptions(
-    recommend: ResolutionRecommendation
+    recommend: ResolutionRecommendation,
+    /** What ACCEPT queues besides keeping the artifact — the repair a red health
+     *  check earns — so the picker shows the whole consequence of the choice. */
+    acceptQueues?: string
 ): {label: string; value: string; recommended: boolean}[] {
-    const accept = {label: ACCEPT_LABEL, value: ACCEPT_VALUE}
+    const accept = {
+        label: acceptQueues ? `${ACCEPT_LABEL}; queues ${acceptQueues}` : ACCEPT_LABEL,
+        value: ACCEPT_VALUE
+    }
     const autofix = {label: AUTOFIX_LABEL, value: AUTOFIX_VALUE}
     return recommend === 'accept' ?
             [

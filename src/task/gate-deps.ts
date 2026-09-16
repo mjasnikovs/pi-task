@@ -43,7 +43,7 @@ import {currentRunContext} from './run-context.js'
 import {runGateEvidence, evidenceVerifyFindings} from './gate-evidence.js'
 import type {CommandRunner} from './command-run.js'
 import {readContracts} from './contracts.js'
-import {recordDebt} from './accept-debt.js'
+import {closeHealthDebts, recordDebt} from './accept-debt.js'
 import {recordRepairCandidate} from './root-cause-repair.js'
 import {runRepoHealthCheck, type HealthOutcome} from './repo-health-check.js'
 import {
@@ -961,6 +961,7 @@ export function buildGateDeps(params: {
         // origin, and the final integration gate re-checks each one at run end.
         recordDebt,
         recordRepairCandidate: (cwd2, candidate) => recordRepairCandidate(cwd2, candidate),
+        closeHealthDebts,
         // file → introducing task, the provenance half of the discriminator.
         introducedBy: (cwd2, rel) => Promise.resolve(taskThatIntroduced(cwd2, rel)),
         // Tracked paths, used only to resolve a bare file name a FAIL text names
