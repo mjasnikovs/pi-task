@@ -31,6 +31,24 @@ import * as path from 'node:path'
 import {resolveRunner, runnerEnv} from './runner-resolve.js'
 import {classifyCommandRun, spawnCommand, type CommandRunner} from './command-run.js'
 
+/**
+ * What ONE discovered command did. `outcome` is `classifyCommandRun`'s verdict, so
+ * a tool that could not run at all is `skip` rather than a zero-exit pass.
+ *
+ * This exists for the DIFFERENTIAL (health-baseline.ts): "was the repo already
+ * failing?" is per command, not per overall verdict. Two runs can both be `ok:
+ * false` while a different command failed in each — a task that broke typecheck in
+ * a repo whose lint was already red — and the overall boolean calls that
+ * pre-existing.
+ */
+export interface HealthCommandResult {
+    /** The command line as run, e.g. `bun run lint`. The differential's join key. */
+    cmd: string
+    outcome: 'pass' | 'fail' | 'skip'
+    /** Real exit status on a `fail`; null when nothing conclusive ran. */
+    exitCode: number | null
+}
+
 export interface HealthOutcome {
     /** true → every discovered static check passed, or there was nothing to run.
      *  false → a discovered command actually ran and exited non-zero. */
@@ -39,6 +57,9 @@ export interface HealthOutcome {
     reason: string
     /** Which manifest drove discovery, or null when none was found. */
     ecosystem: string | null
+    /** Every command that was REACHED, in run order. The run short-circuits on the
+     *  first failure, so commands after it are absent rather than passing. */
+    commands: HealthCommandResult[]
     /**
      * First lines of the failing command's combined stderr+stdout — captured so a
      * FAIL is explainable from artifacts alone. The exit code alone does not say
@@ -132,7 +153,13 @@ export function discoverHealthCommands(cwd: string): {
 
 /** The nothing-to-run outcome, shared by both runners. */
 function noCommandOutcome(ecosystem: string | null): HealthOutcome {
-    return {ok: true, reason: 'no repo-wide static-analysis command found', ecosystem, output: ''}
+    return {
+        ok: true,
+        reason: 'no repo-wide static-analysis command found',
+        ecosystem,
+        commands: [],
+        output: ''
+    }
 }
 
 /** Progress hook: called with each command's label as it STARTS, so a caller can
@@ -173,8 +200,10 @@ export async function runRepoHealthCheck(
     const {ecosystem, cmds} = discoverHealthCommands(cwd)
     if (!ecosystem || cmds.length === 0) return noCommandOutcome(ecosystem)
     const run = opts.run ?? spawnCommand
+    const commands: HealthCommandResult[] = []
     for (const [bin, args] of cmds) {
-        opts.onCommand?.(`${bin} ${args.join(' ')}`)
+        const cmd = `${bin} ${args.join(' ')}`
+        opts.onCommand?.(cmd)
         // Runner resolution: a PATH-stripped environment must not
         // silently skip the statics when the runner sits at a known install
         // location; the resolved dir also rides on PATH for the script chain.
@@ -198,13 +227,25 @@ export async function runRepoHealthCheck(
         // English, so a genuine report quoting "browsers are not installed" would
         // skip the static check and certify the repo healthy.
         const verdict = classifyCommandRun(r, [], {runtimeGap: false})
-        if (verdict.outcome !== 'fail') continue
+        if (verdict.outcome !== 'fail') {
+            const passed = verdict.outcome === 'pass'
+            commands.push({cmd, outcome: passed ? 'pass' : 'skip', exitCode: passed ? 0 : null})
+            continue
+        }
+        commands.push({cmd, outcome: 'fail', exitCode: verdict.status})
         return {
             ok: false,
-            reason: `\`${bin} ${args.join(' ')}\` exited ${verdict.status}`,
+            reason: `\`${cmd}\` exited ${verdict.status}`,
             ecosystem,
+            commands,
             output: captureHealthOutput(r.stdout, r.stderr)
         }
     }
-    return {ok: true, reason: `${ecosystem}: static checks passed`, ecosystem, output: ''}
+    return {
+        ok: true,
+        reason: `${ecosystem}: static checks passed`,
+        ecosystem,
+        commands,
+        output: ''
+    }
 }

@@ -24,7 +24,17 @@ import * as fsp from 'node:fs/promises'
 import * as path from 'node:path'
 import type {ExtensionCommandContext} from '@earendil-works/pi-coding-agent'
 import type {GateDeps} from './task-gates.js'
-import {readTaskFile, appendGateRecord} from './task-io.js'
+import {readTaskFile, appendGateRecord, readSection, setTaskSection} from './task-io.js'
+import {makeGit} from '../shared/git-runner.js'
+import {worktreeTreeHash} from './tree-hash.js'
+import {
+    captureHealthBaseline,
+    formatHealthBaseline,
+    lazyHealthBaseline,
+    parseHealthBaseline,
+    HEALTH_BASELINE_SECTION,
+    type HealthBaseline
+} from './health-baseline.js'
 import {gitCommitAll, gitDropLastCommit, git} from './auto-commit.js'
 import {runGuidelineEnforcement} from './enforce-guidelines.js'
 import {runWorkVerification, extractSpecForVerification, type VerifyProbes} from './verify-work.js'
@@ -32,7 +42,7 @@ import {readEnvNotes, appendEnvNotes} from './env-notes.js'
 import {readContracts} from './contracts.js'
 import {recordDebt} from './accept-debt.js'
 import {recordRepairCandidate} from './root-cause-repair.js'
-import {runRepoHealthCheck} from './repo-health-check.js'
+import {runRepoHealthCheck, type HealthOutcome} from './repo-health-check.js'
 import {
     runFinalIntegrationGate,
     discoverGateCommandLabels,
@@ -595,6 +605,43 @@ export async function readSpecForVerification(cwd: string, taskId: string): Prom
 }
 
 /**
+ * The health baseline the verify gate's differential needs: the one stored on the
+ * task file, or — for a task file that has none — one established lazily from a
+ * DETACHED WORKTREE at HEAD and written back, so the next resolution round does
+ * not pay for it again.
+ *
+ * Everything here is best-effort. A baseline that cannot be established is null,
+ * and `classifyHealthDelta` already states what an absent baseline means; failing
+ * the gate because the differential could not run would be the harness blaming
+ * the work for its own gap.
+ */
+export async function healthBaselineFor(
+    cwd: string,
+    taskId: string,
+    signal: AbortSignal
+): Promise<HealthBaseline | null> {
+    try {
+        const stored = parseHealthBaseline(await readSection(cwd, taskId, HEALTH_BASELINE_SECTION))
+        if (stored) return stored
+        const fresh = await lazyHealthBaseline({
+            git: makeGit(cwd, signal),
+            runHealthIn: dir => runRepoHealthCheck(dir, {signal})
+        })
+        if (fresh) {
+            await setTaskSection(
+                cwd,
+                taskId,
+                HEALTH_BASELINE_SECTION,
+                formatHealthBaseline(fresh)
+            ).catch(() => {})
+        }
+        return fresh
+    } catch {
+        return null
+    }
+}
+
+/**
  * Bind the deterministic verify probes — THE one place the collectors above meet
  * the probe table in verify-work.ts. One entry per `BoundProbeKey`; the table row
  * with that key reads it, and the table's loop owns the ritual (skip when absent,
@@ -706,6 +753,35 @@ export function buildGateDeps(params: {
     const discardTreeEdits = async (cwd2: string): Promise<void> => {
         await git(cwd2, ['checkout', '--', '.', EXCLUDE_TASKS_DIR], signal)
         await git(cwd2, ['clean', '-fd', '-e', '.pi-tasks'], signal)
+    }
+
+    // The project's own statics, under a live loader naming the running command.
+    // Each run is as long as that command, and a gate step that long with no widget
+    // is indistinguishable from a hang. Shared by the enforce pre-commit gate (a
+    // baseline before the edit pass, a differential after it) and by the
+    // pre-task baseline capture.
+    const runHealthUnderLoader = (
+        healthCtx: ExtensionCommandContext,
+        cwd2: string,
+        label: string
+    ): Promise<HealthOutcome> => {
+        const startedAt = Date.now()
+        let running: string | undefined
+        const stop = startAutoLoader(healthCtx, () => ({
+            title: label,
+            kind: 'enforce',
+            step: 'repo health',
+            stepNum: 1,
+            stepTotal: 1,
+            startedAt,
+            lastLine: running ? `repo health · ${running}` : 'repo health'
+        }))
+        return runRepoHealthCheck(cwd2, {
+            signal,
+            onCommand: c => {
+                running = c
+            }
+        }).finally(stop)
     }
 
     // Adapter onto the shared gate-child runner (gate-child.ts). What survives
@@ -925,6 +1001,10 @@ export function buildGateDeps(params: {
                                 stageLine = `repo health · ${c}`
                             }
                         }),
+                    // What those checks said before the task started, so a red one
+                    // is attributed rather than absolutely failed. Read only when
+                    // the check above comes back red.
+                    healthBaseline: () => healthBaselineFor(cwd2, taskId, signal),
                     // The deterministic probes, bound in one place (buildVerifyProbes
                     // above); the PROBE_ADAPTERS table in verify-work.ts runs them.
                     probes: buildVerifyProbes({
@@ -993,31 +1073,18 @@ export function buildGateDeps(params: {
                 introducedBy: rel => Promise.resolve(taskThatIntroduced(cwd2, rel))
             })
         },
-        // Deterministic static check + tree helpers for the enforce pre-commit gate.
-        // task-gates.ts calls it up to twice per task in `edit` mode — a baseline
-        // before the edit pass, and a differential check after it when edits were
-        // made. Each run is as long as the project's own lint, so it gets the same
-        // treatment as the verify-side run: async, under a live loader naming the
-        // command.
-        repoHealth: (healthCtx, cwd2, label) => {
-            const startedAt = Date.now()
-            let running: string | undefined
-            const stop = startAutoLoader(healthCtx, () => ({
-                title: label,
-                kind: 'enforce',
-                step: 'repo health',
-                stepNum: 1,
-                stepTotal: 1,
-                startedAt,
-                lastLine: running ? `repo health · ${running}` : 'repo health'
-            }))
-            return runRepoHealthCheck(cwd2, {
-                signal,
-                onCommand: c => {
-                    running = c
-                }
-            }).finally(stop)
-        },
+        // task-gates.ts calls this up to twice per task in `edit` mode — a baseline
+        // before the enforce edit pass, and a differential check after it.
+        repoHealth: runHealthUnderLoader,
+        captureHealthBaseline: (healthCtx, cwd2, label) =>
+            captureHealthBaseline({
+                runHealth: () => runHealthUnderLoader(healthCtx, cwd2, label),
+                treeHash: () => worktreeTreeHash(makeGit(cwd2, signal)),
+                // A project's `lint` script commonly runs `--fix`, so the baseline
+                // can leave the tree edited. Undone here, or the task starts on a
+                // tree the baseline authored.
+                discardEdits: () => discardTreeEdits(cwd2)
+            }).catch(() => null),
         dirty: async cwd2 => {
             const r = await git(
                 cwd2,

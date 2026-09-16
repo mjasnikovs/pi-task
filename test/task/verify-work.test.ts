@@ -989,6 +989,105 @@ describe('runWorkVerification', () => {
         expect(out.reason).toContain('repo health')
     })
 
+    describe('the repo-health differential (WS2)', () => {
+        const red = {
+            ok: false,
+            reason: '`bun run lint` exited 1',
+            ecosystem: 'package.json',
+            output: '',
+            commands: [{cmd: 'bun run lint', outcome: 'fail' as const, exitCode: 1}]
+        }
+        const baselineRed = {
+            at: '2026-09-16T00:00:00.000Z',
+            treeHash: 'abc',
+            outcome: red
+        }
+
+        test("a check that was ALREADY red is not this task's FAIL — the probes and the child still run", async () => {
+            let prompt = ''
+            let probeRan = false
+            const out = await runWorkVerification({
+                cwd: '/x',
+                spec: 'GOAL\nx',
+                repoHealth: async () => red,
+                healthBaseline: async () => baselineRed,
+                probes: {
+                    prohibition: async () => {
+                        probeRan = true
+                        return ['src/frozen.ts']
+                    }
+                },
+                runChild: async (_t, p) => {
+                    prompt = p
+                    return 'WORK-VERIFIED: PASS'
+                }
+            })
+            expect(out.ok).toBe(true)
+            // The short-circuit used to throw every deterministic finding away.
+            expect(probeRan).toBe(true)
+            expect(prompt).toContain('src/frozen.ts')
+            // The child is TOLD the check was red on arrival, so it neither fails
+            // the work for it nor reads its output as evidence.
+            expect(prompt).toContain('INHERITED REPO-HEALTH NOTICE')
+            expect(prompt).toContain('`bun run lint` exits 1')
+            expect(prompt).toContain('4h.')
+            // …and it rides on the outcome so the gate can record the debt.
+            expect(out.inheritedHealth).toContain('already failing before this task')
+        })
+
+        test("a check the baseline had GREEN is still this task's repo-health FAIL", async () => {
+            let childRan = false
+            const out = await runWorkVerification({
+                cwd: '/x',
+                spec: 'GOAL\nx',
+                repoHealth: async () => red,
+                healthBaseline: async () => ({
+                    at: '2026-09-16T00:00:00.000Z',
+                    treeHash: 'abc',
+                    outcome: {
+                        ok: true,
+                        reason: 'passed',
+                        ecosystem: 'package.json',
+                        output: '',
+                        commands: [{cmd: 'bun run lint', outcome: 'pass' as const, exitCode: 0}]
+                    }
+                }),
+                runChild: async () => {
+                    childRan = true
+                    return 'WORK-VERIFIED: PASS'
+                }
+            })
+            expect(out.ok).toBe(false)
+            expect(out.failClass).toBe('repo-health')
+            expect(childRan).toBe(false)
+        })
+
+        test('inherited health rides on a FAIL outcome too', async () => {
+            const out = await runWorkVerification({
+                cwd: '/x',
+                spec: 'GOAL\nx',
+                repoHealth: async () => red,
+                healthBaseline: async () => baselineRed,
+                runChild: async () => 'WORK-VERIFIED: FAIL behavior wrong'
+            })
+            expect(out.failClass).toBe('model-verdict')
+            expect(out.inheritedHealth).toContain('`bun run lint` exited 1')
+        })
+
+        test('a spec-less task still reports what it inherited', async () => {
+            const out = await runWorkVerification({
+                cwd: '/x',
+                spec: null,
+                repoHealth: async () => red,
+                healthBaseline: async () => baselineRed,
+                runChild: async () => 'WORK-VERIFIED: PASS'
+            })
+            expect(out.ok).toBe(true)
+            expect(out.reason).toBe('no spec to verify')
+            expect(out.inheritedHealth).toBeDefined()
+        })
+    })
+
     test('user cancel propagates (not swallowed as a fail)', async () => {
         await expect(
             runWorkVerification({

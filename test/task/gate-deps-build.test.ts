@@ -19,8 +19,10 @@ import * as path from 'node:path'
 import {
     buildGateDeps,
     buildVerifyProbes,
+    healthBaselineFor,
     readSpecForVerification
 } from '../../src/task/gate-deps.js'
+import {formatHealthBaseline} from '../../src/task/health-baseline.js'
 import {BOUND_PROBE_KEYS, runWorkVerification} from '../../src/task/verify-work.js'
 import type {GateDeps} from '../../src/task/task-gates.js'
 import {getConfig} from '../../src/config/config.js'
@@ -413,5 +415,95 @@ describe('buildVerifyProbes — the one place the collectors meet the probe tabl
     test('a spec that forbids nothing makes the prohibition probe skip git entirely', async () => {
         const probes = buildVerifyProbes(params(makeRepo(), 'GOAL\nno constraints'))
         expect(await probes.prohibition!()).toEqual([])
+    })
+})
+
+/**
+ * The health baseline, wired: capture at the pre-task seam, and the read the
+ * verify differential does — stored section first, detached worktree otherwise.
+ */
+describe('health baseline', () => {
+    /** A repo whose `lint` script WRITES, the way a `--fix` script does. */
+    const fixingRepo = (): string =>
+        makeRepo({
+            'a.ts': 'export const a = 1\n',
+            'package.json': JSON.stringify({
+                scripts: {lint: "node -e \"require('fs').writeFileSync('fixed.txt','x')\""}
+            })
+        })
+
+    const porcelain = (dir: string): string =>
+        Bun.spawnSync(['git', 'status', '--porcelain'], {cwd: dir}).stdout.toString().trim()
+
+    test('captureHealthBaseline leaves `git status` clean after a writing lint', async () => {
+        const dir = fixingRepo()
+        const fake = makeFakeCtx(dir)
+
+        const baseline = await deps().captureHealthBaseline(fake.ctx, dir, 'a task')
+
+        expect(baseline?.outcome.ok).toBe(true)
+        expect(baseline?.treeHash).toMatch(/^[0-9a-f]{40}$/)
+        // The script really did write; the capture really did undo it.
+        expect(fs.existsSync(path.join(dir, 'fixed.txt'))).toBe(false)
+        expect(porcelain(dir)).toBe('')
+    })
+
+    test('healthBaselineFor reads the baseline the task file already carries', async () => {
+        const dir = makeRepo()
+        await writeTaskFile(
+            dir,
+            {
+                id: 'TASK_0001',
+                state: 'in_progress',
+                phase: 'done',
+                created_at: 'x',
+                updated_at: 'x',
+                title: 'A'
+            },
+            '\n## health baseline\n\n'
+                + formatHealthBaseline({
+                    at: '2026-09-16T00:00:00.000Z',
+                    treeHash: 'deadbeef',
+                    outcome: {
+                        ok: false,
+                        reason: '`bun run lint` exited 1',
+                        ecosystem: 'package.json',
+                        commands: [{cmd: 'bun run lint', outcome: 'fail', exitCode: 1}],
+                        output: ''
+                    }
+                })
+                + '\n'
+        )
+        const b = await healthBaselineFor(dir, 'TASK_0001', new AbortController().signal)
+        expect(b?.treeHash).toBe('deadbeef')
+        expect(b?.outcome.commands).toEqual([{cmd: 'bun run lint', outcome: 'fail', exitCode: 1}])
+    })
+
+    test('a task file with NO baseline gets one lazily, written back for the next round', async () => {
+        const dir = makeRepo()
+        await writeTaskFile(
+            dir,
+            {
+                id: 'TASK_0001',
+                state: 'in_progress',
+                phase: 'done',
+                created_at: 'x',
+                updated_at: 'x',
+                title: 'A'
+            },
+            '\n## spec\n\nGOAL\nx\n'
+        )
+        const b = await healthBaselineFor(dir, 'TASK_0001', new AbortController().signal)
+        expect(b).not.toBeNull()
+        // Written back, so the next resolution round does not re-run the statics.
+        expect(await readSection(dir, 'TASK_0001', 'health baseline')).toContain('"ok"')
+        // …and the throwaway worktree is gone.
+        const list = Bun.spawnSync(['git', 'worktree', 'list'], {cwd: dir}).stdout.toString()
+        expect(list.split('\n').filter(l => l.trim().length > 0).length).toBe(1)
+    })
+
+    test('an unreadable task file is no baseline, and never a throw', async () => {
+        const b = await healthBaselineFor(noGit(), 'TASK_0404', new AbortController().signal)
+        expect(b).toBeNull()
     })
 })
