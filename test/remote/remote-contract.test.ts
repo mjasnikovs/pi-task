@@ -34,6 +34,15 @@ import {registerConfig} from '../../src/config/register.js'
 
 type Handler = (args: string, ctx: ExtensionCommandContext) => Promise<void> | void
 
+/**
+ * Wait on the signal itself. A guessed delay (20 ms here, once) is a race with
+ * the runner's disk and scheduler, and a loaded Windows CI box lost it. The
+ * suite's per-test timeout is the only bound a missing signal needs.
+ */
+async function until(cond: () => boolean): Promise<void> {
+    while (!cond()) await new Promise(r => setImmediate(r))
+}
+
 function commandTable(register: (pi: ExtensionAPI) => void): Map<string, Handler> {
     const table = new Map<string, Handler>()
     const pi = {
@@ -122,7 +131,7 @@ describe('/task-list is answerable from the browser', () => {
         const run = Promise.resolve(handler('', blockingCtx(cwd).ctx)).then(() => {
             released = true
         })
-        await new Promise(r => setTimeout(r, 20))
+        await until(() => getState().prompt !== null)
 
         expect(released).toBe(false)
         const open = getState().prompt
@@ -138,7 +147,7 @@ describe('/task-list is answerable from the browser', () => {
         captureFrames()
         const handler = commandTable(registerTask).get('task-list')!
         void Promise.resolve(handler('', blockingCtx(cwd).ctx))
-        await new Promise(r => setTimeout(r, 20))
+        await until(() => JSON.stringify(snapshot()).includes('no tasks in .pi-tasks/'))
 
         expect(JSON.stringify(snapshot())).toContain('no tasks in .pi-tasks/')
     })
@@ -147,7 +156,7 @@ describe('/task-list is answerable from the browser', () => {
 describe('/task-config from the browser', () => {
     test('never opens the host-only settings overlay', async () => {
         const cwd = tmpRepo()
-        captureFrames()
+        const frames = captureFrames()
         const table = commandTable(registerConfig)
         const b = getBridge()
         const host = blockingCtx(cwd)
@@ -156,7 +165,8 @@ describe('/task-config from the browser', () => {
 
         // dispatchRemoteLine is what the WS server calls for a browser slash line.
         dispatchRemoteLine('/task-config', {onPlain: () => {}})
-        await new Promise(r => setTimeout(r, 60))
+        // The remote path answers with a system note; that note is the handler done.
+        await until(() => frames.some(f => f.type === 'system_note'))
 
         // The panel is a TUI component the browser cannot render, and awaiting it
         // strands the remote caller on someone else's terminal.
@@ -172,7 +182,7 @@ describe('/task-config from the browser', () => {
         b.currentCtx = blockingCtx(cwd).ctx
 
         dispatchRemoteLine('/task-config', {onPlain: () => {}})
-        await new Promise(r => setTimeout(r, 60))
+        await until(() => frames.some(f => f.type === 'system_note'))
 
         // A `notify` is removed after 4s and is absent from the snapshot; a
         // system note is committed to the transcript.
@@ -204,7 +214,7 @@ describe('a new session releases parked prompts', () => {
             settled = true
             return v
         })
-        await new Promise(r => setTimeout(r, 20))
+        await until(() => b.pending.size === 1)
         expect(b.pending.size).toBe(1)
 
         reset()
@@ -231,7 +241,7 @@ describe('what the terminal is told, the browser is told', () => {
         b.currentCtx = host.ctx
 
         dispatchRemoteLine('/task-auto-cancel', {onPlain: () => {}})
-        await new Promise(r => setTimeout(r, 20))
+        await until(() => JSON.stringify(frames).includes('No /task-auto loop is running'))
 
         // The terminal-stdin path for the same action already mirrors; the
         // browser path is the one that needs it.
@@ -248,7 +258,7 @@ describe('what the terminal is told, the browser is told', () => {
         b.currentCtx = host.ctx
 
         dispatchRemoteLine('/task', {onPlain: () => {}})
-        await new Promise(r => setTimeout(r, 20))
+        await until(() => JSON.stringify(frames).includes('Type your prompt after /task'))
 
         expect(JSON.stringify(frames)).toContain('Type your prompt after /task')
         // Prefilling the composer would type into a terminal nobody is at.
