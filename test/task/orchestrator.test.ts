@@ -1043,3 +1043,85 @@ describe('the phase-seam bag', () => {
         expect(deps.childExtensions).toEqual(['/ext.js'])
     })
 })
+
+/**
+ * WS2 — the repo-health baseline the runner stores for the verify differential.
+ */
+describe('TaskRunner — health baseline', () => {
+    const baseline = {
+        at: '2026-09-16T00:00:00.000Z',
+        treeHash: 'abc123',
+        outcome: {
+            ok: false,
+            reason: '`bun run lint` exited 1',
+            ecosystem: 'package.json',
+            commands: [{cmd: 'bun run lint', outcome: 'fail' as const, exitCode: 1}],
+            output: ''
+        }
+    }
+
+    test("the captured baseline lands in `## health baseline`, taken with the RUNNER's ctx", async () => {
+        await withTmpTaskDir(async cwd => {
+            const {ctx} = makeFakeCtx(cwd)
+            let given: unknown
+            await new TaskRunner({
+                ctx,
+                cwd,
+                rawPrompt: 'run lint',
+                sendSpec: async () => {},
+                seams: happy(),
+                healthBaseline: c => {
+                    given = c
+                    return Promise.resolve(baseline)
+                }
+            }).run()
+            const section = await readSection(cwd, 'TASK_0001', 'health baseline')
+            expect(section).toContain('"treeHash": "abc123"')
+            expect(section).toContain('bun run lint')
+            // runSingleTask replaces the session before the runner starts, so a
+            // thunk closing over the CALLER's ctx would paint its loader on a torn
+            // down session. The runner supplies its own.
+            expect(given).toBe(ctx)
+        })
+    })
+
+    test('a re-entry keeps the ORIGINAL baseline and never re-runs the statics', async () => {
+        // The baseline answers "what was already broken when this task started";
+        // re-taking it on a tree the task has since edited answers a different
+        // question under the same name.
+        await withTmpTaskDir(async cwd => {
+            const {ctx} = makeFakeCtx(cwd)
+            let captures = 0
+            const opts = {
+                ctx,
+                cwd,
+                rawPrompt: 'run lint',
+                sendSpec: async () => {},
+                seams: happy(),
+                healthBaseline: () => {
+                    captures += 1
+                    return Promise.resolve(baseline)
+                }
+            }
+            await new TaskRunner(opts).run()
+            await new TaskRunner({...opts, resumeId: 'TASK_0001'}).run()
+            expect(captures).toBe(1)
+        })
+    })
+
+    test('a capture that answers null writes no section and does not fail the run', async () => {
+        await withTmpTaskDir(async cwd => {
+            const {ctx} = makeFakeCtx(cwd)
+            const end = await new TaskRunner({
+                ctx,
+                cwd,
+                rawPrompt: 'run lint',
+                sendSpec: async () => {},
+                seams: happy(),
+                healthBaseline: () => Promise.resolve(null)
+            }).run()
+            expect(end.kind).toBe('completed')
+            expect(await readSection(cwd, 'TASK_0001', 'health baseline')).toBeNull()
+        })
+    })
+})

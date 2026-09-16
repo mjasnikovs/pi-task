@@ -64,6 +64,11 @@ import {getConfig} from '../config/config.js'
 import {appendDebugLine, gateDebugWriter} from './debug-log.js'
 import {runLogPath} from './state-dir.js'
 import {buildGateDeps, type RunTaskFn} from './gate-deps.js'
+import {
+    formatHealthBaseline,
+    HEALTH_BASELINE_SECTION,
+    type HealthBaseline
+} from './health-baseline.js'
 import {runGatesForTask, type GateDeps} from './task-gates.js'
 import {parseVerifyBlock} from './spec-validation.js'
 import {findDeliveryPhantoms, formatApiOverrideBanner} from '../workers/phantom-imports.js'
@@ -206,6 +211,19 @@ export interface TaskRunnerOptions {
      * rather than blindly redoing the task. Empty/undefined on a first attempt.
      */
     fixInstruction?: string
+    /**
+     * The repo-health baseline for the tree this task starts from
+     * (health-baseline.ts), written to `## health baseline` once the task file
+     * exists. A thunk because only the runner knows whether the file already
+     * carries one — a resumed or auto-fixed task must keep the ORIGINAL baseline,
+     * and re-running the project's statics to discard the result is the cost this
+     * saves. Absent → no section, and the verify gate establishes one lazily.
+     *
+     * It is handed the RUNNER'S ctx, not the caller's: `runSingleTask` replaces the
+     * session before the runner starts, so the ctx a call site closed over is torn
+     * down by the time this fires and its status loader would throw on it.
+     */
+    healthBaseline?: (ctx: ExtensionCommandContext) => Promise<HealthBaseline | null>
     /** True when the caller awaits the implementation turn (waitForImplementation):
      *  the impl widget stays armed across the whole impl phase (incl. compaction /
      *  steer turns) and is disarmed here. False for fire-and-forget /task, where the
@@ -226,6 +244,8 @@ export class TaskRunner {
     private readonly _planContext: string | undefined
     private readonly _planKey: string | undefined
     private readonly _fixInstruction: string | undefined
+    private readonly _healthBaseline:
+        ((ctx: ExtensionCommandContext) => Promise<HealthBaseline | null>) | undefined
     /** See {@link TaskRunnerOptions.implAwaited}. */
     private readonly _implAwaited: boolean
 
@@ -256,6 +276,7 @@ export class TaskRunner {
         this._planContext = opts.planContext
         this._planKey = opts.planKey
         this._fixInstruction = opts.fixInstruction
+        this._healthBaseline = opts.healthBaseline
         this._implAwaited = opts.implAwaited ?? false
         this._startedAt = Date.now()
 
@@ -347,6 +368,24 @@ export class TaskRunner {
         return withRun(this._ctx, {}, () => this._run())
     }
 
+    /**
+     * Store the task's repo-health baseline, ONCE. A re-entry — a resume, an
+     * autofix re-run — must keep the original: the baseline answers "what was
+     * already broken when this task started", and re-taking it on a tree the task
+     * has since edited answers a different question with the same name.
+     */
+    private async _writeHealthBaseline(cwd: string, id: string): Promise<void> {
+        if (!this._healthBaseline) return
+        try {
+            if ((await readSection(cwd, id, HEALTH_BASELINE_SECTION)) !== null) return
+            const baseline = await this._healthBaseline(this._ctx)
+            if (!baseline) return
+            await setTaskSection(cwd, id, HEALTH_BASELINE_SECTION, formatHealthBaseline(baseline))
+        } catch {
+            // The gate establishes one lazily; never fail a run over the baseline.
+        }
+    }
+
     private async _run(): Promise<RunEnd> {
         const cwd = this._cwd
         const ctx = this._ctx
@@ -397,6 +436,8 @@ export class TaskRunner {
         // the /task-auto loop) can link this run to their own bookkeeping before
         // any phase work — and recover it if the session dies mid-pipeline.
         if (this._onStart) await this._onStart(id)
+
+        await this._writeHealthBaseline(cwd, id)
 
         // Wire up the per-task debug log in this run's state dir (state-dir.ts).
         const debugLogPath = runLogPath(cwd, `${id}-debug.log`)
@@ -635,7 +676,13 @@ export class TaskRunner {
 
 export interface RunSingleTaskOptions extends Pick<
     TaskRunnerOptions,
-    'resumeId' | 'seams' | 'onStart' | 'planContext' | 'planKey' | 'fixInstruction'
+    | 'resumeId'
+    | 'seams'
+    | 'onStart'
+    | 'planContext'
+    | 'planKey'
+    | 'fixInstruction'
+    | 'healthBaseline'
 > {
     /** Await the session going idle after the spec is delivered, so the caller
      *  blocks until the agent has implemented it. Default false. */
@@ -765,6 +812,7 @@ export async function runSingleTask(
                 planContext: opts.planContext,
                 planKey: opts.planKey,
                 fixInstruction: opts.fixInstruction,
+                healthBaseline: opts.healthBaseline,
                 implAwaited: opts.waitForImplementation
             })
             runEnd = await runner.run()
@@ -818,7 +866,8 @@ export const gateRunTask: RunTaskFn = (c, cwd, t, opts) =>
         onStart: opts?.onStart,
         planContext: opts?.planContext,
         planKey: opts?.planKey,
-        fixInstruction: opts?.fixInstruction
+        fixInstruction: opts?.fixInstruction,
+        healthBaseline: opts?.healthBaseline
         // NO `seams` here, deliberately. Threading them would need a field on
         // `GateParams` and another on `GateDeps`, and nothing — production or
         // test — would set either: the gate is reached through two orchestrators
@@ -889,8 +938,18 @@ async function runGatedTaskInner(
     const announce = (msg: string, level: 'info' | 'warning' | 'error'): void =>
         announceTerminal(active, msg, level)
 
+    // The health baseline is taken at /task's OWN start, this task's equivalent of
+    // /task-auto's pre-task checkpoint: the last moment the tree is the one the
+    // task inherited. Lazy — a resumed task file already carries its original and
+    // never pays for the run. There is no composed title yet, so the loader is
+    // labelled with what the user typed, or the id being resumed.
+    const label = opts.resumeId ?? raw
+    const capture = deps.captureHealthBaseline
+    const healthBaseline =
+        capture ? {healthBaseline: (c: ExtensionCommandContext) => capture(c, cwd, label)} : {}
+
     // First implementation run (blocking).
-    const res = await deps.runTask(active, cwd, raw, {resumeId: opts.resumeId})
+    const res = await deps.runTask(active, cwd, raw, {resumeId: opts.resumeId, ...healthBaseline})
     active = res.ctx ?? active
     const tag = res.taskId || 'Task'
     // One dispatch over the named ending, so a cancel can never be reported as a

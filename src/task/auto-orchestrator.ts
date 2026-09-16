@@ -1793,6 +1793,20 @@ export async function runAutoLoop(
                     'info'
                 )
             }
+            // REPO-HEALTH BASELINE, taken here because the checkpoint above just made
+            // the tree clean: what the project's own statics say now is what this task
+            // INHERITED, and the verify gate attributes a red check against it instead
+            // of failing the task for a sibling's defect (health-baseline.ts). The
+            // inner task file does not exist yet, so the capture is handed to the
+            // runner, which writes the section once its id is allocated.
+            const capture = deps.captureHealthBaseline
+            const healthBaseline =
+                capture ?
+                    {
+                        healthBaseline: (taskCtx: ExtensionCommandContext) =>
+                            capture(taskCtx, cwd, next.title)
+                    }
+                :   {}
             // Stash ref before the task: compared after the gates so a stash pushed
             // during the task (impl model or any child) and left behind is called
             // out instead of silently waiting to detonate in a later task.
@@ -1812,6 +1826,7 @@ export async function runAutoLoop(
                 }
                 const res = await deps.runTask(active, cwd, next.title, {
                     resumeId,
+                    ...healthBaseline,
                     // Fence this step against re-expanding the whole referenced spec:
                     // name the sibling steps so refine bounds this step's slice. Only
                     // matters when refine runs fresh (a resumed task past refine ignores

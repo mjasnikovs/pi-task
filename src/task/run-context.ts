@@ -19,26 +19,20 @@
  * run found it and is not re-read: a mid-run inventory refresh would hand two
  * tasks different orientation cores for the same question.
  *
- * TREE HASH is the other half, used by the gate-evidence cache: the worktree's
- * content as a git tree object, built through a THROWAWAY index so neither the
- * real index nor the working tree is touched. A probe that stages the user's work
- * to measure it has changed what it measured.
+ * TREE HASH is the other half, used by the gate-evidence cache; its one
+ * implementation lives in tree-hash.ts.
  */
 import {createHash} from 'node:crypto'
 import * as fsp from 'node:fs/promises'
-import * as os from 'node:os'
 import * as path from 'node:path'
 import type {SpawnFn} from '../shared/child-process.js'
-import {makeGit, type GitRunner} from '../shared/git-runner.js'
+import {makeGit} from '../shared/git-runner.js'
 import {declaredDepNames, detectEcosystems, type EcosystemId} from '../workers/docs-ecosystems.js'
 import {newRunToken} from '../workers/research-cache.js'
 import {getFileInventory} from './file-inventory.js'
 import {buildOrientation, type OrientationResult} from './orientation.js'
 import {HEALTH_MANIFEST_FILES} from './repo-health-check.js'
-
-/** Keep the task machinery's own artifacts out of the tree hash: `.pi-tasks/`
- *  gains a debug-log line during the very run whose tree is being measured. */
-const EXCLUDE_TASKS_DIR = ':(exclude).pi-tasks'
+import {worktreeTreeHash} from './tree-hash.js'
 
 /**
  * What a verified command is FOR, and the only column that decides whether the
@@ -67,38 +61,13 @@ export interface VerifiedCommand {
     manifestHash: string
 }
 
-/**
- * The worktree content as a git tree object, or null when git cannot say (no
- * repo, unborn HEAD, missing binary).
- *
- * `GIT_INDEX_FILE` points at a throwaway file, so `add -A` stages into an index
- * that is deleted a moment later: the real index keeps whatever the user had
- * staged, and the working tree is never written to.
- */
+/** The worktree content as a git tree object (see tree-hash.ts), or null when
+ *  git cannot say. */
 export async function treeHash(
     cwd: string,
     opts: {signal?: AbortSignal; spawnFn?: SpawnFn} = {}
 ): Promise<string | null> {
-    return treeHashWith(makeGit(cwd, opts.signal, opts.spawnFn))
-}
-
-/** The same measurement for a caller that already has a runner bound to the repo. */
-export async function treeHashWith(git: GitRunner): Promise<string | null> {
-    const tmpIndex = path.join(
-        os.tmpdir(),
-        `pi-task-tree-index-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`
-    )
-    const env = {GIT_INDEX_FILE: tmpIndex}
-    try {
-        const empty = await git(['read-tree', '--empty'], env)
-        if (empty.exitCode !== 0) return null
-        const add = await git(['add', '-A', '--', '.', EXCLUDE_TASKS_DIR], env)
-        if (add.exitCode !== 0) return null
-        const tree = await git(['write-tree'], env)
-        return tree.exitCode === 0 ? tree.stdout.trim() : null
-    } finally {
-        await fsp.rm(tmpIndex, {force: true}).catch(() => {})
-    }
+    return worktreeTreeHash(makeGit(cwd, opts.signal, opts.spawnFn))
 }
 
 /**

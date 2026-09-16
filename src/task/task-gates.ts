@@ -40,6 +40,7 @@ import {
     type ResolutionChoice
 } from './verify-resolution.js'
 import {resolveDisposition, type SpecContradiction} from './gate-resolution.js'
+import {classifyHealthDelta, type HealthBaseline, type HealthSignal} from './health-baseline.js'
 import type {LintFixResult} from './lint-fix.js'
 import {SessionUI, notifyBoth, notifyRun} from '../remote/bridge.js'
 import {isYoloMode, YOLO_STAMP} from './yolo.js'
@@ -82,6 +83,7 @@ export interface GateDeps {
             planContext?: string
             planKey?: string
             fixInstruction?: string
+            healthBaseline?: (ctx: ExtensionCommandContext) => Promise<HealthBaseline | null>
         }
     ) => Promise<RunSingleTaskResult>
     /** Snapshot the working tree into one commit after a task passes. */
@@ -173,7 +175,20 @@ export interface GateDeps {
         ctx: ExtensionCommandContext,
         cwd: string,
         label: string
-    ) => Promise<{ok: boolean; reason: string; output?: string}>
+    ) => Promise<{ok: boolean; reason: string; output?: string} & HealthSignal>
+    /**
+     * Record what the same static checks say about the tree RIGHT NOW, as the
+     * baseline a later verify differential attributes against (health-baseline.ts).
+     * Called where the tree is committed and the task has not started — the
+     * `/task-auto` pre-task checkpoint, and `/task`'s own start. Null when the
+     * capture could not run; absent in tests → no baseline is written and the
+     * verify gate establishes one lazily.
+     */
+    captureHealthBaseline?: (
+        ctx: ExtensionCommandContext,
+        cwd: string,
+        label: string
+    ) => Promise<HealthBaseline | null>
     /** Does the working tree hold changes (excluding .pi-tasks)? Lets the pre-commit
      *  health check run only when the enforce pass actually edited something. */
     dirty?: (cwd: string) => Promise<boolean>
@@ -643,6 +658,15 @@ export async function resolveVerifyGate(
             verified = await deps.verify(active, p.cwd, p.title, p.taskId)
             await rec(verdictLine(verified))
         }
+        // Static checks the repo was ALREADY failing when this task started (see
+        // health-baseline.ts). They did not fail this gate — that is the point — but
+        // dropping them here is how a sibling's defect vanishes until the run-end
+        // gate rediscovers it with nobody's name on it. Recorded once, after the
+        // loop, whatever the verdict was: a task can verify perfectly in a red repo.
+        if (verified.inheritedHealth) {
+            await rec(`accept-debt: inherited repo health — ${verified.inheritedHealth}`)
+            await settleDebt('inherited-health', verified.inheritedHealth)
+        }
         // Loop exited because the work verified OR the user accepted the artifact. A
         // genuine clean pass is ok===true with NO reason; a no-op pass or an
         // accept-override (verified.ok still false at break) is NOT a guardable signal.
@@ -748,12 +772,13 @@ export async function runEnforcePass(
         let enforceEditsBlocked = false
         if (mode === 'edit' && deps.repoHealth && editsMade !== false) {
             const after = await deps.repoHealth(active, p.cwd, p.title)
-            // A regression needs a clean (or unknown) baseline turning to a fail. If
-            // healthBefore is undefined (repoHealth was absent at baseline time) treat
-            // the baseline as clean — the conservative absolute behavior.
-            const wasHealthyBefore = healthBefore?.ok ?? true
-            const regressed = !after.ok && wasHealthyBefore
-            if (regressed) {
+            // The SAME differential the verify gate runs (health-baseline.ts), per
+            // command rather than per overall verdict — two runs can both be red
+            // while a different check failed in each. A missing baseline is no
+            // longer read as a clean one: that default silently turned this
+            // differential back into the absolute check it exists to replace.
+            const delta = classifyHealthDelta(healthBefore ?? null, after)
+            if (delta === 'regressed') {
                 enforceEditsBlocked = true
                 const outputTail = after.output ? ` — output:\n${clampOutput(after.output)}` : ''
                 if (deps.discardEdits) {
@@ -771,7 +796,7 @@ export async function runEnforcePass(
                     `${p.tag}: guideline edits on "${p.title}" regressed repo health (${after.reason.slice(0, 120)}) — discarded before commit.`,
                     'warning'
                 )
-            } else if (!after.ok) {
+            } else if (delta === 'pre-existing') {
                 // Failing both before and after → not enforce's fault. Keep the edits;
                 // record that the repo entered the gate already unhealthy so the trail
                 // explains why a still-failing repo did NOT trigger a discard here.

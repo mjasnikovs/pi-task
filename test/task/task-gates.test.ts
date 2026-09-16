@@ -2029,3 +2029,134 @@ test('runGatesForTask: an AUTOFIX re-run the USER cancelled is reported as cance
         expect(r.kind).not.toBe('interrupted')
     })
 })
+
+/**
+ * WS2 — the differential repo-health gate, at the two sites that decide against it.
+ */
+describe('inherited repo health', () => {
+    test('a PASS in an already-red repo still records an inherited-health debt', async () => {
+        // Dropping it here is how a sibling's defect disappears until the run-end
+        // gate rediscovers it with nobody's name on it.
+        await withTmpTaskDir(async dir => {
+            const {ctx} = makeFakeCtx(dir)
+            const trail: string[] = []
+            const inherited: string[] = []
+            const accepted: string[] = []
+            const deps = makeDeps({
+                record: (_c, _i, line) => {
+                    trail.push(line)
+                    return Promise.resolve()
+                },
+                verify: () =>
+                    Promise.resolve({
+                        ok: true,
+                        inheritedHealth: 'repo health: `bun run lint` exited 1 — already failing'
+                    }),
+                recordDebt: debtSinks({
+                    'inherited-health': (_id, reason) => inherited.push(reason),
+                    accepted: (_id, reason) => accepted.push(reason)
+                })
+            })
+            const r = await runGatesForTask(ctx, deps, baseParams({cwd: dir}))
+            expect(r.kind).toBe('done')
+            expect(inherited).toEqual(['repo health: `bun run lint` exited 1 — already failing'])
+            // NOT the 'accepted' class, which asserts a human weighed a failing artifact.
+            expect(accepted).toEqual([])
+            expect(trail.some(l => l.startsWith('accept-debt: inherited repo health'))).toBe(true)
+        })
+    })
+
+    test('enforce no longer reads a MISSING baseline as a clean one', async () => {
+        // `healthBefore?.ok ?? true` turned the differential back into the absolute
+        // check it exists to replace: with no baseline, a red repo was enforce's fault.
+        await withTmpTaskDir(async dir => {
+            const {ctx} = makeFakeCtx(dir)
+            const trail: string[] = []
+            let discarded = 0
+            let healthCall = 0
+            const deps = makeDeps({
+                record: (_c, _i, line) => {
+                    trail.push(line)
+                    return Promise.resolve()
+                },
+                verify: () => Promise.resolve({ok: true}),
+                enforce: () => Promise.resolve({ok: true}),
+                dirty: () => Promise.resolve(true),
+                // Red both before and after, and per COMMAND identically so — the
+                // overall boolean alone could not tell this from a new breakage.
+                repoHealth: () => {
+                    healthCall += 1
+                    return Promise.resolve({
+                        ok: false,
+                        reason: '`bun run lint` exited 1',
+                        output: '',
+                        commands: [{cmd: 'bun run lint', outcome: 'fail' as const, exitCode: 1}]
+                    })
+                },
+                discardEdits: () => {
+                    discarded++
+                    return Promise.resolve()
+                }
+            })
+            const r = await runGatesForTask(ctx, deps, baseParams({cwd: dir}))
+            expect(r.kind).toBe('done')
+            expect(healthCall).toBe(2) // baseline, then differential
+            expect(discarded).toBe(0)
+            expect(trail.some(l => l.includes('ALREADY failing before'))).toBe(true)
+        })
+    })
+
+    test('enforce discards edits that break a DIFFERENT check than the one already red', async () => {
+        // Both runs are `ok: false`; only the per-command comparison sees the new break.
+        await withTmpTaskDir(async dir => {
+            const {ctx} = makeFakeCtx(dir)
+            const trail: string[] = []
+            let discarded = 0
+            let healthCall = 0
+            const deps = makeDeps({
+                record: (_c, _i, line) => {
+                    trail.push(line)
+                    return Promise.resolve()
+                },
+                verify: () => Promise.resolve({ok: true}),
+                enforce: () => Promise.resolve({ok: true}),
+                dirty: () => Promise.resolve(true),
+                repoHealth: () => {
+                    healthCall += 1
+                    return Promise.resolve(
+                        healthCall === 1 ?
+                            {
+                                ok: false,
+                                reason: '`bun run lint` exited 1',
+                                output: '',
+                                commands: [
+                                    {cmd: 'bun run lint', outcome: 'fail' as const, exitCode: 1}
+                                ]
+                            }
+                        :   {
+                                ok: false,
+                                reason: '`bun run typecheck` exited 2',
+                                output: '',
+                                commands: [
+                                    {cmd: 'bun run lint', outcome: 'pass' as const, exitCode: 0},
+                                    {
+                                        cmd: 'bun run typecheck',
+                                        outcome: 'fail' as const,
+                                        exitCode: 2
+                                    }
+                                ]
+                            }
+                    )
+                },
+                discardEdits: () => {
+                    discarded++
+                    return Promise.resolve()
+                }
+            })
+            const r = await runGatesForTask(ctx, deps, baseParams({cwd: dir}))
+            expect(r.kind).toBe('done')
+            expect(discarded).toBe(1)
+            expect(trail.some(l => l.includes('REGRESSED repo health'))).toBe(true)
+        })
+    })
+})

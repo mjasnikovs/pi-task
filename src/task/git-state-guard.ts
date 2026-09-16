@@ -47,7 +47,7 @@ import * as path from 'node:path'
 import type {SpawnFn} from '../shared/child-process.js'
 import {makeGit, type GitRunner} from '../shared/git-runner.js'
 import {isRegenerableArtifact} from './regenerable-artifacts.js'
-import {treeHashWith} from './run-context.js'
+import {worktreeTreeHash} from './tree-hash.js'
 
 export interface GitStateSnapshot {
     /** false → not a usable git worktree; the guard is disabled for this run. */
@@ -182,7 +182,7 @@ export async function captureGitState(
         headSha: head.stdout.trim(),
         branchRef: branch.exitCode === 0 ? branch.stdout.trim() : null,
         stashSha: stash.exitCode === 0 ? stash.stdout.trim() : null,
-        treeSha: await treeHashWith(git)
+        treeSha: await worktreeTreeHash(git)
     }
 }
 
@@ -349,7 +349,7 @@ export async function reconcileGitState(
 
     // 2. Worktree content.
     if (before.treeSha) {
-        const afterTree = await treeHashWith(git)
+        const afterTree = await worktreeTreeHash(git)
         if (afterTree && afterTree !== before.treeSha) {
             const tracked = await trackedPathsAt(git, before.headSha)
             const ctCacheDirs = readCtCacheDirs(cwd)
