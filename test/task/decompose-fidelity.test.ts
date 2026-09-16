@@ -36,38 +36,41 @@ const RUN11_LISTINGS_TITLE =
     'Implement listings API — CRUD endpoints, search/filter/sort/pagination with pg_trgm, '
     + 'sold toggle, ownership checks, contact reveal gate'
 
+/** The citations `extractTitleSource` grounded, as the model wrote them — the
+ *  grounding verdict, without the block each one landed in. */
+function citations(title: string): string[] {
+    return extractTitleSource(title, PROJECT_SPEC).sources.map(s => s.quote)
+}
+
 describe('extractTitleSource (grounding, contracts.ts pattern)', () => {
     test('a grounded verbatim citation is kept and the clause stripped', () => {
         const t = `Implement auth [source: "${AUTH_LINE}"]`
-        expect(extractTitleSource(t, PROJECT_SPEC)).toEqual({
-            base: 'Implement auth',
-            sources: [AUTH_LINE]
-        })
+        expect(extractTitleSource(t, PROJECT_SPEC).base).toBe('Implement auth')
+        expect(citations(t)).toEqual([AUTH_LINE])
     })
 
     test('a fabricated/paraphrased citation is stripped and NOT trusted', () => {
         const t = 'Implement auth [source: "Auth milestone: build sessions and tests"]'
-        expect(extractTitleSource(t, PROJECT_SPEC)).toEqual({base: 'Implement auth', sources: []})
+        expect(extractTitleSource(t, PROJECT_SPEC).base).toBe('Implement auth')
+        expect(citations(t)).toEqual([])
     })
 
     test('grounding is whitespace- and case-insensitive (line-wrapped quote still counts)', () => {
         const wrapped = '2. **auth** — sessions,   login/logout/me, guards + tests.'
-        const {sources} = extractTitleSource(`x [source: "${wrapped}"]`, PROJECT_SPEC)
-        expect(sources).toEqual([wrapped])
+        expect(citations(`x [source: "${wrapped}"]`)).toEqual([wrapped])
     })
 
     test('no clause ⇒ title passes through untouched', () => {
-        expect(extractTitleSource('Implement auth — guards', PROJECT_SPEC)).toEqual({
-            base: 'Implement auth — guards',
-            sources: []
-        })
+        expect(extractTitleSource('Implement auth — guards', PROJECT_SPEC).base).toBe(
+            'Implement auth — guards'
+        )
+        expect(citations('Implement auth — guards')).toEqual([])
     })
 
     test('the clause is only recognised at the END (after any [decisions: …])', () => {
         const t = `Build shell [decisions: use bun] [source: "${AUTH_LINE}"]`
-        const r = extractTitleSource(t, PROJECT_SPEC)
-        expect(r.base).toBe('Build shell [decisions: use bun]')
-        expect(r.sources).toEqual([AUTH_LINE])
+        expect(extractTitleSource(t, PROJECT_SPEC).base).toBe('Build shell [decisions: use bun]')
+        expect(citations(t)).toEqual([AUTH_LINE])
     })
 
     // THE GREEDY-REGEX REGRESSION. The prompt asks for ONE trailing citation, and
@@ -77,14 +80,13 @@ describe('extractTitleSource (grounding, contracts.ts pattern)', () => {
     // nowhere, so two real citations become zero.
     test('MULTIPLE trailing clauses each ground separately', () => {
         const t = `Build it [source: "${AUTH_LINE}"] [source: "${LISTINGS_LINE}"]`
-        const r = extractTitleSource(t, PROJECT_SPEC)
-        expect(r.base).toBe('Build it')
-        expect(r.sources).toEqual([AUTH_LINE, LISTINGS_LINE])
+        expect(extractTitleSource(t, PROJECT_SPEC).base).toBe('Build it')
+        expect(citations(t)).toEqual([AUTH_LINE, LISTINGS_LINE])
     })
 
     test('among several clauses, only the fabricated one is dropped', () => {
         const t = `Build it [source: "${AUTH_LINE}"] [source: "invented requirement line"]`
-        expect(extractTitleSource(t, PROJECT_SPEC).sources).toEqual([AUTH_LINE])
+        expect(citations(t)).toEqual([AUTH_LINE])
     })
 
     // THE MARKUP REGRESSION. A model copies the line as RENDERED, without its
@@ -93,14 +95,12 @@ describe('extractTitleSource (grounding, contracts.ts pattern)', () => {
     // worked example.
     test('a quote copied without its markdown markup still grounds', () => {
         const rendered = 'Auth — sessions, login/logout/me, guards + tests.'
-        expect(extractTitleSource(`x [source: "${rendered}"]`, PROJECT_SPEC).sources).toEqual([
-            rendered
-        ])
+        expect(citations(`x [source: "${rendered}"]`)).toEqual([rendered])
     })
 
     test('stripping markup does NOT let an altered line through', () => {
         const altered = 'Auth — sessions, login/logout/me, firewalls + tests.'
-        expect(extractTitleSource(`x [source: "${altered}"]`, PROJECT_SPEC).sources).toEqual([])
+        expect(citations(`x [source: "${altered}"]`)).toEqual([])
     })
 
     // THE BACKTICK REGRESSION, the same class as the markup one. A code span
@@ -109,9 +109,7 @@ describe('extractTitleSource (grounding, contracts.ts pattern)', () => {
     // substring test rejects.
     test('a quote copied without its code backticks still grounds', () => {
         const rendered = 'Invites — create/validate/redeem, /join/:token page.'
-        expect(extractTitleSource(`x [source: "${rendered}"]`, PROJECT_SPEC).sources).toEqual([
-            rendered
-        ])
+        expect(citations(`x [source: "${rendered}"]`)).toEqual([rendered])
     })
 
     test('a backtick-stripped quote does NOT collapse the spacing around it', () => {
@@ -119,14 +117,12 @@ describe('extractTitleSource (grounding, contracts.ts pattern)', () => {
         // turns a pipe into a SPACE (decompose-fidelity.ts:67-68), so `a` `b`
         // normalises to "a b" and a faithful copy still matches.
         const rendered = 'hono 4.12.27 — HTTP framework, RPC (hono/client)'
-        expect(extractTitleSource(`x [source: "${rendered}"]`, PROJECT_SPEC).sources).toEqual([
-            rendered
-        ])
+        expect(citations(`x [source: "${rendered}"]`)).toEqual([rendered])
     })
 
     test('stripping backticks does NOT let an altered line through', () => {
         const altered = 'Invites — create/validate/revoke, /join/:token page.'
-        expect(extractTitleSource(`x [source: "${altered}"]`, PROJECT_SPEC).sources).toEqual([])
+        expect(citations(`x [source: "${altered}"]`)).toEqual([])
     })
 
     // THE ESCAPE REGRESSION. The clause is double-quoted, so a spec line that
@@ -137,9 +133,7 @@ describe('extractTitleSource (grounding, contracts.ts pattern)', () => {
             'Verify Bun/Hono/Tailwind/Playwright API names against current docs '
             + '(e.g. the `import { sql } from \\"bun\\"` gotcha — there is no '
             + '`bun:sql` module).'
-        expect(extractTitleSource(`x [source: "${withQuotes}"]`, PROJECT_SPEC).sources.length).toBe(
-            1
-        )
+        expect(citations(`x [source: "${withQuotes}"]`)).toHaveLength(1)
     })
 
     test('unescaping does NOT let an altered line through', () => {
@@ -147,7 +141,7 @@ describe('extractTitleSource (grounding, contracts.ts pattern)', () => {
             'Verify Bun/Hono/Tailwind/Playwright API names against outdated docs '
             + '(e.g. the `import { sql } from \\"bun\\"` gotcha — there is no '
             + '`bun:sql` module).'
-        expect(extractTitleSource(`x [source: "${altered}"]`, PROJECT_SPEC).sources).toEqual([])
+        expect(citations(`x [source: "${altered}"]`)).toEqual([])
     })
 })
 
@@ -209,10 +203,10 @@ describe('reconcileTitleSources', () => {
             'Scaffold project structure — package.json, tsconfig, docker-compose Postgres'
         )
         expect(plan.titles[1]).toBe(
-            `${RUN11_AUTH_TITLE} — MUST also cover (restored from its spec line): tests`
+            `${RUN11_AUTH_TITLE} — MUST also cover (restored from its spec line): "tests"`
         )
         expect(plan.titles[2]).toBe(
-            `${RUN11_LISTINGS_TITLE} — MUST also cover (restored from its spec line): tests`
+            `${RUN11_LISTINGS_TITLE} — MUST also cover (restored from its spec line): "tests"`
         )
         expect(plan.titles[3]).toBe('Build client shell — Bun.build config, wouter router setup')
     })

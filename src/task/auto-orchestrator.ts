@@ -26,6 +26,7 @@ import {
     buildAutoBody,
     parseDecomposeList,
     parseCoverageVerdict,
+    UNNAMED_COVERAGE_GAP,
     type CoverageVerdict,
     parseTaskList,
     checkOffTask,
@@ -87,7 +88,7 @@ import {
     keepGroundedContracts,
     appendContracts
 } from './contracts.js'
-import {reconcileTitleSources} from './decompose-fidelity.js'
+import {reconcileTitleSources, renderFragments} from './decompose-fidelity.js'
 import {
     granularityFloor,
     granularitySplitHint,
@@ -907,7 +908,7 @@ export async function decomposePlan(
                 `decompose fidelity: ${plan.sourced}/${plan.titles.length} titles cited a grounded source; `
                     + `${plan.restored.length} restoration(s)`
                     + plan.restored
-                        .map(r => ` [task ${r.index + 1}: ${r.fragments.join(', ')}]`)
+                        .map(r => ` [task ${r.index + 1}: ${renderFragments(r.fragments)}]`)
                         .join('')
             )
         }
@@ -1070,7 +1071,13 @@ export async function coverPlan(
             rethrowIfCancelled(err)
             verdict = null
         }
-        const verdictMissing = verdict?.kind === 'incomplete' ? verdict.missing : []
+        // An `unparseable` verdict IS a verdict of INCOMPLETE — it just names no
+        // area. Reading it as "nothing missing" shipped a plan the judge had ruled
+        // incomplete; the host names the gap instead so the round still happens.
+        const verdictMissing =
+            verdict?.kind === 'incomplete' ? verdict.missing
+            : verdict?.kind === 'unparseable' ? [UNNAMED_COVERAGE_GAP]
+            : []
         let acc: CoverageAccounting | null = null
         // The monotonic guard's owned-set is grounded DETERMINISTICALLY in
         // requirement↔title token overlap — NOT the coverage-map model's TASK
@@ -1205,6 +1212,10 @@ export async function coverPlan(
                             .slice(0, 200)}]`
                     :   '')
             )
+        }
+        if (outcome.decision.terminal === true) {
+            logPlanDebug(cwd, 'decompose-coverage: TERMINAL — another round asks the same question')
+            break
         }
     }
     const best = rounds.best()

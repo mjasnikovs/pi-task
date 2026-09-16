@@ -7,6 +7,7 @@ import {
 } from '../../src/task/coverage-loop.js'
 import {
     accountCoverage,
+    classifyRequirement,
     ownedRequirementIndices,
     isCrossCuttingRequirement,
     type ReqMapping,
@@ -55,6 +56,49 @@ describe('isCrossCuttingRequirement', () => {
             expect(isCrossCuttingRequirement(q)).toBe(false)
         }
     })
+
+    // THE BARE-NEGATIVE REGRESSION. `no`, `not` and `none` were alternatives in
+    // the prohibition pattern, so any statement that happened to contain one was
+    // carried as a rule no task delivers — and the coverage map then reported the
+    // behaviour it describes as owned by nobody.
+    test('a bare negative inside an ownable behaviour is NOT a prohibition', () => {
+        for (const q of [
+            'the marketplace grid renders even when the user is not logged in',
+            'the empty state shows when there are no listings yet',
+            'none of the seeded rows carry a photo'
+        ]) {
+            expect(classifyRequirement(q)).toBe('ownable')
+        }
+    })
+
+    test('the absence shape bare "no" used to carry is still a prohibition', () => {
+        expect(classifyRequirement('the library must have no runtime dependencies')).toBe(
+            'prohibition'
+        )
+        expect(classifyRequirement('the payload must contain no phone number')).toBe('prohibition')
+    })
+
+    test('descriptive needs BOTH marks — preamble position and no modal', () => {
+        const description = 'Invite-only used-parts marketplace for a local Mazda MX-5 club.'
+        expect(classifyRequirement(description, true)).toBe('descriptive')
+        expect(classifyRequirement(description, false)).toBe('ownable')
+        expect(classifyRequirement('Every listing must carry a price.', true)).toBe('ownable')
+    })
+})
+
+// A description no task can own is CARRIED, never fed back as a missing area —
+// left in `unmapped` it holds the verdict INCOMPLETE and regenerates the whole
+// plan every round.
+describe('accountCoverage routes a descriptive requirement cross-cutting', () => {
+    test('a NONE-mapped preamble description is carried, not unmapped', () => {
+        const reqs: RequirementEntry[] = [
+            {quote: 'Invite-only used-parts marketplace for a club.', anchor: '', preamble: true},
+            {quote: 'the grid paginates at twelve cards', anchor: '', preamble: false}
+        ]
+        const acc = accountCoverage(reqs, [{kind: 'none'}, {kind: 'none'}])
+        expect(acc.crossCutting.map(r => r.quote)).toEqual([reqs[0].quote])
+        expect(acc.unmapped.map(r => r.quote)).toEqual([reqs[1].quote])
+    })
 })
 
 // ─── decideAdoption ──────────────────────────────────────────────────────────
@@ -99,12 +143,26 @@ describe('decideAdoption', () => {
     // monotone in the title set, and the reprompt explicitly asks for a superset
     // of the previous titles. So growth with zero coverage gain needs its own
     // tiebreak.
-    test('rejects growth that buys no new coverage', () => {
+    test('rejects growth that buys no new coverage, and ends the loop', () => {
         const d = decideAdoption(plan(26, [0, 1, 2]), plan(60, [0, 1, 2]), true)
         expect(d.adopt).toBe(false)
         expect(d.reason).toContain('no coverage gain')
         expect(d.reason).toContain('+34 titles')
         expect(d.dropped).toEqual([])
+        // The reprompt asks for a superset, so another round re-asks the question
+        // this one just answered.
+        expect(d.terminal).toBe(true)
+    })
+
+    test('every other verdict leaves the loop running', () => {
+        for (const d of [
+            decideAdoption(plan(2, [0, 1]), plan(2, [0, 2]), true),
+            decideAdoption(plan(2, [0, 1]), plan(3, [0, 1, 2]), true),
+            decideAdoption(plan(4, [0, 1, 2]), plan(1, [0, 1, 2, 3]), true),
+            decideAdoption(plan(3, [], ['a']), plan(30, [], ['a']), false)
+        ]) {
+            expect(d.terminal).toBeUndefined()
+        }
     })
 
     test('growth that DOES buy coverage is still adopted', () => {

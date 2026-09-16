@@ -51,6 +51,7 @@
 import {existsSync, readdirSync, readFileSync} from 'node:fs'
 import * as path from 'node:path'
 import {shippedSources, stripCommentLines, SOURCE_HTML_RE, SOURCE_JS_RE} from './shipped-source.js'
+import {blocksOf, parseSpecDoc, type BlockKind} from './spec-doc.js'
 
 export interface RuntimeRef {
     /** Repo-relative normalized path (posix separators, no leading ./). */
@@ -1015,10 +1016,16 @@ const PROSE_CONSUME_RE = /\b(?:serves?|serving|served|fallback|reads?|loads?|ren
 const PROSE_ASSET_EXT_RE =
     /\.(?:html?|css|m?js|cjs|json|svg|png|jpe?g|gif|webp|ico|woff2?|ttf|otf|wasm|webmanifest|xml|csv|sql|ya?ml|toml|pdf|mp[34]|db|sqlite)$/i
 
+/** The block kinds that can carry consuming PROSE. A fence is code — its
+ *  `serve`/`read` calls are the code channel's to resolve, not prose's — and a
+ *  blockquote is quoting something the spec is not itself saying. */
+const PROSE_KINDS: ReadonlySet<BlockKind> = new Set<BlockKind>(['para', 'list-item', 'table-row'])
+
 /** Backticked, asset-extension, path-shaped tokens on consuming-verb lines. */
 export function extractSpecProseRefs(spec: string): RuntimeRef[] {
     const out: RuntimeRef[] = []
-    for (const line of spec.split('\n')) {
+    const prose = blocksOf(parseSpecDoc(spec)).filter(b => PROSE_KINDS.has(b.kind))
+    for (const line of prose.flatMap(b => b.text.split('\n'))) {
         if (!PROSE_CONSUME_RE.test(line)) continue
         const tick = /`([^`\n]+)`/g
         for (let m = tick.exec(line); m !== null; m = tick.exec(line)) {

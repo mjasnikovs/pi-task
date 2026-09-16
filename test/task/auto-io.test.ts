@@ -199,12 +199,22 @@ test('findResumableAuto: ignores completed, picks most-recently-updated resumabl
 test('parseCoverageVerdict: COMPLETE, INCOMPLETE+missing, caps at 8, null on prose', () => {
     expect(parseCoverageVerdict('COVERAGE: COMPLETE')).toEqual({kind: 'complete', missing: []})
     expect(parseCoverageVerdict('  coverage: complete  ')).toEqual({kind: 'complete', missing: []})
-    expect(
-        parseCoverageVerdict('COVERAGE: INCOMPLETE\nMISSING: auth routes\nMISSING: admin page')
-    ).toEqual({kind: 'incomplete', missing: ['auth routes', 'admin page']})
+    const listed = parseCoverageVerdict(
+        'COVERAGE: INCOMPLETE\nMISSING: auth routes\nMISSING: admin page'
+    )
+    expect(listed).toEqual({kind: 'incomplete', missing: ['auth routes', 'admin page']})
     const many = ['COVERAGE: INCOMPLETE', ...Array.from({length: 12}, (_, i) => `MISSING: a${i}`)]
-    expect(parseCoverageVerdict(many.join('\n'))!.missing.length).toBe(8)
-    // Prose without the tag, and INCOMPLETE with nothing actionable → null.
+    const capped = parseCoverageVerdict(many.join('\n'))
+    expect(capped?.kind === 'incomplete' && capped.missing.length).toBe(8)
     expect(parseCoverageVerdict('The list looks fine to me.')).toBeNull()
-    expect(parseCoverageVerdict('COVERAGE: INCOMPLETE')).toBeNull()
+})
+
+// THE SHIPPED-AS-COMPLETE REGRESSION. Prose and "INCOMPLETE naming nothing" both
+// used to parse as null, and the caller reads null as an empty missing-list — so
+// a plan the judge had just ruled INCOMPLETE shipped, logged as COMPLETE. They
+// are different answers and must parse to different values.
+test('parseCoverageVerdict: an INCOMPLETE that names nothing is unparseable, not null', () => {
+    expect(parseCoverageVerdict('COVERAGE: INCOMPLETE')).toEqual({kind: 'unparseable'})
+    expect(parseCoverageVerdict('COVERAGE: INCOMPLETE\nMISSING:')).toEqual({kind: 'unparseable'})
+    expect(parseCoverageVerdict('I think the plan is fine.')).toBeNull()
 })

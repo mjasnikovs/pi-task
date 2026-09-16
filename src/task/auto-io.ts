@@ -63,20 +63,31 @@ export function parseDecomposeList(raw: string): string[] {
     return out
 }
 
+/** The MISSING bound the coverage prompt states; a longer list is truncated
+ *  rather than rejected. */
+const MAX_MISSING_AREAS = 8
+
 /** Parsed DECOMPOSE_COVERAGE_PROMPT verdict. */
-export interface CoverageVerdict {
-    kind: 'complete' | 'incomplete'
-    missing: string[]
-}
+export type CoverageVerdict =
+    | {kind: 'complete'; missing: string[]}
+    | {kind: 'incomplete'; missing: string[]}
+    /** The judge DID rule INCOMPLETE but named nothing to reprompt with. */
+    | {kind: 'unparseable'}
+
+/** What an `unparseable` verdict contributes to the plan's missing-area list, so
+ *  the judge's own INCOMPLETE cannot be shipped as COMPLETE. */
+export const UNNAMED_COVERAGE_GAP =
+    'the coverage judge ruled INCOMPLETE without naming the uncovered area'
 
 /**
  * Parse the coverage-triage child's verdict. Returns null when no COVERAGE tag is
- * present (the model wrote prose), and the caller reads a null verdict as an
- * empty missing-list, so a malformed judgment can never block planning.
+ * present at all (the model wrote prose), and the caller reads a null verdict as
+ * an empty missing-list, so a malformed judgment can never block planning.
  *
- * `COVERAGE: INCOMPLETE` with no MISSING lines also returns null, deliberately:
- * it names nothing to reprompt with, so treating it as a verdict would loop
- * blind. Confirmed by running both shapes.
+ * `COVERAGE: INCOMPLETE` with no MISSING lines is NOT null, and that distinction
+ * is the whole point: prose is no verdict, while this is a verdict of INCOMPLETE
+ * that happens to name nothing. Collapsing the two shipped a plan the judge had
+ * just ruled incomplete, logged as COMPLETE.
  */
 export function parseCoverageVerdict(raw: string): CoverageVerdict | null {
     const tag = /^\s*COVERAGE:\s*(COMPLETE|INCOMPLETE)\s*$/im.exec(raw)
@@ -86,11 +97,9 @@ export function parseCoverageVerdict(raw: string): CoverageVerdict | null {
     for (const line of raw.split('\n')) {
         const m = /^\s*MISSING:\s*(.+?)\s*$/i.exec(line)
         if (m && m[1].length > 0) missing.push(m[1])
-        if (missing.length >= 8) break
+        if (missing.length >= MAX_MISSING_AREAS) break
     }
-    // INCOMPLETE with no MISSING lines carries no actionable signal to reprompt
-    // with — treat it like an unparseable verdict rather than looping blind.
-    return missing.length === 0 ? null : {kind: 'incomplete', missing}
+    return missing.length === 0 ? {kind: 'unparseable'} : {kind: 'incomplete', missing}
 }
 
 const CHECKBOX_RE = /^- \[([ xX])\]\s+(.+?)\s*$/

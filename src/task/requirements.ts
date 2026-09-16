@@ -10,8 +10,9 @@
  *
  * Mechanism (spec-shape-agnostic, contracts.ts pattern):
  *   1. EXTRACT requirement units as VERBATIM quotes from whatever structure the
- *      spec has (headings, tables, bullets, prose) — each host-GROUNDED by the
- *      normalised-substring guard, so a fabricated requirement can never enter.
+ *      spec has (headings, bullets, prose) — each host-GROUNDED by the
+ *      normalised-substring guard against a CANDIDATE block (`RequirementPolicy`),
+ *      so neither a fabricated requirement nor a DDL column can enter.
  *   2. MAP each grounded requirement against the task list (a per-requirement
  *      verdict: TASK n / CROSS-CUTTING / NONE). Completeness is then computed
  *      HOST-SIDE from the map — a blanket "COMPLETE" is structurally impossible
@@ -29,6 +30,17 @@
  */
 import {normalise} from './contracts.js'
 import {makeLedger} from './ledger.js'
+import {
+    blocksOf,
+    demark,
+    groundIn,
+    parseSpecDoc,
+    preambleOf,
+    sectionPlains,
+    type Block,
+    type BlockKind,
+    type SpecDoc
+} from './spec-doc.js'
 
 const REQUIREMENTS_FILE = 'requirements.md'
 /** Cap kept entries so the injected block stays bounded on a large design. */
@@ -37,12 +49,42 @@ const MAX_REQUIREMENTS = 40
 const MAX_REQUIREMENT_LENGTH = 300
 /** Too short to state an obligation (and to ground unambiguously). */
 const MIN_QUOTE_LENGTH = 6
+/** The checklist rides into the extraction prompt, so it stays readable. */
+const MAX_OBLIGATION_PASSAGES = 20
 
 export interface RequirementEntry {
     /** The verbatim quote from the source doc — the obligation. */
     quote: string
-    /** Where it came from (heading/section, or 'prose'). */
+    /** Where it came from (heading/section, or 'prose'). Model-authored. */
     anchor: string
+    /** 1-based source line of the block it grounded in — the HOST's anchor. */
+    line?: number
+    /** Grounded above the first heading, where a doc says what the thing IS. */
+    preamble?: boolean
+}
+
+/**
+ * Which blocks may carry a requirement.
+ *
+ * The model still proposes whatever it likes; this decides what GROUNDING will
+ * accept. A fenced block is code or a file tree, and a table row is a grid of
+ * columns whose cells only read as a sentence by accident — both produced
+ * "requirements" like a DDL column definition or a router-table guard cell,
+ * which no task can own and which then held the coverage verdict INCOMPLETE.
+ */
+export interface RequirementPolicy {
+    candidateKinds: ReadonlySet<BlockKind>
+    excludePreamble: boolean
+}
+
+export const REQUIREMENT_POLICY: RequirementPolicy = {
+    candidateKinds: new Set<BlockKind>(['para', 'list-item', 'quote']),
+    excludePreamble: true
+}
+
+function candidates(doc: SpecDoc, policy: RequirementPolicy): (b: Block) => boolean {
+    const excluded = policy.excludePreamble ? new Set(preambleOf(doc)) : new Set<Block>()
+    return b => policy.candidateKinds.has(b.kind) && !excluded.has(b)
 }
 
 /**
@@ -91,23 +133,29 @@ export function parseRequirementLines(text: string): RequirementEntry[] {
     return entries
 }
 
-/** THE ANTI-SYNTHESIS GUARD: keep only entries whose quote is a normalised
- *  substring of the source doc (same rule as keepGroundedContracts). Does NOT
- *  cap — capping is capRequirements' job, which protects obligation-marked
- *  passages from doc-order truncation. */
+/** THE ANTI-SYNTHESIS GUARD: keep only entries whose quote grounds in a CANDIDATE
+ *  block of the source doc (same rule as keepGroundedContracts, narrowed by the
+ *  policy). A quote whose only match lies in an excluded block is dropped — the
+ *  model is free to propose it, the document decides. Does NOT cap — capping is
+ *  capRequirements' job, which protects obligation-marked passages from doc-order
+ *  truncation. */
 export function keepGroundedRequirements(
     entries: RequirementEntry[],
-    sourceDoc: string
+    sourceDoc: string | SpecDoc,
+    policy: RequirementPolicy = REQUIREMENT_POLICY
 ): RequirementEntry[] {
-    const haystack = normalise(sourceDoc)
+    const doc = typeof sourceDoc === 'string' ? parseSpecDoc(sourceDoc) : sourceDoc
+    const accept = candidates(doc, policy)
+    const preamble = new Set(preambleOf(doc))
     const seen = new Set<string>()
     const kept: RequirementEntry[] = []
     for (const e of entries) {
-        const key = normalise(e.quote)
+        const key = normalise(demark(e.quote))
         if (key.length === 0 || seen.has(key)) continue
-        if (!haystack.includes(key)) continue
+        const block = groundIn(doc, e.quote, accept)
+        if (block === null) continue
         seen.add(key)
-        kept.push(e)
+        kept.push({...e, line: block.line, preamble: preamble.has(block)})
     }
     return kept
 }
@@ -137,9 +185,9 @@ export function capRequirements(
     deprioritiseLowValue = true
 ): RequirementEntry[] {
     if (entries.length <= MAX_REQUIREMENTS) return entries
-    const norms = passages.map(normalise)
+    const norms = passages.map(p => normalise(demark(p)))
     const covers = (e: RequirementEntry): boolean => {
-        const q = normalise(e.quote)
+        const q = normalise(demark(e.quote))
         return norms.some(p => p.includes(q))
     }
     const marked = entries.filter(covers)
@@ -256,23 +304,6 @@ function budgetedByObligation(
     return [...keep, ...restored]
 }
 
-/** The doc split into heading-delimited sections, each pre-normalised for
- *  containment tests. Text before the first heading is its own section. */
-function normalisedSections(doc: string): string[] {
-    const out: string[] = []
-    let current: string[] = []
-    for (const line of doc.replace(/\r\n?/g, '\n').split('\n')) {
-        if (/^#{1,6}\s+\S/.test(line)) {
-            if (current.length > 0) out.push(normalise(current.join('\n')))
-            current = [line]
-            continue
-        }
-        current.push(line)
-    }
-    if (current.length > 0) out.push(normalise(current.join('\n')))
-    return out.filter(s => s.length > 0)
-}
-
 /** Round-robin fill across doc sections: bucket each entry by the FIRST section
  *  whose normalised text contains its quote (the same containment rule that
  *  grounded it), take each bucket's entries in in-section order, one per bucket
@@ -285,10 +316,10 @@ function sectionFairFill(
 ): RequirementEntry[] {
     if (budget <= 0) return []
     if (!sourceDoc) return entries.slice(0, budget)
-    const sections = normalisedSections(sourceDoc)
+    const sections = sectionPlains(parseSpecDoc(sourceDoc))
     const buckets = new Map<number, Array<{e: RequirementEntry; at: number}>>()
     entries.forEach((e, given) => {
-        const q = normalise(e.quote)
+        const q = normalise(demark(e.quote))
         let b = sections.findIndex(s => s.includes(q))
         let at: number
         if (b < 0) {
@@ -327,17 +358,23 @@ function sectionFairFill(
  * uncoveredPassages() below turns "a marked passage produced no quote" into hard
  * evidence for one forced re-extraction.
  */
-export function enumerateObligationPassages(doc: string): string[] {
+export function enumerateObligationPassages(
+    doc: string | SpecDoc,
+    policy: RequirementPolicy = REQUIREMENT_POLICY
+): string[] {
+    const parsed = typeof doc === 'string' ? parseSpecDoc(doc) : doc
+    const accept = candidates(parsed, policy)
     const out: string[] = []
-    // Normalise CRLF/CR → LF: a Windows-authored spec would otherwise collapse
-    // into one giant paragraph (the split marker never matches `\r\n\r\n`) and
-    // the per-obligation recall floor would enumerate nothing.
-    for (const para of doc.replace(/\r\n?/g, '\n').split(/\n[ \t]*\n/)) {
-        const p = para.trim()
+    // The SAME policy grounding uses. A marked passage no quote can be grounded
+    // in would report itself uncovered forever and force a re-extraction every
+    // round that can never discharge it.
+    for (const b of blocksOf(parsed)) {
+        if (!accept(b)) continue
+        const p = b.text.trim()
         if (p.length < MIN_QUOTE_LENGTH) continue
         if (!/\b(required|must)\b/i.test(p)) continue
         out.push(p)
-        if (out.length >= 20) break
+        if (out.length >= MAX_OBLIGATION_PASSAGES) break
     }
     return out
 }
@@ -352,9 +389,9 @@ function passageHead(p: string): string {
  *  extraction recall failed there (a kept quote "covers" a passage when the
  *  passage contains it, normalised). */
 export function uncoveredPassages(passages: string[], kept: RequirementEntry[]): string[] {
-    const keptNorm = kept.map(e => normalise(e.quote))
+    const keptNorm = kept.map(e => normalise(demark(e.quote)))
     return passages.filter(p => {
-        const pn = normalise(p)
+        const pn = normalise(demark(p))
         return !keptNorm.some(q => pn.includes(q))
     })
 }
@@ -381,7 +418,7 @@ export const REQUIREMENT_EXTRACT_PROMPT = (feature: string, passages: string[] =
         'functional behavior, constraints, quality bars, security/accessibility rules, and any',
         'MANDATED METHODOLOGY (testing cadence, verification practice, required scripts, files,',
         'directory structures, databases). Extract from WHATEVER structure the text has —',
-        'numbered sections, tables, bullet lists, or flowing prose with no headings at all.',
+        'numbered sections, bullet lists, or flowing prose with no headings at all.',
         "Pay particular attention to obligations that are NOT part of the text's main",
         'feature/milestone structure (a "required" testing or security section, an obligation',
         'buried mid-prose) — those are the ones downstream planning loses.',
@@ -405,7 +442,10 @@ export const REQUIREMENT_EXTRACT_PROMPT = (feature: string, passages: string[] =
         'paraphrase, merge, normalise, or complete it; ungrounded quotes are DISCARDED',
         'host-side. (2) Prefer the single sentence or line that states the obligation most',
         'directly. (3) One obligation per line. (4) Do NOT quote examples, rationale, or',
-        'reference links. (5) Never invent a requirement the text does not state.',
+        'reference links. (5) Never invent a requirement the text does not state. (6) Quote',
+        'the PROSE that states the obligation — a quote taken from a code/DDL block, from a',
+        "table row, or from the text's opening description is DISCARDED host-side; where an",
+        'obligation only appears there, quote the sentence that introduces it instead.',
         '',
         'Output the REQUIREMENT: lines and nothing else. If the text states no requirements,',
         'output nothing.'
@@ -417,13 +457,14 @@ export type ReqMapping = {kind: 'task'; task: number} | {kind: 'cross'} | {kind:
 
 /**
  * A requirement no single task can ever OWN: a PROHIBITION (it states what must
- * NOT exist or happen — there is no task that "delivers" an absence) or a GLOBAL
- * POLICY (a product-wide rule every slice obeys, not one slice's deliverable). The
- * per-task coverage map maps both to NONE forever, so left in the `unmapped` set
- * they hold the decompose loop's verdict at INCOMPLETE and make it regenerate the
- * whole plan every round — which can replace a good plan with a worse one. These
- * belong in the CROSS-CUTTING carry, injected verbatim into every task, never fed
- * back as a missing area.
+ * NOT exist or happen — there is no task that "delivers" an absence), a GLOBAL
+ * POLICY (a product-wide rule every slice obeys, not one slice's deliverable), or
+ * a DESCRIPTION (what the product IS, which no slice delivers either). The
+ * per-task coverage map maps all three to NONE forever, so left in the `unmapped`
+ * set they hold the decompose loop's verdict at INCOMPLETE and make it regenerate
+ * the whole plan every round — which can replace a good plan with a worse one.
+ * These belong in the CROSS-CUTTING carry, injected verbatim into every task,
+ * never fed back as a missing area.
  *
  * Deterministic and precision-biased: it only reclassifies clear prohibitions and
  * clearly product-global policies. It does NOT need to catch every un-ownable line
@@ -431,8 +472,19 @@ export type ReqMapping = {kind: 'task'; task: number} | {kind: 'cross'} | {kind:
  * miss here can at most cost one wasted regeneration, never a dropped area. Spec-
  * shape/domain agnostic: pure phrasing, no feature nouns.
  */
+// Bare `no`, `not` and `none` are NOT here. They read as prohibitions in a
+// grammar that has none: "the page renders even when the user is not logged in"
+// is an ownable behaviour statement, and the bare-negative rule swept it — and
+// everything like it — into a carry no task ever delivers. What remains is modal
+// negation and explicit exclusion verbs, which cannot fire that way.
 const PROHIBITION_RE =
-    /\b(?:must not|must never|shall not|should not|may not|cannot|can'?t|won'?t|do(?:es)? not|don'?t|doesn'?t|no|not|never|none|without|avoids?|prohibit(?:ed|s|ing)?|forbid(?:den|s)?|disallow(?:ed|s|ing)?|excludes?|excluded|neither|nor)\b/i
+    /\b(?:must not|must never|shall not|shall never|should not|may not|cannot|can'?t|won'?t|will not|do(?:es)? not|don'?t|doesn'?t|never|without|avoids?|prohibit(?:ed|s|ing)?|forbid(?:den|s)?|disallow(?:ed|s|ing)?|excludes?|excluded|neither|nor)\b/i
+/** "must have NO runtime dependencies" — the absence shape bare `no` used to
+ *  carry. Anchored to an existence verb AND gated by a modal below, because
+ *  without the modal it is ordinary description: "the empty state shows when
+ *  there are no listings yet" obligates nothing. */
+const NEGATED_EXISTENCE_RE =
+    /\b(?:is|are|be|been|being|has|have|had|contains?|ships?|leaves?|with)\s+no\b/i
 // Kept narrow on purpose — bare "all"/"every"/"any" appear in plenty of ownable
 // feature statements ("lists all photos"), so the global branch keys only on
 // scope words that name the WHOLE product and is additionally gated by a modal.
@@ -440,11 +492,35 @@ const GLOBAL_SCOPE_RE =
     /\b(?:everywhere|throughout|always|global(?:ly)?|across (?:the|all|every)|site-?wide|app(?:lication)?-?wide|universal(?:ly)?|consistent(?:ly)?|entire (?:app|application|site|codebase|product|system|ui|project))\b/i
 const MODAL_RE = /\b(?:must|shall|should|require[sd]?|required|needs? to|has to|have to)\b/i
 
-export function isCrossCuttingRequirement(quote: string): boolean {
+export type RequirementClass = 'prohibition' | 'global-policy' | 'descriptive' | 'ownable'
+
+/**
+ * `descriptive` is the class the coverage loop must not chase: a line that says
+ * what the product IS rather than what the work must do. It cost two whole
+ * rejected decompose rounds live — "Invite-only used-parts marketplace for a
+ * local Mazda MX-5 club." was extracted as a requirement, mapped NONE by every
+ * round because no task delivers a sentence, and held the verdict INCOMPLETE.
+ *
+ * Both marks are required, not either: preamble POSITION (above every heading,
+ * where a spec states its subject) and the absence of any modal. A preamble
+ * sentence that does carry a modal is a real obligation stated up front, and a
+ * modal-free sentence anywhere else is the ordinary shape of a feature statement
+ * — treating either alone as descriptive would empty the coverage gate.
+ */
+export function classifyRequirement(quote: string, fromPreamble = false): RequirementClass {
     const q = quote.trim()
-    if (PROHIBITION_RE.test(q)) return true
-    if (GLOBAL_SCOPE_RE.test(q) && MODAL_RE.test(q)) return true
-    return false
+    if (PROHIBITION_RE.test(q)) return 'prohibition'
+    if (NEGATED_EXISTENCE_RE.test(q) && MODAL_RE.test(q)) return 'prohibition'
+    if (GLOBAL_SCOPE_RE.test(q) && MODAL_RE.test(q)) return 'global-policy'
+    if (fromPreamble && !MODAL_RE.test(q)) return 'descriptive'
+    return 'ownable'
+}
+
+/** A requirement no single task can ever OWN, judged on the quote alone — the
+ *  shape `groundedCoverage` and the granularity floor get. */
+export function isCrossCuttingRequirement(quote: string): boolean {
+    const c = classifyRequirement(quote)
+    return c === 'prohibition' || c === 'global-policy'
 }
 
 /** Requirement INDICES a task owns (a `TASK n` verdict), the monotonic-replacement
@@ -522,11 +598,15 @@ export function accountCoverage(
         const m = mappings[i] ?? {kind: 'none'}
         if (m.kind === 'task') acc.mapped.push({req: requirements[i], task: m.task})
         else if (m.kind === 'cross') acc.crossCutting.push(requirements[i])
-        // NONE — but a prohibition/global-policy requirement can never be OWNED by
-        // a task (it states an absence or a product-wide rule); the model maps it
-        // NONE every round, which forces endless whole-plan regeneration.
-        // Carry it cross-cutting instead, so it stops driving the coverage loop.
-        else if (isCrossCuttingRequirement(requirements[i].quote))
+        // NONE — but a prohibition, a global policy and a product description can
+        // never be OWNED by a task (an absence, a product-wide rule, a statement of
+        // what the thing IS); the model maps them NONE every round, which forces
+        // endless whole-plan regeneration. Carry them cross-cutting instead, so
+        // they stop driving the coverage loop — carried, never dropped.
+        else if (
+            classifyRequirement(requirements[i].quote, requirements[i].preamble ?? false)
+            !== 'ownable'
+        )
             acc.crossCutting.push(requirements[i])
         else acc.unmapped.push(requirements[i])
     }
