@@ -43,13 +43,7 @@ import {
     buildRepairScopeFence,
     extractFailingCommand
 } from './root-cause-repair.js'
-import {
-    writeTaskFile,
-    readTaskFile,
-    updateTaskFrontMatter,
-    taskFilePath,
-    tasksDir
-} from './task-io.js'
+import {writeTaskFile, readTaskFile, updateTaskFrontMatter, taskFilePath} from './task-io.js'
 import {readTextFile} from '../shared/fs-text.js'
 import {findPhantomImports, rewritePhantomSpecifiers} from '../workers/phantom-imports.js'
 import type {TaskFrontMatter} from './task-types.js'
@@ -74,7 +68,8 @@ import {gitUnmergedPaths, gitStashRef} from './auto-commit.js'
 import {runFinalIntegrationGate, deriveOpenDebts} from './final-gate.js'
 import {spawnCommand} from './command-run.js'
 import {getConfig} from '../config/config.js'
-import {debugLogLevel, shouldLogDebug} from './debug-log.js'
+import {debugLogLevel, sanitizeDebugLine, shouldLogDebug} from './debug-log.js'
+import {beginRun, pruneRunLogs, runLogPath} from './state-dir.js'
 import {isYoloMode, yoloPickAnswer} from './yolo.js'
 import {QaTranscript, CLARIFY_QA_POLICY} from './qa-transcript.js'
 import {makeQuestionSource} from './question-source.js'
@@ -284,9 +279,9 @@ export function flushPlanDebug(): Promise<unknown> {
  * Fire-and-forget debug line for the PLAN phase (clarify/decompose). It is the
  * only trail that phase has: planning runs before any task file exists, so there
  * is no per-task `TASK_NNNN-debug.log` to write into yet. This goes to
- * `.pi-tasks/plan-debug.log`, whose `*-debug.log` suffix matches the pattern
- * debug-log.ts documents, so one grep still finds every log. Never throws — the
- * mkdir and the append are both best-effort.
+ * `plan-debug.log` in the run's state dir, beside every other log of the run, so
+ * one grep still finds them all. Never throws — the mkdir and the append are both
+ * best-effort.
  *
  * Every call site records a plan DECISION (how many titles a round produced,
  * whether a retry was adopted, which clarify answer was auto-resolved), so all of
@@ -295,11 +290,11 @@ export function flushPlanDebug(): Promise<unknown> {
  */
 function logPlanDebug(cwd: string, msg: string): void {
     if (!shouldLogDebug('event', debugLogLevel())) return
-    const line = `${new Date().toISOString()} ${msg}\n`
-    const dir = tasksDir(cwd)
+    const line = `${new Date().toISOString()} ${sanitizeDebugLine(msg)}\n`
+    const file = runLogPath(cwd, 'plan-debug.log')
     planDebugChain = planDebugChain
-        .then(() => fsp.mkdir(dir, {recursive: true}))
-        .then(() => fsp.appendFile(path.join(dir, 'plan-debug.log'), line))
+        .then(() => fsp.mkdir(path.dirname(file), {recursive: true}))
+        .then(() => fsp.appendFile(file, line))
         .catch(() => {})
 }
 
@@ -1702,6 +1697,11 @@ export async function runAutoLoop(
                     return
                 }
                 await updateTaskFrontMatter(cwd, id, {state: 'completed'})
+                // Retention runs HERE and nowhere else: a completed run is the one
+                // moment the state dir is quiet and this process still knows which
+                // repo it was serving. A failed or cancelled run keeps its logs —
+                // those are the ones somebody is about to read.
+                await pruneRunLogs(cwd)
                 announceDone(active, stage.message, stage.level)
                 return
             }
@@ -1936,6 +1936,9 @@ async function handleTaskAuto(args: string, ctx: ExtensionCommandContext): Promi
             // every task's research phase share one run's cache; disabled ⇒ clears any token a
             // prior run left, so nothing is cached.
             configureResearchRun(getConfig().researchCache)
+            // The log id is minted separately: the cache token is absent whenever
+            // caching is off, and the logs of a run still have to land together.
+            beginRun()
             const abort = new AbortController()
             const deps = defaultDeps(ctx, cwd, abort.signal, deriveTitle(raw))
             let id: string | null
@@ -2009,6 +2012,9 @@ async function handleTaskAutoResume(args: string, ctx: ExtensionCommandContext):
             // greenfield run that installs packages as it goes — so invalidation is
             // per entry. See resumeResearchRun.
             const research = await resumeResearchRun(cwd, getConfig().researchCache)
+            // The LOGS do not resume: a resume is its own session with its own
+            // children, and its trail reads as one only when it has its own dir.
+            beginRun()
             if (research.reused) {
                 logPlanDebug(
                     cwd,

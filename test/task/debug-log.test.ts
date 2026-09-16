@@ -1,9 +1,11 @@
 import {describe, expect, test} from 'bun:test'
 import {
+    DEBUG_LINE_LIMIT,
     DEBUG_LOG_ENV,
     debugLogLevel,
     gateDebugWriter,
     makeDebugAppender,
+    sanitizeDebugLine,
     shouldLogDebug
 } from '../../src/task/debug-log.js'
 
@@ -110,6 +112,55 @@ describe('makeDebugAppender', () => {
         } finally {
             delete process.env[DEBUG_LOG_ENV]
         }
+    })
+
+    test('what reaches the file is sanitised, not the raw message', () => {
+        const {writes, appendFile} = capture()
+        process.env[DEBUG_LOG_ENV] = 'full'
+        try {
+            makeDebugAppender('/tmp/x.log', appendFile)('tool said \u0000\u001b[31mred\u001b[0m')
+        } finally {
+            delete process.env[DEBUG_LOG_ENV]
+        }
+        expect(writes[0]).toMatch(/ tool said \[31mred\[0m\n$/)
+    })
+})
+
+/**
+ * The defect: a 247 KB `verify-debug.log` held terminal control bytes and NULs, so
+ * `grep` called the whole file binary and printed nothing — the trail's one job.
+ */
+describe('sanitizeDebugLine', () => {
+    // Only the control CHARACTERS go; an escape sequence's printable tail (`[0m`)
+    // stays behind. That residue is plain ASCII — it is the ESC byte that makes
+    // the file binary to grep, not the letters after it.
+    test('strips control characters, NUL first among them', () => {
+        expect(sanitizeDebugLine('a\u0000b\u0007c\u001b[0md')).toBe('abc[0md')
+    })
+
+    test('keeps newlines, so a multi-line message stays multi-line', () => {
+        expect(sanitizeDebugLine('one\ntwo\nthree')).toBe('one\ntwo\nthree')
+        // A CR is a control character like any other; the line break is the \n.
+        expect(sanitizeDebugLine('one\r\ntwo')).toBe('one\ntwo')
+    })
+
+    test('caps a runaway line and says how much it dropped', () => {
+        const capped = sanitizeDebugLine('x'.repeat(DEBUG_LINE_LIMIT + 42))
+        expect(capped).toBe(`${'x'.repeat(DEBUG_LINE_LIMIT)}…+42 chars`)
+    })
+
+    test('caps each line of a multi-line message on its own', () => {
+        const long = 'y'.repeat(DEBUG_LINE_LIMIT + 1)
+        expect(sanitizeDebugLine(`short\n${long}\nshort`).split('\n')).toEqual([
+            'short',
+            `${'y'.repeat(DEBUG_LINE_LIMIT)}…+1 chars`,
+            'short'
+        ])
+    })
+
+    test('a line at the limit is left exactly as it is', () => {
+        const exact = 'z'.repeat(DEBUG_LINE_LIMIT)
+        expect(sanitizeDebugLine(exact)).toBe(exact)
     })
 })
 

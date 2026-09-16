@@ -10,6 +10,7 @@ import {
     type PlanCommandDeps
 } from '../../src/task/plan-orchestrator.js'
 import {buildPlanBody} from '../../src/task/plan-io.js'
+import {runLogPath} from '../../src/task/state-dir.js'
 import type {PlanEntry} from '../../src/task/plan-io.js'
 import {buildIdleSpec, type PlanOutcome} from '../../src/task/plan-session.js'
 import {writeTaskFile, readSection, readTaskFile, setTaskSection} from '../../src/task/task-io.js'
@@ -345,7 +346,8 @@ describe('the read-only contract', () => {
 
     test('discardEmptyPlanFile removes the debug log with the plan file', async () => {
         const cwd = await seededRepo()
-        const log = path.join(cwd, '.pi-tasks', `${PLAN_ID}-debug.log`)
+        const log = runLogPath(cwd, `${PLAN_ID}-debug.log`)
+        await fsp.mkdir(path.dirname(log), {recursive: true})
         await fsp.writeFile(log, 'x\n')
         await discardEmptyPlanFile(cwd, PLAN_ID)
         await expect(fsp.access(log)).rejects.toThrow()

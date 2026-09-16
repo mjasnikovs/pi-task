@@ -422,7 +422,7 @@ export const ITEMS: ConfigItem[] = [
         section: 'logging',
         label: 'debug logs',
         description:
-            'How much of a run gets written to .pi-tasks/*-debug.log. "events" keeps the '
+            'How much of a run gets written to the run log dir. "events" keeps the '
             + 'decisions and the guard actions — what a checking step changed, why something '
             + 'failed — a few lines per task. "full" adds everything the model said and every '
             + 'command it ran, which is most of the size and only useful while you are digging '

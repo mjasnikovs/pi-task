@@ -1,13 +1,15 @@
 /**
- * One place that decides whether a `.pi-tasks/*-debug.log` line gets written.
+ * One place that decides whether a `*-debug.log` line gets written, and what
+ * reaches the file when it does. The files live in the run's state directory
+ * (state-dir.ts), outside the repository.
  *
  * THE TRAIL IS WRITE-ONLY in production. Nothing under src/ reads these files
  * back: `task-io.ts` globs `TASK_NNNN.md` and skips everything else, and
- * auto-commit's `snapshotTrail` copies the bytes across a `reset --hard` without
- * ever parsing them. Every producer is a `logDebug?.(…)` / `log(…)` side effect
- * whose return value is discarded. So this gate cannot change what a run DOES —
- * only what it can explain afterwards. (Tests do read the trail back, which is why
- * `flushPlanDebug` exists.)
+ * auto-commit's `snapshotTrail` copies `.pi-tasks/` across a `reset --hard`
+ * without ever parsing it. Every producer is a `logDebug?.(…)` / `log(…)` side
+ * effect whose return value is discarded. So this gate cannot change what a run
+ * DOES — only what it can explain afterwards. (Tests do read the trail back,
+ * which is why `flushPlanDebug` exists.)
  *
  * TWO KINDS OF LINE, and the distinction is the whole point of having three levels
  * rather than a boolean:
@@ -30,6 +32,7 @@
  * A machine-local `"debugLogs": "off"` still wins — this is a default, not a floor.
  */
 import * as fsp from 'node:fs/promises'
+import * as path from 'node:path'
 import {getConfig, sanitizeDebugLogs, type DebugLogLevel} from '../config/config.js'
 
 /**
@@ -73,20 +76,83 @@ export function shouldLogDebug(kind: DebugLine, level: DebugLogLevel): boolean {
 }
 
 /**
+ * Longest line the trail keeps. A tool result the child pasted whole, a minified
+ * bundle, a base64 blob — one of them can be most of the file, and past a
+ * paragraph or so nothing is being explained any more. The overflow is reported
+ * rather than dropped silently, so a truncated line still says it was truncated.
+ */
+export const DEBUG_LINE_LIMIT = 4096
+
+const CONTROL_CHARS = /\p{Cc}/gu
+
+function capLine(line: string): string {
+    const over = line.length - DEBUG_LINE_LIMIT
+    return over > 0 ? `${line.slice(0, DEBUG_LINE_LIMIT)}…+${over} chars` : line
+}
+
+/**
+ * What actually reaches the file: control characters stripped, every line capped.
+ *
+ * One NUL makes the whole file BINARY to grep, and the trail's only job is to be
+ * grepped — a 1.7 MB `verify-debug.log` full of terminal control bytes needed
+ * `grep -a` before it could be read at all. Newlines are the exception and stay:
+ * a multi-line message stays multi-line, with the timestamp on its first line.
+ */
+export function sanitizeDebugLine(msg: string): string {
+    return msg
+        .split('\n')
+        .map(line => capLine(line.replace(CONTROL_CHARS, '')))
+        .join('\n')
+}
+
+const ensuredDirs = new Map<string, Promise<unknown>>()
+
+/** A run's state directory does not exist until its first line — mkdir once per
+ *  directory rather than once per line. */
+function ensureDir(dir: string): Promise<unknown> {
+    let made = ensuredDirs.get(dir)
+    if (!made) {
+        made = fsp.mkdir(dir, {recursive: true}).catch(() => {})
+        ensuredDirs.set(dir, made)
+    }
+    return made
+}
+
+async function appendToTrail(p: string, data: string): Promise<void> {
+    await ensureDir(path.dirname(p))
+    await fsp.appendFile(p, data)
+}
+
+/**
+ * Timestamp, sanitise and append one trail line, fire-and-forget. Errors are
+ * swallowed — an unwritable trail must never fail the run it is describing.
+ *
+ * An injected `appendFile` owns its own directory: a fake has none, and mkdir-ing
+ * a test's imaginary path would write to the real filesystem.
+ */
+export function appendDebugLine(
+    logPath: string,
+    msg: string,
+    appendFile: (p: string, data: string) => Promise<unknown> = appendToTrail
+): void {
+    const line = `${new Date().toISOString()} ${sanitizeDebugLine(msg)}\n`
+    void appendFile(logPath, line).catch(() => {})
+}
+
+/**
  * A timestamped fire-and-forget appender for one trail file, level-gated.
  *
  * `kind` defaults to `'event'` so a new call site is quiet-by-default in the
  * useful direction: forgetting to classify a marker keeps it in the audit trail,
- * whereas forgetting to classify chatter would only make the log bigger. Errors
- * are swallowed — an unwritable trail must never fail the run it is describing.
+ * whereas forgetting to classify chatter would only make the log bigger.
  */
 export function makeDebugAppender(
     logPath: string,
-    appendFile: (p: string, data: string) => Promise<unknown> = (p, data) => fsp.appendFile(p, data)
+    appendFile: (p: string, data: string) => Promise<unknown> = appendToTrail
 ): (msg: string, kind?: DebugLine) => void {
     return (msg: string, kind: DebugLine = 'event') => {
         if (!shouldLogDebug(kind, debugLogLevel())) return
-        void appendFile(logPath, `${new Date().toISOString()} ${msg}\n`).catch(() => {})
+        appendDebugLine(logPath, msg, appendFile)
     }
 }
 

@@ -131,14 +131,13 @@ export interface PiTaskConfig {
      */
     yoloMode: boolean
     /**
-     * How much the run writes to its `.pi-tasks/*-debug.log` forensic trail
-     * (task/debug-log.ts). Nothing in `src/` reads these files back —
-     * `task-io.ts` only matches `TASK_NNNN.md`, and auto-commit's trail snapshot
-     * reads every `.pi-tasks/` file as bytes and writes them back unparsed — so
-     * this knob is behaviour-neutral by construction. It trades disk and repo
-     * noise against the ability to explain a run after it has finished. The
-     * TESTS do read the trail back, which is why the test preload pins the
-     * config path away from the developer's own file.
+     * How much the run writes to its `*-debug.log` forensic trail
+     * (task/debug-log.ts), kept in the run's state dir (task/state-dir.ts).
+     * Nothing in `src/` reads these files back, so this knob is
+     * behaviour-neutral by construction. It trades disk against the ability to
+     * explain a run after it has finished. The TESTS do read the trail back,
+     * which is why the test preload pins the config path — and the state home —
+     * away from the developer's own.
      *
      * `full` is every line the child model emitted plus every tool result;
      * `events` keeps only decisions and guard actions; `off` writes nothing.
@@ -186,7 +185,7 @@ export interface PiTaskConfig {
     groupModels: Record<ChildGroup, string>
 }
 
-/** How verbose the `.pi-tasks/*-debug.log` trail is. See {@link PiTaskConfig.debugLogs}. */
+/** How verbose the `*-debug.log` trail is. See {@link PiTaskConfig.debugLogs}. */
 export type DebugLogLevel = 'off' | 'events' | 'full'
 
 /**

@@ -61,7 +61,8 @@ import {
 } from '../remote/bridge.js'
 import {pushNotify} from '../remote/push.js'
 import {getConfig} from '../config/config.js'
-import {gateDebugWriter} from './debug-log.js'
+import {appendDebugLine, gateDebugWriter} from './debug-log.js'
+import {beginRun, runLogPath} from './state-dir.js'
 import {buildGateDeps, type RunTaskFn} from './gate-deps.js'
 import {runGatesForTask, type GateDeps} from './task-gates.js'
 import {parseVerifyBlock} from './spec-validation.js'
@@ -376,8 +377,8 @@ export class TaskRunner {
         // any phase work — and recover it if the session dies mid-pipeline.
         if (this._onStart) await this._onStart(id)
 
-        // Wire up per-task debug log (<cwd>/.pi-tasks/TASK_XXXX-debug.log).
-        const debugLogPath = path.join(tasksDir(cwd), `${id}-debug.log`)
+        // Wire up the per-task debug log in this run's state dir (state-dir.ts).
+        const debugLogPath = runLogPath(cwd, `${id}-debug.log`)
         // `gateDebugWriter` returns undefined at level `off`, so every
         // `logDebug?.(…)` site downstream short-circuits before it formats a string
         // and the file is never created. A caller-supplied `logDebug` seam WINS
@@ -385,10 +386,7 @@ export class TaskRunner {
         // runner-driven test, and production never sets one, so the file writer is
         // unaffected.
         this._deps.logDebug ??= gateDebugWriter((msg: string) => {
-            const line = `${new Date().toISOString()} ${msg}\n`
-            fsp.appendFile(debugLogPath, line).catch(() => {
-                /* ignore */
-            })
+            appendDebugLine(debugLogPath, msg)
         })
         this._deps.logDebug?.(`run: start phase=${resumePhase}`)
 
@@ -936,6 +934,10 @@ async function handleTask(args: string, ctx: ExtensionCommandContext): Promise<v
         notifyBoth(ctx, 'Type your prompt after /task (use @ for file completion).', 'info')
         return
     }
+    // A plain /task is a run of one task, and gets a run id for the same reason
+    // /task-auto does: its logs belong to this invocation, not to whatever the
+    // host session ran before it.
+    beginRun()
     // When a gate is enabled, /task awaits the implementation and runs the same
     // verify + enforce gates a /task-auto sub-task does. With both gates off
     // (the default), /task stays fire-and-forget: hand the spec to the main
@@ -1028,6 +1030,7 @@ async function handleTaskResume(args: string, ctx: ExtensionCommandContext): Pro
         }
         id = candidates[0].id
     }
+    beginRun()
     // Match /task: resume through the gates when one is enabled, else fire-and-forget.
     const cfg = getConfig()
     if (cfg.verifyWork || cfg.enforceGuidelines) {

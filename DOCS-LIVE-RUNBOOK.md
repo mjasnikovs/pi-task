@@ -222,7 +222,8 @@ defect 17 is why.
 - `PI_TASK_TYPEONLY_LOG=<file>.jsonl` — one JSON line per docs **answer**: `module`,
   `query` verbatim, the child's prose, `unclear`, `excerptCheck`, `retrievedText`
   and `toolText`. Parser: `readTypeOnlyLog` in `src/workers/typeonly-log.ts`.
-- `.pi-tasks/*-debug.log` — one line per docs **call**, tagged with the phase. The
+- `$XDG_STATE_HOME/pi-task/<repo-hash>/<run-id>/*-debug.log` — one line per docs
+  **call**, tagged with the phase. The
   query is truncated at ~60 chars here; the JSONL has it whole.
 
 **Refusals are in neither sink.** `logDocsAnswer` fires only on the answer path, so

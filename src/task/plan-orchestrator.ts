@@ -22,7 +22,6 @@
  * handoff, and the decisions block when anything was settled.
  */
 
-import * as path from 'node:path'
 import type {ExtensionAPI, ExtensionCommandContext} from '@earendil-works/pi-coding-agent'
 import {prependHint, USER_CANCELLED, type PhaseDeps} from './child-runner.js'
 import {PLAN_QUESTION_PROMPT, PLAN_ANSWER_PROMPT} from './plan-prompts.js'
@@ -46,8 +45,7 @@ import {
     setTaskSection,
     readSection,
     updateTaskFrontMatter,
-    taskFilePath,
-    tasksDir
+    taskFilePath
 } from './task-io.js'
 import {extractSection} from './task-parsers.js'
 import {collectTreeChanges} from './gate-deps.js'
@@ -73,7 +71,8 @@ import {
 import {withRun, announceTerminal} from './run-bracket.js'
 import {getConfig} from '../config/config.js'
 import {isYoloMode} from './yolo.js'
-import {gateDebugWriter} from './debug-log.js'
+import {appendDebugLine, gateDebugWriter} from './debug-log.js'
+import {beginRun, runLogPath} from './state-dir.js'
 import {getParentContextWindow} from './context-usage.js'
 import {ChildStatus, runPlanningChild, statusCallbacks} from './child-status.js'
 import * as fsp from 'node:fs/promises'
@@ -103,8 +102,7 @@ export function buildPlanDeps(
     const title = deriveTitle(task)
 
     const logDebug = gateDebugWriter((msg: string) => {
-        const line = `${new Date().toISOString()} ${msg}\n`
-        void fsp.appendFile(path.join(tasksDir(cwd), `${planId}-debug.log`), line).catch(() => {})
+        appendDebugLine(runLogPath(cwd, `${planId}-debug.log`), msg)
     })
 
     const phaseDeps: PhaseDeps = {
@@ -321,7 +319,7 @@ export async function discardEmptyPlanFile(cwd: string, planId: string): Promise
         if (decisions !== null && decisions.trim() !== '(none yet)') return
         if (extractSection(body, 'notes') !== null) return
         await fsp.rm(taskFilePath(cwd, planId), {force: true})
-        await fsp.rm(path.join(tasksDir(cwd), `${planId}-debug.log`), {force: true})
+        await fsp.rm(runLogPath(cwd, `${planId}-debug.log`), {force: true})
     } catch {
         /* best-effort: an unreadable file is left exactly where it is */
     }
@@ -342,6 +340,8 @@ export async function handleTaskPlan(
         notifyBoth(ctx, 'Describe the task after /task-plan (use @ for file completion).', 'info')
         return
     }
+
+    beginRun()
 
     // Inline any @file the user referenced, exactly as /task-auto's planner does:
     // a one-line "Implement @spec.md" reads as trivial to a model that cannot see

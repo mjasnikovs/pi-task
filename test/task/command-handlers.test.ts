@@ -18,6 +18,7 @@ import * as fs from 'node:fs'
 import * as path from 'node:path'
 import type {ExtensionAPI, ExtensionCommandContext} from '@earendil-works/pi-coding-agent'
 import {registerTask} from '../../src/task/orchestrator.js'
+import {RUN_ID_ENV} from '../../src/task/state-dir.js'
 import {registerTaskAuto} from '../../src/task/auto-orchestrator.js'
 import {makeFakeCtx, type FakeCtxHandle} from '../test-utils/fake-ctx.js'
 import {getConfig} from '../../src/config/config.js'
@@ -98,6 +99,33 @@ describe('/task', () => {
         expect(fake.captured.editorTexts).toEqual(['/task '])
         expect(fake.captured.notifies[0].msg).toContain('Type your prompt after /task')
         expect(fake.captured.sentMessages).toEqual([])
+    })
+
+    /**
+     * A plain /task is a run, and its logs belong to it rather than to whatever
+     * the host session ran before — the same reason /task-auto mints one. The
+     * refusal above is not a run, so it must leave the previous id alone.
+     *
+     * A session that cannot be created keeps this on the command table's side of
+     * the line: the id is minted before any child could exist, which is exactly
+     * what has to be true for the first log line to land in the right directory.
+     */
+    test('a real /task mints a run id; a refused one does not', async () => {
+        process.env[RUN_ID_ENV] = 'from-the-previous-run'
+        try {
+            await cmd('task')('   ', fake.ctx)
+            expect(process.env[RUN_ID_ENV]).toBe('from-the-previous-run')
+
+            ;(fake.ctx as unknown as {newSession: () => Promise<unknown>}).newSession = () =>
+                Promise.resolve({cancelled: true})
+            await cmd('task')('add a health endpoint', fake.ctx)
+
+            expect(process.env[RUN_ID_ENV]).not.toBe('from-the-previous-run')
+            expect(process.env[RUN_ID_ENV]).toBeTruthy()
+            expect(fake.captured.notifies.at(-1)?.msg).toContain('Could not start a fresh session')
+        } finally {
+            delete process.env[RUN_ID_ENV]
+        }
     })
 
     test('/task-cancel with nothing running says so', async () => {

@@ -24,7 +24,7 @@ import * as fsp from 'node:fs/promises'
 import * as path from 'node:path'
 import type {ExtensionCommandContext} from '@earendil-works/pi-coding-agent'
 import type {GateDeps} from './task-gates.js'
-import {tasksDir, readTaskFile, appendGateRecord} from './task-io.js'
+import {readTaskFile, appendGateRecord} from './task-io.js'
 import {gitCommitAll, gitDropLastCommit, git} from './auto-commit.js'
 import {runGuidelineEnforcement} from './enforce-guidelines.js'
 import {runWorkVerification, extractSpecForVerification, type VerifyProbes} from './verify-work.js'
@@ -72,6 +72,7 @@ import {getConfig} from '../config/config.js'
 import {groupChildArgs} from '../config/group-args.js'
 import {contextWindowForGroup} from './context-usage.js'
 import {makeDebugAppender} from './debug-log.js'
+import {runLogPath} from './state-dir.js'
 import {startAutoLoader} from './widget.js'
 import {ChildStatus} from './child-status.js'
 import {makeGateChild, type GateChildKind} from './gate-child.js'
@@ -699,8 +700,8 @@ export function buildGateDeps(params: {
     let lastGuardReconcile: ReconcileResult | null = null
 
     // Restore tracked files to HEAD and drop files a pass created. The `.pi-tasks`
-    // trail and log writes made during the pass survive both: the checkout excludes
-    // that directory by pathspec and the clean excludes it with `-e`. Shared by the
+    // trail survives both: the checkout excludes that directory by pathspec and the
+    // clean excludes it with `-e`. Debug logs are outside the tree. Shared by the
     // enforce pre-commit gate (discardEdits) and the final-gate autofix guards.
     const discardTreeEdits = async (cwd2: string): Promise<void> => {
         await git(cwd2, ['checkout', '--', '.', EXCLUDE_TASKS_DIR], signal)
@@ -724,7 +725,7 @@ export function buildGateDeps(params: {
             cwd: cwd2,
             taskTitle,
             kind,
-            logPath: path.join(tasksDir(cwd2), logFile),
+            logPath: runLogPath(cwd2, logFile),
             ...(opts.loader === undefined ? {} : {loader: opts.loader}),
             commandTimeoutMs: getConfig().requestTimeoutMs,
             streamInactivityMs: getConfig().streamInactivityMs,
@@ -931,7 +932,7 @@ export function buildGateDeps(params: {
                         signal,
                         taskId,
                         spec,
-                        log: makeDebugAppender(path.join(tasksDir(cwd2), 'verify-debug.log'))
+                        log: makeDebugAppender(runLogPath(cwd2, 'verify-debug.log'))
                     }),
                     // Git-state guard result of the most recent child run: a verdict
                     // computed on a tree the child itself mutated is discarded — but ONLY
@@ -1073,9 +1074,9 @@ export function buildGateDeps(params: {
                         cwd2,
                         paths,
                         c => runFinalIntegrationGate(c, {signal}),
-                        makeDebugAppender(path.join(tasksDir(cwd2), 'final-gate-debug.log'))
+                        makeDebugAppender(runLogPath(cwd2, 'final-gate-debug.log'))
                     ),
-                log: makeDebugAppender(path.join(tasksDir(cwd2), 'final-gate-debug.log'))
+                log: makeDebugAppender(runLogPath(cwd2, 'final-gate-debug.log'))
             }),
         recommend: async (recCtx, cwd2, taskTitle, taskId, failReason) => {
             // Read the same composed spec the verify gate judged against, so the
