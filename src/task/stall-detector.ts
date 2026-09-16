@@ -47,7 +47,7 @@
  * whole-run backstop that trips on sustained non-progress.
  */
 
-import {stableStringify} from './loop-detector.js'
+import {formatReadSet, stableStringify} from './loop-detector.js'
 import type {LoopHit, ToolCall} from '../shared/child-process.js'
 
 /**
@@ -115,7 +115,9 @@ export class StallDetector {
         if (this.seenCalls.has(key)) this.deadStreak++
         this.seenCalls.add(key)
         if (this.deadStreak >= this.limit) {
-            return {call, count: this.deadStreak, windowSize: 0, stall: 'no-new-ground'}
+            // No windowSize: this rule counts a CONSECUTIVE streak over the whole
+            // run, so there is no window to report and a renderer must not invent one.
+            return {call, count: this.deadStreak, stall: 'no-new-ground'}
         }
         return null
     }
@@ -152,13 +154,14 @@ export class StallDetector {
  * because "you ran out of time" tells a model that was working correctly but
  * slowly to truncate its work for no reason.
  */
-export function formatStallHint(kind: StallKind): string {
+export function formatStallHint(kind: StallKind, visited: readonly string[] = []): string {
     if (kind === 'context-churn') {
         return (
             '[SYSTEM NOTE: Your previous attempt pulled in more file content than '
             + 'its context window can hold, so the earliest material was dropped and '
             + 'you began re-reading it. Do not re-open files. Read only what you have '
-            + 'not read yet, and write your answer from what you have.]'
+            + 'not read yet, and write your answer from what you have.'
+            + `${formatReadSet(visited)}]`
         )
     }
     return (
@@ -166,6 +169,7 @@ export function formatStallHint(kind: StallKind): string {
         + 'nothing you had not already seen — you were re-opening files you had '
         + 'already read. Read each region of a file AT MOST ONCE, and when a file is '
         + 'too large to read whole, page FORWARD through it rather than re-opening '
-        + 'the start. Write your answer from what you have gathered.]'
+        + 'the start. Write your answer from what you have gathered.'
+        + `${formatReadSet(visited)}]`
     )
 }

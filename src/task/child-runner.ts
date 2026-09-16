@@ -17,7 +17,7 @@ import {
 } from '../workers/pi-worker-core.js'
 import {classifyWorkerFailure, type WorkerFailure} from '../workers/worker-failure.js'
 import {isFatalKill} from '../workers/worker-kill.js'
-import {MAX_LOOP_RESTARTS} from './loop-detector.js'
+import {describeLoopHit, MAX_LOOP_RESTARTS} from './loop-detector.js'
 import {MAX_LEAK_RETRIES} from '../shared/leaked-tool-call.js'
 import {readSection, setTaskSection} from './task-io.js'
 import {streamStallCause} from '../shared/stream-watchdog.js'
@@ -474,8 +474,7 @@ async function appendLoopEvents(
 ): Promise<void> {
     const line = (hit: LoopHit, strike: number, outcome: string): string =>
         `- ${new Date().toISOString()}  ${phase}  strike ${strike}/${MAX_LOOP_RESTARTS + 1}  `
-        + `${hit.call.name}(${JSON.stringify(hit.call.args)}) ×${hit.count} in last `
-        + `${hit.windowSize} calls  → ${outcome}`
+        + `${describeLoopHit(hit)}  → ${outcome}`
     const lines = r.restarts.flatMap(x =>
         x.loopHit ?
             [

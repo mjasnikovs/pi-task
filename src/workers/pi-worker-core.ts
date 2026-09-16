@@ -137,7 +137,9 @@ const CARRY_FORWARD_LIMIT = 24_000
  * `worker-timeout` and `connection-error` all discard work the model genuinely
  * did. A loop kill and a leaked tool call do not — the first is by definition the
  * same call repeated, the second is malformed protocol text, and replaying either
- * would feed the failure back to itself.
+ * would feed the failure back to itself. A loop kill also fires from the tool-call
+ * hook, before any answer text streams, so there is nothing to carry; what it
+ * hands the re-spawn is the READ-SET instead (`RestartState.visited`).
  */
 const CARRY_FORWARD_REASONS: ReadonlySet<WorkerKillId> = CARRY_FORWARD_IDS
 
@@ -608,6 +610,12 @@ export interface RunWorkerResult {
  */
 interface RestartState {
     loopHit?: LoopHit
+    /**
+     * The killed attempt's read-set (loop-detector.ts). A runaway kill discards
+     * every byte the child read and nothing else records what that was, so it is
+     * what the loop and stall hints carry in place of answer text.
+     */
+    visited: readonly string[]
     commandKill?: CommandKill
     streamStalled?: {idleMs: number}
     stalled: boolean
@@ -685,13 +693,12 @@ interface RestartRule {
  * becoming visible in `restarts`.
  */
 /**
- * A stall hit carries no meaningful windowSize (rule 1 sets it to 0), so
- * printing the loop shape would misname why the attempt died.
+ * A stall hit counts a streak or a byte total, not calls in a window, so printing
+ * the loop shape would misname why the attempt died.
  */
 function loopDetail(hit: LoopHit): string {
-    return hit.stall ?
-            `${hit.call.name} ${hit.stall} ×${hit.count}`
-        :   `${hit.call.name} ×${hit.count}/${hit.windowSize}`
+    if (hit.stall) return `${hit.call.name} ${hit.stall} ×${hit.count}`
+    return `${hit.call.name} ×${hit.count}${hit.windowSize === undefined ? '' : `/${hit.windowSize}`}`
 }
 
 export const RESTART_RULES: readonly RestartRule[] = [
@@ -704,7 +711,9 @@ export const RESTART_RULES: readonly RestartRule[] = [
                 {detail: loopDetail(s.loopHit)}
             :   null,
         hint: s =>
-            s.loopHit!.stall ? formatStallHint(s.loopHit!.stall) : formatLoopHint(s.loopHit!),
+            s.loopHit!.stall ?
+                formatStallHint(s.loopHit!.stall, s.visited)
+            :   formatLoopHint(s.loopHit!, s.visited),
         counters: {shared: true}
     },
     {
@@ -1076,6 +1085,7 @@ export async function runWorker(input: RunWorkerInput): Promise<RunWorkerResult>
         // cancel: a user who pressed ESC between attempts must not buy a spawn.
         const state: RestartState = {
             ...(loopHit ? {loopHit} : {}),
+            visited: loopDetector?.visited() ?? [],
             ...(commandKill ? {commandKill} : {}),
             ...(streamStalled ? {streamStalled} : {}),
             stalled,

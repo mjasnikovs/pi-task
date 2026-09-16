@@ -7,10 +7,11 @@
  *
  * TWO SILENT SHAPES ARE LOSSES, and both are recognisable from the output alone:
  *
- *   LOOP_DEGRADE: the worker thrashed the same call until the loop-killer fired,
- *     leaving the degrade banner in place of a section. research-worker.ts writes
- *     that banner as "stuck in a loop — called <tool>(<args>) ×<n> in the last <m>
- *     calls…", which is the substring this keys on.
+ *   LOOP_DEGRADE: the worker thrashed until a runaway guard fired, leaving the
+ *     degrade banner in place of a section. research-worker.ts writes that banner
+ *     from `describeLoopHit` (loop-detector.ts) — "stuck in a loop — called
+ *     <tool>(<args>) …" or "stopped covering new ground — …" — which is what
+ *     LOOP_BANNER keys on.
  *
  *   GENERATION_GARBAGE: the worker exited 0 and emitted a non-bullet fragment
  *     instead of context — a stray sentence, or a hallucinated system note.
@@ -45,7 +46,14 @@ export function countBullets(contextText: string): number {
     return contextText.split('\n').filter(l => /^\s*[-*]\s+/.test(l)).length
 }
 
-const LOOP_BANNER = /stuck in a loop/i
+/**
+ * The runaway-degrade banner, in either wording: an exact-repeat loop, or the
+ * progress rule that kills a worker for covering no new ground
+ * (loop-detector.ts `describeLoopHit`). Both are the same loss — a worker killed
+ * mid-answer — and keying on the loop phrase alone filed the second as a
+ * hallucinated fragment.
+ */
+const LOOP_BANNER = /stuck in a loop|stopped covering new ground|tokens of tool output/i
 /** Honest "nothing to surface" — the ONLY non-loss silent shape. */
 const EMPTY_DECLARATION = /^\s*(none|n\/a|no relevant (context|architectural)|nothing\b)/i
 

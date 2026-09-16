@@ -19,8 +19,10 @@
  * retry already asked "you wrote nothing" and got the same answer.
  */
 
+import type {ResearchConcurrency} from '../config/config.js'
 import type {RunWorkerInput, RunWorkerResult} from '../workers/pi-worker-core.js'
 import {classifyWorkerFailure} from '../workers/worker-failure.js'
+import {describeLoopHit} from './loop-detector.js'
 import {classifyContextSilence, countBullets} from './context-silence.js'
 import type {SpawnFn} from '../shared/child-process.js'
 import type {DebugLine} from './debug-log.js'
@@ -35,8 +37,17 @@ import {USER_CANCELLED} from './child-runner.js'
 export interface ResearchWorkerSpec {
     section: string
     label: string
-    /** Static, or built from the sections completed so far (serial mode hands
-     *  APIS the finished FILES map; parallel mode hands it nothing). */
+    /**
+     * Sections that must be FINISHED before this worker starts — the edges of the
+     * stage's execution graph (see {@link runResearchStage}).
+     *
+     * A dependency is declared because the worker READS the other's output, not to
+     * order the machine: APIS builds on the FILES map, and everything else is free
+     * to run alongside. Absent means "no dependency", which is what lets three of
+     * the four workers overlap.
+     */
+    after?: string[]
+    /** Static, or built from the sections this worker declared it comes `after`. */
     prompt: string | ((prior: ReadonlyArray<{name: string; text: string}>) => string)
     tools?: string
     extensions?: string[]
@@ -159,16 +170,11 @@ export function classifyResearchWorker(
     const failure = classifyWorkerFailure(result)
     if (failure) {
         switch (failure.kind) {
-            case 'loop': {
-                const argsStr = JSON.stringify(failure.hit.call.args)
+            case 'loop':
                 return {
                     kind: 'runaway',
-                    reason:
-                        `stuck in a loop — called ${failure.hit.call.name}(${argsStr}) `
-                        + `×${failure.hit.count} in the last ${failure.hit.windowSize} calls `
-                        + `and still looped after restarts`
+                    reason: `${describeLoopHit(failure.hit)} and did not recover after restarts`
                 }
-            }
             case 'worker-timeout':
                 return {kind: 'runaway', reason: 'timed out after restarts'}
             case 'command-timeout':
@@ -552,4 +558,120 @@ export async function runResearchWorker(
         throw new Error(USER_CANCELLED)
     }
     return {name: spec.section, text: sectionText}
+}
+
+/** One finished research section, under the heading compose assembles it by. */
+export interface ResearchSection {
+    name: string
+    text: string
+}
+
+/** How one worker is actually run. The stage schedules; this does the work. */
+export type DriveWorker = (
+    spec: ResearchWorkerSpec,
+    prior: ReadonlyArray<ResearchSection>
+) => Promise<ResearchSection>
+
+/**
+ * Run a stage of research workers, honouring the dependencies they declare.
+ *
+ * WHY A GRAPH. Running the four one at a time cost 24 % of a run's wall clock,
+ * and running them all at once lost the one handoff that matters: APIS is written
+ * against the FILES map, and under a flat `Promise.all` it got nothing. Only ONE
+ * edge exists — the other three questions are independent — so a scheduler that
+ * reads `after` runs FILES, then APIS, with CONTEXT and TOOLING alongside both,
+ * and the handoff survives the concurrency.
+ *
+ * `prior` is a worker's DECLARED dependencies, not "whatever happened to finish".
+ * The second would make a prompt a function of scheduling order, so the same task
+ * would produce different prompts on two machines.
+ *
+ * FAILURE. A worker whose dependency never produced a section does not start; its
+ * independent siblings still finish, so their sections reach the task file for the
+ * resume. The first failure in spec order is then thrown — every worker has
+ * settled by that point, which is what keeps a fatal APIS from orphaning the
+ * three that answered.
+ *
+ * `serial` is preserved for a single local GPU, where concurrent streams share one
+ * device and the sum of four fast workers beats the max of four slowed ones.
+ */
+export async function runResearchStage(
+    specs: ReadonlyArray<ResearchWorkerSpec>,
+    drive: DriveWorker,
+    mode: ResearchConcurrency = 'graph'
+): Promise<ResearchSection[]> {
+    if (mode === 'serial') {
+        const done: ResearchSection[] = []
+        for (const spec of specs) done.push(await drive(spec, done))
+        return done
+    }
+
+    const bySection = new Map(specs.map(s => [s.section, s]))
+    assertSchedulable(specs, bySection)
+
+    const done = new Map<string, ResearchSection>()
+    const failed = new Map<string, unknown>()
+    const started = new Map<string, Promise<void>>()
+    const run = (spec: ResearchWorkerSpec): Promise<void> => {
+        const inFlight = started.get(spec.section)
+        if (inFlight) return inFlight
+        const after = spec.after ?? []
+        const p = (async () => {
+            await Promise.all(after.map(dep => run(bySection.get(dep)!)))
+            if (after.some(dep => !done.has(dep))) return
+            try {
+                done.set(
+                    spec.section,
+                    await drive(
+                        spec,
+                        after.map(dep => done.get(dep)!)
+                    )
+                )
+            } catch (e) {
+                failed.set(spec.section, e)
+            }
+        })()
+        started.set(spec.section, p)
+        return p
+    }
+    await Promise.all(specs.map(run))
+
+    for (const spec of specs) {
+        if (failed.has(spec.section)) throw failed.get(spec.section)
+    }
+    return specs.flatMap(s => {
+        const section = done.get(s.section)
+        return section ? [section] : []
+    })
+}
+
+/**
+ * Reject a graph the scheduler cannot run before any child is spawned: an `after`
+ * naming a section that is not in this stage, or a cycle. Either would otherwise
+ * surface as a research phase that never returns.
+ */
+function assertSchedulable(
+    specs: ReadonlyArray<ResearchWorkerSpec>,
+    bySection: ReadonlyMap<string, ResearchWorkerSpec>
+): void {
+    const settled = new Set<string>()
+    const walk = (spec: ResearchWorkerSpec, chain: string[]): void => {
+        if (settled.has(spec.section)) return
+        if (chain.includes(spec.section)) {
+            throw new Error(
+                `research stage: dependency cycle ${[...chain, spec.section].join(' → ')}`
+            )
+        }
+        for (const dep of spec.after ?? []) {
+            const next = bySection.get(dep)
+            if (!next) {
+                throw new Error(
+                    `research stage: ${spec.section} declares after: ${dep}, which is not a worker`
+                )
+            }
+            walk(next, [...chain, spec.section])
+        }
+        settled.add(spec.section)
+    }
+    for (const spec of specs) walk(spec, [])
 }

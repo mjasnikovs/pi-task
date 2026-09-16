@@ -35,7 +35,15 @@ export interface ToolCall {
 export interface LoopHit {
     call: ToolCall
     count: number
-    windowSize: number
+    /**
+     * How many recent calls `count` was counted over.
+     *
+     * OPTIONAL because a stall hit counts a streak or a byte total, not a window
+     * — it used to carry 0 there, which every renderer printed as "in the last 0
+     * calls". Absent means "this hit has no window"; a renderer must say what the
+     * hit actually measured instead.
+     */
+    windowSize?: number
     /**
      * Set when the kill came from the whole-run StallDetector rather than this
      * short-window detector, naming which of its two rules tripped
@@ -126,6 +134,14 @@ interface Entry {
 
 export class LoopDetector {
     private readonly buf: Entry[] = []
+    /**
+     * Every path the attempt has targeted, with the span it covered — the WHOLE
+     * attempt, not the window `buf` holds. It is the only record of what a killed
+     * attempt actually read: the kill fires from the tool-call hook, before a byte
+     * of answer text streams, so text carry-forward is empty by construction and
+     * the re-spawn would otherwise start blind.
+     */
+    private readonly visits = new Map<string, {from: number; to: number}>()
 
     constructor(
         private readonly window: number = LOOP_WINDOW,
@@ -138,8 +154,19 @@ export class LoopDetector {
     record(call: ToolCall): LoopHit | null {
         const key = loopKey(call)
         const offset = readOffset(call.args)
-        this.buf.push({key, path: primaryPath(call.args), offset, end: readEnd(call.args, offset)})
+        const path = primaryPath(call.args)
+        const end = readEnd(call.args, offset)
+        this.buf.push({key, path, offset, end})
         if (this.buf.length > this.window) this.buf.shift()
+        if (path !== null) {
+            const seen = this.visits.get(path)
+            this.visits.set(
+                path,
+                seen ? {from: Math.min(seen.from, offset), to: Math.max(seen.to, end)} : (
+                    {from: offset, to: end}
+                )
+            )
+        }
 
         // 1. Exact-match loop: identical (name, args) repeated past threshold.
         let exact = 0
@@ -149,7 +176,6 @@ export class LoopDetector {
         // 2. Path-aware loop: the same file re-targeted without forward progress.
         // Caught here precisely because varied offset/limit change the exact key on
         // every call, so pattern 1 above can never see it.
-        const path = this.buf[this.buf.length - 1].path
         if (path !== null) {
             const revisits = this.countRevisits(path)
             if (revisits >= this.pathThreshold) {
@@ -173,6 +199,17 @@ export class LoopDetector {
      * SingleReadGuard made by keying on the path alone, and it is corrected the same
      * way.
      */
+    /**
+     * The attempt's READ-SET, in first-seen order: every path it opened, with the
+     * line span when the call named one. This is what a restart carries instead of
+     * answer text — see {@link visits}.
+     */
+    visited(): string[] {
+        return [...this.visits].map(([path, span]) =>
+            span.to === Infinity ? path : `${path} (lines ${span.from}-${span.to})`
+        )
+    }
+
     private countRevisits(path: string): number {
         let maxEnd = -1
         let revisits = 0
@@ -186,13 +223,74 @@ export class LoopDetector {
     }
 }
 
-/** The restart hint a re-spawned child gets after a loop kill: names the call. */
-export function formatLoopHint(hit: LoopHit): string {
+/**
+ * What killed the attempt, as prose a human reads in a degraded section or a
+ * `loop events` line.
+ *
+ * ONE renderer because each rule measures something different — calls in a
+ * window, a consecutive streak, bytes against a context window — and a shared
+ * "×N in the last M calls" template printed the streak's absent window as
+ * "in the last 0 calls".
+ */
+export function describeLoopHit(hit: LoopHit): string {
+    const call = `${hit.call.name}(${JSON.stringify(hit.call.args)})`
+    if (hit.stall === 'context-churn') {
+        return (
+            `pulled in about ${hit.count} tokens of tool output, more than its `
+            + `${hit.windowSize}-token context window holds (last call ${call})`
+        )
+    }
+    if (hit.stall === 'no-new-ground') {
+        return (
+            `stopped covering new ground — ${hit.count} consecutive tool calls returned `
+            + `nothing it had not already seen (last call ${call})`
+        )
+    }
+    return `stuck in a loop — called ${call} ×${hit.count} in the last ${hit.windowSize} calls`
+}
+
+/**
+ * The read-set clause a restart hint carries, or '' when the killed attempt
+ * opened nothing.
+ *
+ * It is the only thing a loop restart CAN carry: the kill fires from the
+ * tool-call hook, so there is no partial answer to hand forward (which is why
+ * `loop` is absent from CARRY_FORWARD_REASONS in pi-worker-core.ts). Without it
+ * "do not re-read what you have already read" names no files and the re-spawn
+ * re-reads the same ones.
+ *
+ * Bounded so a rotation over hundreds of files cannot outgrow the prompt it is
+ * prepended to; the count keeps the elision honest.
+ */
+export function formatReadSet(visited: readonly string[]): string {
+    if (visited.length === 0) return ''
+    const shown = visited.slice(0, MAX_READ_SET_ENTRIES)
+    const rest = visited.length - shown.length
+    return (
+        ` You have already read, do not re-open: ${shown.join(', ')}`
+        + (rest > 0 ? `, and ${rest} more` : '')
+        + '.'
+    )
+}
+
+/**
+ * How many paths a restart hint lists. The read-set is a reminder, not an
+ * inventory: past a screenful the tail stops being read and only costs prefill,
+ * and the elision line still tells the child there was more.
+ */
+const MAX_READ_SET_ENTRIES = 40
+
+/**
+ * The restart hint a re-spawned child gets after a loop kill: names the call, and
+ * the read-set the killed attempt built up.
+ */
+export function formatLoopHint(hit: LoopHit, visited: readonly string[] = []): string {
     const argsStr = JSON.stringify(hit.call.args)
     return (
         `[SYSTEM NOTE: Your prior attempt called ${hit.call.name}(${argsStr}) `
         + `${hit.count} times in the last ${hit.windowSize} tool calls — you appeared to be `
         + `stuck in a loop. Avoid repeating that exact call; if you've already seen its result, `
-        + `work from memory or pick a different angle.]`
+        + `work from memory or pick a different angle.`
+        + `${formatReadSet(visited)}]`
     )
 }

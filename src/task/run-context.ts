@@ -33,7 +33,8 @@ import {makeGit, type GitRunner} from '../shared/git-runner.js'
 import {declaredDepNames, detectEcosystems, type EcosystemId} from '../workers/docs-ecosystems.js'
 import {newRunToken} from '../workers/research-cache.js'
 import {getFileInventory} from './file-inventory.js'
-import {buildOrientation, type OrientationResult} from './orientation.js'
+import {getConfig} from '../config/config.js'
+import {buildOrientation, parseIgnorePatterns, type OrientationResult} from './orientation.js'
 import {HEALTH_MANIFEST_FILES} from './repo-health-check.js'
 
 /** Keep the task machinery's own artifacts out of the tree hash: `.pi-tasks/`
@@ -152,7 +153,8 @@ export class RunContext {
     readonly runId: string
     private readonly _signal: AbortSignal | undefined
     private _inventory: Promise<string> | undefined
-    private _orientation: Promise<OrientationResult> | undefined
+    private readonly _orientation = new Map<string, Promise<OrientationResult>>()
+    private _orientationExclude: Promise<string[]> | undefined
     private _manifestDeps: string[] | undefined
     private _ecosystems: EcosystemId[] | undefined
     private _verifiedTooling: VerifiedCommand[] = []
@@ -177,24 +179,57 @@ export class RunContext {
         return (await this.inventory()).split('\n').filter(l => l.trim().length > 0)
     }
 
-    /** The orientation core over this run's whole inventory — the block the
-     *  read-heavy research workers get, built once however many tasks ask. */
-    orientation(): Promise<OrientationResult> {
-        this._orientation ??= this.orientationOf(undefined)
-        return this._orientation
+    /**
+     * The orientation core over this run's whole inventory — the block the
+     * exploring research workers get, built once however many tasks ask.
+     *
+     * Memoised per CITED SET, not once: the files a task points at are part of the
+     * question, and two tasks citing different specs are asking for different
+     * blocks. Every task in a /task-auto run carries the same threaded spec ref, so
+     * in practice this is still one build.
+     */
+    orientation(cited: readonly string[] = []): Promise<OrientationResult> {
+        const key = [...cited].sort().join(' ')
+        let built = this._orientation.get(key)
+        if (!built) {
+            built = this.orientationOf(undefined, cited)
+            this._orientation.set(key, built)
+        }
+        return built
     }
 
     /** The same block over a NARROWED candidate list (refine takes the manifest and
      *  config tiers only), which is per-caller and so not memoised. */
-    async orientationOf(paths: string[] | undefined): Promise<OrientationResult> {
+    async orientationOf(
+        paths: string[] | undefined,
+        cited: readonly string[] = []
+    ): Promise<OrientationResult> {
         const candidates = paths ?? (await this.inventoryPaths())
-        return buildOrientation(candidates, async p => {
-            try {
-                return await fsp.readFile(path.resolve(this.cwd, p), 'utf8')
-            } catch {
-                return null
-            }
-        }).catch(() => ({block: '', supplied: new Set<string>()}))
+        return buildOrientation(
+            candidates,
+            async p => {
+                try {
+                    return await fsp.readFile(path.resolve(this.cwd, p), 'utf8')
+                } catch {
+                    return null
+                }
+            },
+            {cited, excludePatterns: await this.orientationExclusions()}
+        ).catch(() => ({block: '', supplied: new Set<string>()}))
+    }
+
+    /**
+     * What this project says is not its own source, on top of `VENDORED_DIRS`:
+     * its `.gitignore`, plus the user's `orientationExclude`. Read once — a run
+     * that re-read it mid-way would orient two tasks differently.
+     */
+    private orientationExclusions(): Promise<string[]> {
+        this._orientationExclude ??= fsp
+            .readFile(path.join(this.cwd, '.gitignore'), 'utf8')
+            .then(parseIgnorePatterns)
+            .catch(() => [])
+            .then(fromGit => [...fromGit, ...getConfig().orientationExclude])
+        return this._orientationExclude
     }
 
     /**
