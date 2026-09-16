@@ -2795,8 +2795,11 @@ describe('phaseResearch service enrichment', () => {
                 },
                 refined
             )
-            const headerOccurrences = promptsSeen[0].match(/### freshness-check skipped/g) ?? []
-            expect(headerOccurrences.length).toBe(1)
+            // Line-anchored: the context worker's rules quote the header mid-line.
+            const blockCounts = promptsSeen.map(
+                p => p.match(/^### freshness-check skipped$/gm)?.length ?? 0
+            )
+            expect(blockCounts.every(n => n === 1)).toBe(true)
             expect(promptsSeen[0]).toContain('- Twitch')
             expect(promptsSeen[0]).toContain('- Stripe')
             // No per-service block when key is missing.
