@@ -30,6 +30,8 @@ import {runGuidelineEnforcement} from './enforce-guidelines.js'
 import {runWorkVerification, extractSpecForVerification, type VerifyProbes} from './verify-work.js'
 import {readEnvNotes, appendEnvNotes} from './env-notes.js'
 import {currentRunContext} from './run-context.js'
+import {runGateEvidence, evidenceVerifyFindings} from './gate-evidence.js'
+import type {CommandRunner} from './command-run.js'
 import {readContracts} from './contracts.js'
 import {recordDebt} from './accept-debt.js'
 import {recordRepairCandidate} from './root-cause-repair.js'
@@ -613,9 +615,38 @@ export function buildVerifyProbes(params: {
     taskId: string
     spec: string | null
     log?: (msg: string) => void
+    /** Names the gate-evidence command currently running, for the caller's live
+     *  status line — the same channel `runRepoHealthCheck` takes. */
+    onCommand?: (cmd: string) => void
+    /** The spawner for the gate-evidence commands, as `runRepoHealthCheck` takes
+     *  one: injected so a session's command count is assertable without a shell. */
+    run?: CommandRunner
 }): VerifyProbes {
-    const {cwd, signal, taskId, spec, log} = params
+    const {cwd, signal, taskId, spec, log, onCommand, run} = params
     return {
+        // The project's own check and build commands, run ONCE per tree by the
+        // parent (gate-evidence.ts) and handed to the child as a result to read.
+        // Cached on the RUN's context, so every gate child of this session shares
+        // one answer and a lint-fix that moves the tree costs exactly one re-run.
+        // Outside a run bracket (a direct runSingleTask, a test) there is no run
+        // to share and each ask gets a fresh context, so the cache spans one call.
+        evidence: () => {
+            const rc = currentRunContext(cwd)
+            return rc
+                .gateEvidenceFor((commands, tree) =>
+                    runGateEvidence({
+                        cwd,
+                        runId: rc.runId,
+                        commands,
+                        treeHash: tree,
+                        timeoutMs: getConfig().requestTimeoutMs,
+                        ...(signal === undefined ? {} : {signal}),
+                        ...(onCommand === undefined ? {} : {onCommand}),
+                        ...(run === undefined ? {} : {run})
+                    })
+                )
+                .then(evidenceVerifyFindings)
+        },
         // Deterministic self-verification probe: test files the task itself
         // authored/changed become prompt-level findings mandating the child
         // to drive the real artifact before trusting their green result.
@@ -936,7 +967,12 @@ export function buildGateDeps(params: {
                         signal,
                         taskId,
                         spec,
-                        log: makeDebugAppender(runLogPath(cwd2, 'verify-debug.log'))
+                        log: makeDebugAppender(runLogPath(cwd2, 'verify-debug.log')),
+                        // The evidence row runs the project's own checks, so it is
+                        // the longest step of the stage the loader above exists for.
+                        onCommand: c => {
+                            stageLine = `project checks · ${c}`
+                        }
                     }),
                     // Git-state guard result of the most recent child run: a verdict
                     // computed on a tree the child itself mutated is discarded — but ONLY
