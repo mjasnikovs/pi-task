@@ -12,10 +12,11 @@
  * Mechanism (contracts.ts pattern, applied to decompose itself): the decompose
  * prompt asks each task line to cite its origin as a trailing
  * `[source: "<verbatim spec line>"]`. The host then:
- *   1. GROUNDS the quote — a citation that is not a (whitespace/case-normalised)
- *      substring of the source doc is fabricated and is stripped, never trusted;
+ *   1. GROUNDS the quote in a BLOCK of the parsed spec doc — a citation that is
+ *      not a (whitespace/case-normalised) substring is fabricated and is
+ *      stripped, never trusted — and remembers which block it landed in;
  *   2. deterministically detects DROPPED ADDITIVE FRAGMENTS: the `+`-joined
- *      trailing constraints of the cited line ("… + tests") whose words are
+ *      trailing constraints of the cited block ("… + tests") whose words are
  *      absent from the title;
  *   3. RE-ATTACHES the missing fragments to the title verbatim.
  *
@@ -30,43 +31,18 @@
  * presence is exact word membership (with a singular/plural `s` allowance).
  */
 import {normalise} from './contracts.js'
+import {
+    demark,
+    groundIn,
+    parseSpecDoc,
+    specPlain,
+    type Block,
+    type BlockKind,
+    type SpecDoc
+} from './spec-doc.js'
 
 /** One trailing `[source: "…"]` clause, anchored so it is the WHOLE remainder. */
 const SOURCE_RE = /^\[source:\s*"([\s\S]*)"\s*\]$/i
-
-/**
- * Markdown MARKUP dropped before grounding — emphasis runs, list and heading
- * markers, table pipes and CODE BACKTICKS. Not content: no word, number or
- * punctuation inside a sentence is touched, so this cannot make an invented
- * quote match.
- *
- * WHY. A model copies a spec line as it READS, and what it reads is rendered:
- * `2. **Auth** — sessions, login/logout/me, guards + tests.` comes back as
- * `Auth — sessions, login/logout/me, guards + tests.` That is a verbatim copy of
- * the line's TEXT, and the exact-substring test called it fabricated and threw
- * it away — including, as here, the "+ tests" line that is this module's own
- * worked example.
- *
- * BACKTICKS ARE THE SAME CLASS and were the larger half. A code span renders as
- * bare text, so `3. **Invites** — create/validate/redeem, \`/join/:token\` page.`
- * comes back as `Invites — create/validate/redeem, /join/:token page.` Screening
- * every spec line in its RENDERED form is what makes those quotes match at all.
- *
- * The two directions this has to hold in, both run:
- *   FLOOR   a real spec line with ONE content word altered must NOT be grounded —
- *           changing `sessions` to `tokens`, or `redeem` to `revoke`, drops it.
- *   CEILING a real spec line quoted without its markup MUST be grounded — both the
- *           `2. **Auth** —` numbering-and-bold case and the backticked
- *           `` `/join/:token` `` case still match.
- */
-function demark(s: string): string {
-    return s
-        .replace(/\*\*|__/g, '')
-        .replace(/^\s*(?:[-*+]|\d+\.)\s+/gm, '')
-        .replace(/^#+\s*/gm, '')
-        .replace(/`/g, '')
-        .replace(/\|/g, ' ')
-}
 
 /**
  * Undo the backslash-escaping a model applies to a quote it is putting INSIDE a
@@ -84,11 +60,19 @@ function unescapeQuotes(s: string): string {
     return s.replace(/\\"/g, '"')
 }
 
+export interface GroundedSource {
+    /** The citation as the model wrote it. */
+    quote: string
+    /** The document block it grounded in — null when it matches only ACROSS block
+     *  boundaries (a model quoting two consecutive bullets as one line). */
+    block: Block | null
+}
+
 export interface SourcedTitle {
     /** The title with every source clause stripped. */
     base: string
     /** The cited spec lines, in order, keeping only those GROUNDED in the doc. */
-    sources: string[]
+    sources: GroundedSource[]
 }
 
 /**
@@ -109,10 +93,11 @@ export interface SourcedTitle {
  * An absent clause yields no sources; a fabricated (ungrounded) one is dropped
  * — exactly like keepGroundedContracts rejects a paraphrased quote.
  */
-export function extractTitleSource(title: string, sourceDoc: string): SourcedTitle {
-    const ref = normalise(demark(sourceDoc))
+export function extractTitleSource(title: string, sourceDoc: string | SpecDoc): SourcedTitle {
+    const doc = typeof sourceDoc === 'string' ? parseSpecDoc(sourceDoc) : sourceDoc
+    const flat = normalise(specPlain(doc))
     let base = title.trim()
-    const sources: string[] = []
+    const sources: GroundedSource[] = []
     for (;;) {
         const at = base.toLowerCase().lastIndexOf('[source:')
         if (at === -1) break
@@ -120,8 +105,13 @@ export function extractTitleSource(title: string, sourceDoc: string): SourcedTit
         if (!m) break
         const quote = m[1].trim()
         base = base.slice(0, at).trim()
-        if (quote.length > 0 && ref.includes(normalise(demark(unescapeQuotes(quote)))))
-            sources.unshift(quote)
+        if (quote.length === 0) continue
+        const unescaped = unescapeQuotes(quote)
+        const block = groundIn(doc, unescaped)
+        if (block !== null) sources.unshift({quote, block})
+        // A citation that spans two blocks is still a faithful copy of the doc, so
+        // it stays grounded; it just has no single block to restore fragments from.
+        else if (flat.includes(normalise(demark(unescaped)))) sources.unshift({quote, block: null})
     }
     return {base, sources}
 }
@@ -142,7 +132,58 @@ function fragmentPresent(fragment: string, titleWords: Set<string>): boolean {
 }
 
 /**
- * The `+`-joined trailing constraint fragments of `sourceLine` whose words are
+ * An additive suffix is a PROSE construct. Inside a table row a `+` joins one
+ * cell's own words while the row's other cells are unrelated columns; inside a
+ * code fence it is code. Live, those two shapes restored `password) | public |`
+ * (a router table's path, guard and its pipes) and `check` (the tail of a DDL
+ * `check (…)` constraint) into task titles as spec obligations.
+ */
+const RESTORABLE_KINDS: ReadonlySet<BlockKind> = new Set<BlockKind>(['para', 'list-item'])
+
+const BRACKET_PAIRS: ReadonlyArray<readonly [string, string]> = [
+    ['(', ')'],
+    ['[', ']'],
+    ['{', '}']
+]
+
+function occurrences(s: string, ch: string): number {
+    let n = 0
+    for (const c of s) if (c === ch) n++
+    return n
+}
+
+/** A fragment cut mid-expression: the cut is the defect, not the content. */
+function isBalanced(s: string): boolean {
+    return BRACKET_PAIRS.every(([open, close]) => occurrences(s, open) === occurrences(s, close))
+}
+
+/**
+ * Split on the separators that sit at bracket depth ZERO. A `+` or a comma inside
+ * a parenthetical belongs to the parenthetical — splitting there is what cut
+ * `(unused + not expired)` into a fragment with a dangling `)`.
+ *
+ * A stray closer floors the depth at zero rather than driving it negative, so a
+ * line whose brackets are already unbalanced still splits on its later separators.
+ */
+function splitAtDepth(s: string, separators: string): string[] {
+    const out: string[] = []
+    let depth = 0
+    let start = 0
+    for (let i = 0; i < s.length; i++) {
+        const c = s[i]
+        if (BRACKET_PAIRS.some(([open]) => open === c)) depth++
+        else if (BRACKET_PAIRS.some(([, close]) => close === c)) depth = Math.max(0, depth - 1)
+        else if (depth === 0 && separators.includes(c)) {
+            out.push(s.slice(start, i))
+            start = i + 1
+        }
+    }
+    out.push(s.slice(start))
+    return out
+}
+
+/**
+ * The `+`-joined trailing constraint fragments of a spec block whose words are
  * absent from `title`. "2. **Auth** — sessions, login/logout/me, guards + tests."
  * yields the fragment "tests"; a title that never mentions tests gets it back.
  * Fragments before the first `+` are the task's body — a title paraphrases those
@@ -150,26 +191,36 @@ function fragmentPresent(fragment: string, titleWords: Set<string>): boolean {
  * ("+ Tailwind v4 tokens, nav, router" is three constraints), so a title missing
  * one of them gets ONLY that one restored, not the whole phrase (measured live:
  * whole-phrase restoration re-attached text the title already carried).
+ *
+ * A bare string is read as prose — the shape a caller that has no document has.
  */
-export function findDroppedPlusFragments(sourceLine: string, title: string): string[] {
-    const parts = sourceLine.split('+')
+export function findDroppedPlusFragments(source: Block | string, title: string): string[] {
+    const block: Block =
+        typeof source === 'string' ?
+            {kind: 'para', text: source, plain: demark(source), line: 0}
+        :   source
+    if (!RESTORABLE_KINDS.has(block.kind)) return []
+    const parts = splitAtDepth(block.plain, '+')
     if (parts.length < 2) return []
     const titleWords = new Set(words(title))
     const missing: string[] = []
     for (const raw of parts.slice(1)) {
-        for (const sub of raw.split(',')) {
-            // A fragment runs to the next `+`/comma; strip trailing sentence
-            // punctuation and markdown emphasis so "tests.**" compares as "tests".
-            const fragment = sub
-                .replace(/[*_`]/g, '')
-                .replace(/[.,;:!?)\]]+\s*$/, '')
-                .trim()
-            if (fragment.length === 0) continue
+        for (const sub of splitAtDepth(raw, ',')) {
+            // Trailing sentence punctuation is the line's, not the fragment's;
+            // brackets are left alone because they are what the balance test reads.
+            const fragment = sub.replace(/[.,;:!?]+\s*$/, '').trim()
             if (words(fragment).length === 0) continue
+            if (!isBalanced(fragment)) continue
             if (!fragmentPresent(fragment, titleWords)) missing.push(fragment)
         }
     }
     return missing
+}
+
+/** Restored fragments as a DELIMITED list. A bare `join(', ')` is ambiguous the
+ *  moment a fragment contains a comma of its own — and they routinely do. */
+export function renderFragments(fragments: string[]): string {
+    return fragments.map(f => `"${f}"`).join('; ')
 }
 
 export interface TitleRestoration {
@@ -196,11 +247,12 @@ export interface ReconciledPlan {
  * model that never cites degrades to exactly the old behavior.
  */
 export function reconcileTitleSources(titles: string[], sourceDoc: string): ReconciledPlan {
+    const doc = parseSpecDoc(sourceDoc)
     const out: string[] = []
     const restored: TitleRestoration[] = []
     let sourced = 0
     for (let i = 0; i < titles.length; i++) {
-        const {base, sources} = extractTitleSource(titles[i], sourceDoc)
+        const {base, sources} = extractTitleSource(titles[i], doc)
         if (sources.length === 0) {
             out.push(base)
             continue
@@ -213,7 +265,8 @@ export function reconcileTitleSources(titles: string[], sourceDoc: string): Reco
         const seen = new Set<string>()
         const missing: string[] = []
         for (const src of sources) {
-            for (const f of findDroppedPlusFragments(src, base)) {
+            if (src.block === null) continue
+            for (const f of findDroppedPlusFragments(src.block, base)) {
                 const k = f.toLowerCase()
                 if (seen.has(k)) continue
                 seen.add(k)
@@ -224,8 +277,10 @@ export function reconcileTitleSources(titles: string[], sourceDoc: string): Reco
             out.push(base)
             continue
         }
-        restored.push({index: i, fragments: missing, sources})
-        out.push(`${base} — MUST also cover (restored from its spec line): ${missing.join(', ')}`)
+        restored.push({index: i, fragments: missing, sources: sources.map(s => s.quote)})
+        out.push(
+            `${base} — MUST also cover (restored from its spec line): ${renderFragments(missing)}`
+        )
     }
     return {titles: out, restored, sourced}
 }

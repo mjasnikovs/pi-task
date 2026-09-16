@@ -245,6 +245,8 @@ export interface AdoptionDecision {
     reason: string
     /** Owned-requirement indices the retry would drop (for the debug trail). */
     dropped: number[]
+    /** No further round can improve on the current plan — stop reprompting. */
+    terminal?: boolean
 }
 
 /**
@@ -257,9 +259,10 @@ export interface AdoptionDecision {
  *      guarantee; it holds regardless of how the un-ownable requirements were
  *      classified, so it backstops the cross-cutting classifier completely.
  *   2b. WITH requirement signal: reject a retry that grows the plan while covering
- *      NOTHING new — the tiebreak that makes "ship the best" also mean "ship the
- *      smallest among equals". Without it the guard is inert against the superset
- *      the reprompt asks for; see the long note at the branch.
+ *      NOTHING new, and mark the loop TERMINAL — the tiebreak that makes "ship the
+ *      best" also mean "ship the smallest among equals". Without it the guard is
+ *      inert against the superset the reprompt asks for; see the long note at the
+ *      branch.
  *   3. WITHOUT requirement signal: fall back to the count floor, and additionally
  *      refuse a retry that leaves MORE areas uncovered than the current plan — so
  *      the no-requirements path also ships the best, not the last.
@@ -301,16 +304,18 @@ export function decideAdoption(
         // always adopted; an independently-sampled one often is not — the guard has
         // power, just not against the shape the prompt requests).
         //
-        // REJECT, never break. Rejection keeps the smaller plan and lets the loop
-        // reprompt again; breaking here forfeits a later round that would have
-        // gained: a later round can add the requirement a tied round did not. "No gain this round" is not "no gain ever".
+        // TERMINAL, not merely rejected. The reprompt asks for every title the
+        // previous list had PLUS the missing areas, so the next round is drawn from
+        // the same instruction that just produced a superset covering nothing new;
+        // "reject and ask again" spends the remaining rounds re-asking a question
+        // already answered. The measured shape is a plan inflating round after
+        // round with the owned-set pinned, every step logged as "preserves owned
+        // coverage".
         //
         // Safety is structural, not statistical: this branch is reachable only when
         // the retry covers NO MORE than the current plan, so it can never decline a
-        // strictly better one. It removes plans inflated by a retry that added
-        // titles without adding coverage, and leaves coverage itself alone — the
-        // win is removing pathological
-        // inflation, not shrinking plans generally.
+        // strictly better one — and the plan that ships is the current one, which is
+        // the best seen.
         if (
             retry.covered.size <= current.covered.size
             && retry.titles.length > current.titles.length
@@ -320,7 +325,8 @@ export function decideAdoption(
                 reason:
                     `no coverage gain for +${retry.titles.length - current.titles.length} titles `
                     + `(${current.covered.size} owned, unchanged)`,
-                dropped: []
+                dropped: [],
+                terminal: true
             }
         }
         return {adopt: true, reason: 'preserves owned coverage', dropped: []}

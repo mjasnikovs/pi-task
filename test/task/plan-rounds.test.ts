@@ -166,4 +166,51 @@ describe('CoverageLedger', () => {
             expect(l.mayRetry()).toBe(false)
         })
     })
+
+    // A retry that grows the plan while covering nothing new is drawn from the
+    // same reprompt — "keep every title you had, PLUS the missing areas" — that
+    // just produced it, so the rounds left are spent re-asking an answered
+    // question. The verdict ends the loop rather than merely losing a round.
+    describe('a terminal verdict', () => {
+        /** Growth with the owned-set pinned: `decideAdoption`'s terminal branch. */
+        function zeroGainGrowth(l: CoverageLedger) {
+            return l.consider(plan({titles: ['A', 'B', 'C'], covered: [1], missing: ['tests']}))
+        }
+
+        test('stops the loop even with rounds left in the budget', () => {
+            const l = new CoverageLedger(plan({titles: ['A', 'B'], covered: [1]}), {
+                cap: 5,
+                hasRequirements: true
+            })
+            l.startRound()
+            const out = zeroGainGrowth(l)
+            expect(out.adopted).toBe(false)
+            expect(out.decision.terminal).toBe(true)
+            expect(l.mayRetry()).toBe(false)
+        })
+
+        test('keeps the better plan it declined', () => {
+            const seed = plan({titles: ['A', 'B'], covered: [1]})
+            const l = new CoverageLedger(seed, {cap: 5, hasRequirements: true})
+            zeroGainGrowth(l)
+            expect(l.best()).toBe(seed)
+        })
+
+        test('the bonus round cannot fire after it', () => {
+            const l = new CoverageLedger(plan({titles: ['A', 'B'], covered: [1]}), {
+                cap: 1,
+                hasRequirements: true
+            })
+            l.startRound()
+            zeroGainGrowth(l)
+            // A later adoption that grows coverage AND exposes a new area — the
+            // exact shape that buys the bonus — no longer reopens the loop.
+            const after = l.consider(
+                plan({titles: ['A', 'B'], covered: [1, 2], missing: ['tests', 'docs']})
+            )
+            expect(after.adopted).toBe(true)
+            expect(after.grantedBonusRound).toBe(false)
+            expect(l.mayRetry()).toBe(false)
+        })
+    })
 })

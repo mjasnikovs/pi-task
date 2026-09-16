@@ -55,6 +55,7 @@ export class CoverageLedger {
     private _round = 0
     private _cap: number
     private _bonusUsed = false
+    private _terminal = false
 
     constructor(
         private _best: ScoredPlan,
@@ -75,7 +76,7 @@ export class CoverageLedger {
 
     /** May another reprompt round run? */
     mayRetry(): boolean {
-        return this._round < this._cap
+        return !this._terminal && this._round < this._cap
     }
 
     /** Spend a round. Call once per reprompt, before the child runs. */
@@ -101,6 +102,10 @@ export class CoverageLedger {
      */
     consider(cand: ScoredPlan): ConsiderOutcome {
         const decision = decideAdoption(this._best.plan, cand.plan, this._opts.hasRequirements)
+        // A terminal verdict ends the loop HERE, before the bonus round can extend
+        // it: the bonus exists to buy one more draw, and the whole finding of a
+        // terminal verdict is that another draw answers the same question again.
+        if (decision.terminal === true) this._terminal = true
         if (!decision.adopt) return {adopted: false, decision, grantedBonusRound: false}
 
         const priorCovered = this._best.plan.covered.size
@@ -111,6 +116,7 @@ export class CoverageLedger {
 
         const grant =
             !this._bonusUsed
+            && !this._terminal
             && this._round >= this._cap
             && this._opts.hasRequirements
             && cand.plan.covered.size > priorCovered
