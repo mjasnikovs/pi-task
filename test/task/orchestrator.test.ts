@@ -17,6 +17,7 @@ import {_setSink, reset as resetSessionState} from '../../src/remote/session-sta
 import {broadcast as wsBroadcast} from '../../src/remote/broadcast.js'
 import type {PhaseDeps, PhaseSeams} from '../../src/task/child-runner.js'
 import {RUN_END_POLICY} from '../../src/task/run-end.js'
+import {parseHandoff, specHash} from '../../src/task/handoff.js'
 import {
     implementationGuardArmed,
     disarmImplementationGuard
@@ -257,6 +258,59 @@ describe('TaskRunner — happy path', () => {
             expect(sent).toHaveLength(1)
             expect(sent[0]).toContain('VERIFY:')
             expect(await readSection(cwd, 'TASK_0001', 'handoff')).toMatch(/handoff_at:/)
+        })
+    })
+
+    /**
+     * The autofix shape: the gate re-enters the SAME task by id, so every phase is
+     * already done and the second run times nothing. What it must not do is
+     * overwrite what the first run measured and delivered.
+     */
+    test('a re-entry APPENDS its attempt to the timings and the handoff ledger', async () => {
+        await withTmpTaskDir(async cwd => {
+            const {ctx} = makeFakeCtx(cwd)
+            await runOnce(ctx, cwd, happy())
+            const first = (await readSection(cwd, 'TASK_0001', 'phase timings')) ?? ''
+            const sent: string[] = []
+            await new TaskRunner({
+                ctx,
+                cwd,
+                rawPrompt: '',
+                resumeId: 'TASK_0001',
+                sendSpec: async s => {
+                    sent.push(s)
+                },
+                fixContext: {
+                    outcome: {ok: false, failClass: 'static-checks', reason: 'lint exited 1'},
+                    disposition: {
+                        rule: 'autofix',
+                        action: 'autofix',
+                        debtOrigin: null,
+                        reason: 'autofix recommended'
+                    },
+                    probes: {},
+                    attempt: 1
+                },
+                seams: happy()
+            }).run()
+
+            const timings = (await readSection(cwd, 'TASK_0001', 'phase timings')) ?? ''
+            for (const phase of ['refine', 'research', 'grill', 'compose', 'critique']) {
+                expect(timings).toContain(phase)
+            }
+            expect(timings).toMatch(/^attempt 1$/m)
+            expect(timings).toMatch(/^attempt 2$/m)
+            expect(timings.startsWith(first)).toBe(true)
+
+            const records = parseHandoff(await readSection(cwd, 'TASK_0001', 'handoff'))
+            expect(records.map(r => r.attempt)).toEqual([1, 2])
+            expect(records.map(r => r.delivered)).toEqual(['fresh', 'reattempt'])
+            expect(records[1].fixContext?.rule).toBe('autofix')
+            expect(records[1].fixContext?.failClass).toBe('static-checks')
+            // The re-attempt banner rides in front of the spec, so the delivered
+            // bytes differ from attempt 1's — and the hashes say so.
+            expect(records[1].specHash).not.toBe(records[0].specHash)
+            expect(records[1].specHash).toBe(specHash(sent[0]))
         })
     })
 })

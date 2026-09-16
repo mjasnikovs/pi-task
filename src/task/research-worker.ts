@@ -27,7 +27,7 @@ import {classifyContextSilence, countBullets} from './context-silence.js'
 import type {SpawnFn} from '../shared/child-process.js'
 import type {DebugLine} from './debug-log.js'
 import {cancelCheckpoint} from './cancel-points.js'
-import {USER_CANCELLED} from './child-runner.js'
+import {appendLoopEvents, USER_CANCELLED} from './child-runner.js'
 
 /**
  * One research worker's row. `section` is the heading its output is assembled
@@ -348,7 +348,16 @@ export async function runResearchWorker(
 
     run.logDebug?.(`${spec.label}: start`)
     const basePrompt = typeof spec.prompt === 'function' ? spec.prompt(prior) : spec.prompt
-    const runOnce = (extraPreamble?: string): Promise<RunWorkerResult> =>
+    // A research worker's loop kill is the one the run pays most for — it is
+    // what discards a restart's minutes — and it was the only child whose kills
+    // never reached the task file's `## loop events`, so the trail said the phase
+    // ran clean. Awaited so the section is on disk before the next gate reads it.
+    const runOnce = async (extraPreamble?: string): Promise<RunWorkerResult> => {
+        const result = await runWorkerOnce(extraPreamble)
+        await appendLoopEvents(run.cwd, run.taskId, spec.label, result)
+        return result
+    }
+    const runWorkerOnce = (extraPreamble?: string): Promise<RunWorkerResult> =>
         run.record(
             spec.label,
             run.runWorker(spec.label, {

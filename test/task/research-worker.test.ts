@@ -14,6 +14,9 @@ import {
     type ResearchWorkerSpec
 } from '../../src/task/research-worker.js'
 import type {RunWorkerInput, RunWorkerResult} from '../../src/workers/pi-worker-core.js'
+import type {LoopHit} from '../../src/task/loop-detector.js'
+import {withTmpTaskDir} from '../test-utils/tmp-task-dir.js'
+import {readSection, writeTaskFile} from '../../src/task/task-io.js'
 
 /** A finished worker result: clean, with only the fields a gate reads set. */
 function result(over: Partial<RunWorkerResult> = {}): RunWorkerResult {
@@ -388,5 +391,73 @@ describe('runResearchStage', () => {
         await expect(runResearchStage([spec('A', ['B']), spec('B', ['A'])], never)).rejects.toThrow(
             /cycle/
         )
+    })
+})
+
+/**
+ * A research worker's loop kill is the restart the run pays most for, and it was
+ * the only child whose kills never reached the task file's `## loop events`.
+ */
+describe('the loop-events trail', () => {
+    const hit = (stall?: LoopHit['stall']): LoopHit => ({
+        call: {name: 'Read', args: {path: 'src/api.ts'}},
+        count: 5,
+        windowSize: 8,
+        ...(stall ? {stall} : {})
+    })
+
+    const killed = (stall?: LoopHit['stall']): RunWorkerResult =>
+        result({
+            text: 'ANSWER',
+            attempts: 2,
+            restarts: [
+                {
+                    reason: 'loop',
+                    attempt: 1,
+                    wallMs: 1,
+                    waitMs: 0,
+                    workMs: 1,
+                    partialChars: 0,
+                    loopHit: hit(stall)
+                }
+            ]
+        })
+
+    async function eventsAfter(attempts: RunWorkerResult[]): Promise<string> {
+        let events = ''
+        await withTmpTaskDir(async cwd => {
+            await writeTaskFile(
+                cwd,
+                {
+                    id: 'TASK_0001',
+                    state: 'in_progress',
+                    phase: 'research',
+                    created_at: '2026-01-01T00:00:00Z',
+                    updated_at: '2026-01-01T00:00:00Z',
+                    title: 't'
+                },
+                '\n'
+            )
+            const h = harness(attempts)
+            await runResearchWorker(SPEC, {...h.run, cwd, taskId: 'TASK_0001'})
+            events = (await readSection(cwd, 'TASK_0001', 'loop events')) ?? ''
+        })
+        return events
+    }
+
+    test('a loop kill and its restart land in the section', async () => {
+        const events = await eventsAfter([killed()])
+        expect(events).toContain('worker:context')
+        expect(events).toContain('Read')
+        expect(events).toContain('src/api.ts')
+        expect(events).toContain('restarted with hint')
+    })
+
+    test('a STALL kill is recorded too', async () => {
+        expect(await eventsAfter([killed('context-churn')])).toContain('restarted with hint')
+    })
+
+    test('a clean worker writes no section at all', async () => {
+        expect(await eventsAfter([result({text: 'ANSWER'})])).toBe('')
     })
 })

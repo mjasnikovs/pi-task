@@ -86,6 +86,17 @@ export const AUTOFIX_BUDGET: Record<VerifyFailClass, number> = {
     'harness-fault': 0
 }
 
+/**
+ * How many times the /task-auto loop will START one plan entry before abandoning it.
+ *
+ * Derived, not chosen: one run to reach the gate at all, plus the re-runs the most
+ * forgiving fail class is worth inside that run. An entry that comes back for a
+ * further attempt has already spent a full autofix budget without converging, and
+ * the plan's remaining entries are worth more than its next round. Raising a class
+ * budget raises this with it, which is the relationship that should hold.
+ */
+export const ENTRY_ATTEMPT_BUDGET = 1 + Math.max(...Object.values(AUTOFIX_BUDGET))
+
 /** The budget in force, honouring an UNOBSERVED flag on any class. */
 export function autofixBudget(i: Pick<ResolutionInput, 'failClass' | 'unobserved'>): number {
     return i.unobserved ? 0 : AUTOFIX_BUDGET[i.failClass]

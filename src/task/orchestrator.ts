@@ -40,6 +40,7 @@ import {readTextFile} from '../shared/fs-text.js'
 import {
     allocateTaskId,
     ensureTasksDir,
+    mergeTaskSection,
     readSection,
     readTaskFile,
     setTaskSection,
@@ -90,7 +91,14 @@ import {takeHeldInput, isRunActive} from './mid-run-input.js'
 import {withRun, announceTerminal} from './run-bracket.js'
 import {currentRunContext} from './run-context.js'
 import {RUN_END_POLICY, runSucceeded, type RunEnd} from './run-end.js'
-import {formatTimings, type TimingEntry} from './timings.js'
+import {mergeTimings, type TimingEntry} from './timings.js'
+import {
+    appendHandoff,
+    parseHandoff,
+    specHash,
+    summariseFixContext,
+    type HandoffRecord
+} from './handoff.js'
 import {getParentContextWindow, resolveContextUsage} from './context-usage.js'
 
 import {
@@ -265,6 +273,12 @@ export class TaskRunner {
      */
     private readonly _timings: TimingEntry[] = []
     private _currentPhaseChildren: TimingEntry[] | null = null
+    /**
+     * Whether this run has already appended its timings block. The success path
+     * writes, and a cancel raised AFTER it still lands in the catch — which would
+     * otherwise append a second block for the same attempt.
+     */
+    private _timingsWritten = false
 
     constructor(opts: TaskRunnerOptions) {
         const {ctx, cwd, rawPrompt} = opts
@@ -529,9 +543,10 @@ export class TaskRunner {
             if (parseVerifyBlock(this._pc.spec) === null) throw new Error('no_verify_block')
             await updateTaskFrontMatter(cwd, id, {state: 'completed', phase: 'done'})
             this._disposeWidget()
-            await setTaskSection(cwd, id, 'phase timings', formatTimings(this._timings))
-            await setTaskSection(cwd, id, 'handoff', `handoff_at: ${new Date().toISOString()}`)
-            await this._deliverSpec(ctx)
+            await this._writeTimings(cwd, id)
+            const spec = await this._specForDelivery()
+            await this._recordHandoff(cwd, id, spec)
+            await this._deliverSpec(spec)
             // SAFE CHECKPOINT (post implementation turn): every phase section is
             // on disk and the turn has ENDED. Its edits are uncommitted, so a
             // resume re-delivers the spec onto the partly-edited tree — the same
@@ -564,7 +579,7 @@ export class TaskRunner {
             // useful for analysis. Best-effort — never mask the original error.
             if (this._timings.length > 0) {
                 try {
-                    await setTaskSection(cwd, id, 'phase timings', formatTimings(this._timings))
+                    await this._writeTimings(cwd, id)
                 } catch {
                     /* ignore — preserve original failure */
                 }
@@ -590,8 +605,31 @@ export class TaskRunner {
         this._stopWidget = null
     }
 
-    private async _deliverSpec(_ctx: ExtensionCommandContext): Promise<void> {
-        const spec = await this._specForDelivery()
+    private async _writeTimings(cwd: string, id: string): Promise<void> {
+        if (this._timingsWritten) return
+        this._timingsWritten = true
+        await mergeTaskSection(cwd, id, 'phase timings', prev => mergeTimings(prev, this._timings))
+    }
+
+    /**
+     * Append this delivery to the `## handoff` ledger. The attempt number is the
+     * count of deliveries already recorded rather than anything this process
+     * carries: a re-entry is a FRESH runner and knows nothing of the one before it.
+     */
+    private async _recordHandoff(cwd: string, id: string, spec: string): Promise<void> {
+        const fix = this._fixContext
+        await mergeTaskSection(cwd, id, 'handoff', prev => {
+            const record: HandoffRecord = {
+                attempt: parseHandoff(prev).length + 1,
+                specHash: specHash(spec),
+                delivered: fix ? 'reattempt' : 'fresh',
+                ...(fix ? {fixContext: summariseFixContext(fix)} : {})
+            }
+            return appendHandoff(prev, record)
+        })
+    }
+
+    private async _deliverSpec(spec: string): Promise<void> {
         // Keep the rich status block alive across the implementation turn (the phase
         // widget was disposed at handoff). Awaited (/task-auto) stays armed across all
         // sub-turns and is disarmed here; fire-and-forget (/task) arms one-shot and its

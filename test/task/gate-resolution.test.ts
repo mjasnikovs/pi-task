@@ -1,6 +1,7 @@
 import {describe, expect, test} from 'bun:test'
 import {
     AUTOFIX_BUDGET,
+    ENTRY_ATTEMPT_BUDGET,
     RESOLUTION_RULES,
     autofixBudget,
     resolveDisposition,
@@ -103,6 +104,12 @@ describe('AUTOFIX_BUDGET', () => {
         expect(AUTOFIX_BUDGET['harness-fault']).toBe(0)
         for (const cls of ['repo-health', 'static-checks', 'model-verdict'] as const) {
             expect(AUTOFIX_BUDGET[cls]).toBeGreaterThan(0)
+        }
+    })
+
+    test('the plan-entry budget outlasts the most forgiving class budget', () => {
+        for (const cls of FAIL_CLASSES) {
+            expect(ENTRY_ATTEMPT_BUDGET).toBeGreaterThan(AUTOFIX_BUDGET[cls])
         }
     })
 

@@ -32,11 +32,15 @@ import {
     planKeyAt,
     checkOffTask,
     stampTaskInProgress,
+    beginTaskAttempt,
+    recordTaskEnd,
     insertTaskAfter,
     findResumableAutoDetailed,
     type TaskEntry
 } from './auto-io.js'
 import {decideResume, UNATTENDED_STATES} from './resume-gap.js'
+import {ENTRY_ATTEMPT_BUDGET} from './gate-resolution.js'
+import {recordDebt} from './accept-debt.js'
 import {
     drainRepairQueue,
     mergeRepairCandidates,
@@ -1673,6 +1677,29 @@ export async function runAutoLoop(
                 announceDone(active, stage.message, stage.level)
                 return
             }
+            // ABANDON an entry that has spent its attempt budget. A task that
+            // crashes before it can be checked off is re-entered by every resume,
+            // for as long as anyone keeps resuming — the plan never advances and
+            // the entry never converges. Give up on THIS entry, write down what was
+            // left unfinished, and let the rest of the plan run.
+            if ((next.attempts ?? 0) >= ENTRY_ATTEMPT_BUDGET) {
+                await recordDebt(
+                    cwd,
+                    next.producedId ?? id,
+                    `"${next.title}" was abandoned after ${next.attempts} attempts`
+                        + `${next.lastEnd ? ` (last ended: ${next.lastEnd})` : ''}`
+                        + ' — no verified artifact; the plan moved on without it',
+                    'abandoned'
+                )
+                await checkOffTask(cwd, id, next.index, next.producedId ?? '', next.title)
+                notifyBoth(
+                    active,
+                    `${id}: abandoned "${next.title}" after ${next.attempts} attempts — `
+                        + 'recorded as debt; continuing with the rest of the plan.',
+                    'warning'
+                )
+                continue
+            }
             // REFUSE to start on a conflicted tree: an unmerged index dooms every
             // commit ahead and a `git add -A` would silently mis-resolve it.
             const unmerged = deps.unmergedPaths ? await deps.unmergedPaths(cwd) : []
@@ -1755,6 +1782,11 @@ export async function runAutoLoop(
                     )
                     return
                 }
+                // Counted BEFORE the run, not after it: a run that takes pi down
+                // with it would never reach an after-the-fact increment, and an
+                // attempt nobody counted is exactly the one the budget exists to
+                // bound.
+                await beginTaskAttempt(cwd, id, next.index)
                 const res = await deps.runTask(active, cwd, next.title, {
                     resumeId,
                     ...healthBaseline,
@@ -1780,6 +1812,10 @@ export async function runAutoLoop(
                 // only the wording is this command's.
                 if (!runSucceeded(res.end)) {
                     const policy = RUN_END_POLICY[res.end.kind]
+                    // The ending goes on the ENTRY, where the next resume reads it:
+                    // the inner task file's own state cannot distinguish the entry
+                    // that keeps faulting from the one a user stopped once.
+                    await recordTaskEnd(cwd, id, next.index, res.end.kind)
                     // Demote the INNER task file: it reads `completed` from
                     // spec-handoff, and leaving it that way is how a failed run's task
                     // file claims success after the run failed.
