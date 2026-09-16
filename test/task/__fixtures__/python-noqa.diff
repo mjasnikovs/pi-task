@@ -1,0 +1,10 @@
+diff --git a/app/handlers.py b/app/handlers.py
+index 3333333..4444444 100644
+--- a/app/handlers.py
++++ b/app/handlers.py
+@@ -4,6 +4,7 @@ from .models import Listing
+-from .legacy import shim
++from .legacy import shim  # noqa: F401
+ 
+ 
+ def handle(request):

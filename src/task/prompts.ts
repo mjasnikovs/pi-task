@@ -348,12 +348,15 @@ GOAL
   <one paragraph>
 
 CONSTRAINTS
-  - <bullet>
+  - <bullet> [from: Q<n>]   ← when the constraint comes from the Q&A answer numbered <n>
+  - <bullet> [from: spec]   ← when it comes from the refined task itself
   - …
 
 ACCEPTANCE
   - <human-readable success criterion>
   - …
+
+Every CONSTRAINTS bullet ends with a \`[from: …]\` tag naming where it came from: \`[from: Q3]\` if the Q&A's answer 3 is what states it, or \`[from: spec]\` if the refined task states it. Tag a bullet ONLY when you can point at that source — a constraint you inferred yourself carries no tag, and that is the correct answer, not a gap. The tag decides how much weight the verification gates give the constraint, so a tag that names a source which does not state it turns your inference into an unwaivable rule.
 
 VERIFY:
 \`\`\`sh
@@ -443,6 +446,7 @@ SCOPE RULES (equally critical — do not break these):
 - Do NOT introduce new requirements, deliverables, files, scripts, hooks, configs, or acceptance criteria that are not explicitly implied by the refined task or the Q&A.
 - Do NOT broaden scope. If the refined task says "run X and report", do not turn it into "build a toolchain around X with hooks, docs, and reports".
 - CONSTRAINTS from the refined task MUST be preserved in spirit. Do not silently drop or weaken them.
+- Keep each CONSTRAINTS bullet's trailing \`[from: …]\` tag exactly as it stands, and do not add one to a bullet that has none. The tag is the constraint's provenance, and the verification gates weigh it; inventing or dropping one rewrites how binding the constraint is.
 - If the spec below is malformed, empty, or wrapped in a heredoc, reconstruct it from the refined task and Q&A — not from your own invention.
 - Your job is to tighten language, sharpen acceptance criteria, and ensure VERIFY is runnable. Not to redesign the task.
 - WIRING vs pinned facts: if the spec states interface wiring (a mount/route table, a module→path mapping, an exported signature, a file layout), reconcile EACH wiring specific against the design's pinned interface facts (the CROSS-SLICE CONTRACTS below, if present, are those facts quoted verbatim). Keep every wiring specific that reproduces the pinned facts exactly; CORRECT any that do not; and do NOT invent wiring the design leaves unspecified. Watch specifically for a "uniform" pattern (one module → one mount prefix, one naming scheme) applied to an interface whose pinned facts are NOT uniform — that is a seam bug, fix only the entry that breaks, and leave the conforming entries unchanged.

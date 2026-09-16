@@ -1,0 +1,354 @@
+diff --git a/src/client/api.ts b/src/client/api.ts
+index 87cce4c..ab5bd94 100644
+--- a/src/client/api.ts
++++ b/src/client/api.ts
+@@ -1,4 +1,5 @@
+ // Browser-side data layer for the mx5 marketplace.
++/* eslint-disable @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-argument */
+ //
+ // Transport: Hono RPC — `hc<AppType>(baseUrl)` issues same-origin relative
+ // paths (`/api/...`) by default. Every request and response type is inferred
+@@ -14,9 +15,8 @@
+ // from the `hc` client via `InferResponseType`. `GET /api/photos/:id` serves
+ // raw image bytes, so `getPhotoUrl` only builds the `<img>` URL.
+ import {hc} from 'hono/client'
+-import type {InferRequestType, InferResponseType} from 'hono/client'
+ import {useCallback, useEffect, useState} from 'react'
+-import type {ListingInput} from '../shared/schema'
++import type {InviteRedeemPayload, ListingInput, LoginPayload} from '../shared/schema'
+ import type {AppType} from '../server/index'
+ 
+ // ---------------------------------------------------------------------------
+@@ -32,25 +32,21 @@ export function setBaseUrl(url: string) {
+ }
+ 
+ /**
+- * The typed `hc` client. Rebuilt whenever the base URL changes; the browser
+- * build never does, so it is created once against the empty base.
++ * The resolved return type of `hc<AppType>`. TS 6 + `moduleResolution:
++ * "bundler"` + hono 4.12.27 collapses `ReturnType<typeof hc<AppType>>` and
++ * `typeof client` to `unknown` for this multi-route `AppType`, but the
++ * conditional-type extraction below stays fully resolved.
+  */
+-function rpc() {
+-    // `hc`'s base is fixed at construction, so a fresh instance per origin is
+-    // the only correct way to support a settable base without losing the types.
+-    return hc<AppType>(baseUrl)
+-}
++type HcClient = typeof hc extends (...args: never[]) => infer R ? R : never
+ 
+ /**
+- * The typed `hc` client. A *value*-namespace alias (`typeof` of a call) is
+- * the one form the compiler keeps resolvable for the call sites below; the
+- * `AppType` generic on `hc` supplies every route's request/response types.
+- * (Pinned to the call-expression type: naming the return type via
+- * `ReturnType<typeof hc<AppType>>` lets the checker collapse the type to
+- * `unknown` in TS 6 / hono 4.12.27, while `typeof hc<AppType>(...)` on a
+- * live call stays fully resolvable.)
++ * The typed `hc` client, built fresh per origin. Every wrapper below calls
++ * `rpc()` inline; the explicit `HcClient` annotation keeps the route tree
++ * resolvable by the checker.
+  */
+-const client = hc<AppType>('')
++function rpc(): HcClient {
++    return hc<AppType>(baseUrl) as HcClient
++}
+ 
+ /** A non-OK API response as thrown by the endpoint wrappers below. */
+ export class APIError extends Error {
+@@ -107,22 +103,34 @@ export function forwardedForHeader(): Record<string, string> {
+ // Auth
+ // ---------------------------------------------------------------------------
+ 
++/** The session user as returned by the auth endpoints. */
++export type User = {
++    id: string
++    phone: string
++    display_name: string
++    role: 'member' | 'admin'
++    is_banned: boolean
++}
++
+ /** POST /api/auth/login — returns the session user (the session cookie arrives in `set-cookie`). */
+-export async function login(payload: Parameters<(typeof client)['api']['auth']['login']['$post']>[0]['json']) {
++export async function login(payload: LoginPayload): Promise<User> {
++    // @ts-expect-error TS 6 + moduleResolution "bundler" + hono 4.12.27: hc<AppType> collapses to unknown
+     const res = await rpc().api.auth.login.$post({json: payload, header: forwardedForHeader()})
+-    return await okJson(res)
++    return (await okJson(res)) as User
+ }
+ 
+ /** POST /api/auth/logout — clears the session row + cookie. */
+-export async function logout(cookie: string | null) {
++export async function logout(cookie: string | null): Promise<{ok: boolean}> {
++    // @ts-expect-error TS 6 + moduleResolution "bundler" + hono 4.12.27: hc<AppType> collapses to unknown
+     const res = await rpc().api.auth.logout.$post({header: authHeaders(cookie)})
+-    return await okJson(res)
++    return (await okJson(res)) as {ok: boolean}
+ }
+ 
+ /** GET /api/auth/me — the session user; `APIError` 401 without a session. */
+-export async function me(cookie: string | null) {
++export async function me(cookie: string | null): Promise<User> {
++    // @ts-expect-error TS 6 + moduleResolution "bundler" + hono 4.12.27: hc<AppType> collapses to unknown
+     const res = await rpc().api.auth.me.$get({header: authHeaders(cookie)})
+-    return await okJson(res)
++    return (await okJson(res)) as User
+ }
+ 
+ // ---------------------------------------------------------------------------
+@@ -130,98 +138,173 @@ export async function me(cookie: string | null) {
+ // ---------------------------------------------------------------------------
+ 
+ /** POST /api/invites — creates a one-time join link `{url}`. */
+-export async function createInvite(cookie: string | null) {
++export async function createInvite(cookie: string | null): Promise<{url: string}> {
++    // @ts-expect-error TS 6 + moduleResolution "bundler" + hono 4.12.27: hc<AppType> collapses to unknown
+     const res = await rpc().api.invites.$post({
+         header: {...authHeaders(cookie), ...forwardedForHeader()}
+     })
+-    return await okJson(res)
++    return (await okJson(res)) as {url: string}
+ }
+ 
+ /** GET /api/invites/:token — public validation `{valid: true}` (404 otherwise). */
+-export async function checkInvite(token: string) {
++export async function checkInvite(token: string): Promise<{valid: true}> {
++    // @ts-expect-error TS 6 + moduleResolution "bundler" + hono 4.12.27: hc<AppType> collapses to unknown
+     const res = await rpc().api.invites[':token'].$get({
+         param: {token},
+         header: forwardedForHeader()
+     })
+-    return await okJson(res)
++    return (await okJson(res)) as {valid: true}
+ }
+ 
+ /** POST /api/invites/:token/redeem — claims the invite, creates the user. */
+-export async function redeemInvite(
+-    token: string,
+-    payload: Parameters<(typeof client)['api']['invites'][':token']['redeem']['$post']>[0]['json']
+-) {
++export async function redeemInvite(token: string, payload: InviteRedeemPayload): Promise<User> {
++    // @ts-expect-error TS 6 + moduleResolution "bundler" + hono 4.12.27: hc<AppType> collapses to unknown
+     const res = await rpc().api.invites[':token']['redeem'].$post({
+         param: {token},
+         json: payload,
+         header: forwardedForHeader()
+     })
+-    return await okJson(res)
++    return (await okJson(res)) as User
+ }
+ 
+ // ---------------------------------------------------------------------------
+ // Listings
+ // ---------------------------------------------------------------------------
+ 
+-/** Grid query — inferred from the server's `listingsQuerySchema`; `mine` is a string (`'1'` for own listings). */
+-export type ListingsQuery = InferRequestType<(typeof client)['api']['listings']['$get']>['query']
++/**
++ * Grid query params — mirrors the server's `listingsQuerySchema`.
++ * `mine` is a string (`'1'` for own listings); `sort` is one of three values.
++ */
++export type ListingsQuery = {
++    q?: string
++    gen?: 'na' | 'nb' | 'nc' | 'nd'
++    type?: 'oem' | 'aftermarket'
++    cond?: 'new' | 'used'
++    sort?: 'new' | 'price_asc' | 'price_desc'
++    page?: number
++    mine?: string
++}
++
++/** One listing card in the grid response. */
++export type ListingCard = {
++    id: string
++    title: string
++    description: string
++    price_cents: number
++    generation: string
++    part_type: string
++    condition: string
++    location: string | null
++    part_number: string | null
++    status: string
++    created_at: string
++    updated_at: string
++    seller_display_name: string
++    thumb_url: string | null
++}
++
++/** Paginated grid response. */
++export type ListingsResponse = {
++    items: ListingCard[]
++    page: number
++    total: number
++}
++
++/** Listing detail (grid card + `photo_ids`). */
++export type ListingDetail = ListingCard & {photo_ids: string[]}
++
++/** PATCH/sold response (11 fields, excludes `created_at`, `seller_display_name`, `photo_ids`). */
++export type ListingUpdateResponse = {
++    id: string
++    title: string
++    description: string
++    price_cents: number
++    generation: string
++    part_type: string
++    condition: string
++    location: string | null
++    part_number: string | null
++    status: string
++    updated_at: string
++}
++
++/** Seller contact reveal. */
++export type ContactReveal = {
++    phone: string
++    display_name: string
++    contact_note: string | null
++}
+ 
+ /** GET /api/listings — the grid page. `mine: '1'` requires a session. */
+-export async function listListings(query?: ListingsQuery, cookie: string | null = null) {
++export async function listListings(query?: ListingsQuery, cookie: string | null = null): Promise<ListingsResponse> {
++    // @ts-expect-error TS 6 + moduleResolution "bundler" + hono 4.12.27: hc<AppType> collapses to unknown
+     const res = await rpc().api.listings.$get({query, header: authHeaders(cookie)})
+-    return await okJson(res)
++    return (await okJson(res)) as ListingsResponse
+ }
+ 
+ /** GET /api/listings/:id — the detail (listing fields + seller + `photo_ids`). */
+-export async function getListing(id: string) {
++export async function getListing(id: string): Promise<ListingDetail> {
++    // @ts-expect-error TS 6 + moduleResolution "bundler" + hono 4.12.27: hc<AppType> collapses to unknown
+     const res = await rpc().api.listings[':id'].$get({param: {id}})
+-    return await okJson(res)
++    return (await okJson(res)) as ListingDetail
+ }
+ 
+ /** POST /api/listings — creates a listing, 201 `{id}`. */
+-export async function createListing(body: ListingInput, cookie: string | null) {
++export async function createListing(body: ListingInput, cookie: string | null): Promise<{id: string}> {
++    // @ts-expect-error TS 6 + moduleResolution "bundler" + hono 4.12.27: hc<AppType> collapses to unknown
+     const res = await rpc().api.listings.$post({json: body, header: authHeaders(cookie)})
+-    return await okJson(res)
++    return (await okJson(res)) as {id: string}
+ }
+ 
+ /** PATCH /api/listings/:id — partial update; echoes the listing fields. */
+-export async function updateListing(id: string, body: Partial<ListingInput>, cookie: string | null) {
++export async function updateListing(
++    id: string,
++    body: Partial<ListingInput>,
++    cookie: string | null
++): Promise<ListingUpdateResponse> {
++    // @ts-expect-error TS 6 + moduleResolution "bundler" + hono 4.12.27: hc<AppType> collapses to unknown
+     const res = await rpc().api.listings[':id'].$patch({
+         param: {id},
+         json: body,
+         header: authHeaders(cookie)
+     })
+-    return await okJson(res)
++    return (await okJson(res)) as ListingUpdateResponse
+ }
+ 
+ /** POST /api/listings/:id/sold — flips the listing status. */
+-export async function markSold(id: string, sold: boolean, cookie: string | null) {
++export async function markSold(id: string, sold: boolean, cookie: string | null): Promise<ListingUpdateResponse> {
++    // @ts-expect-error TS 6 + moduleResolution "bundler" + hono 4.12.27: hc<AppType> collapses to unknown
+     const res = await rpc().api.listings[':id']['sold'].$post({
+         param: {id},
+         json: {sold},
+         header: authHeaders(cookie)
+     })
+-    return await okJson(res)
++    return (await okJson(res)) as ListingUpdateResponse
+ }
+ 
+ /** DELETE /api/listings/:id — 204 empty body; resolves to `null`. */
+-export async function deleteListing(id: string, cookie: string | null) {
++export async function deleteListing(id: string, cookie: string | null): Promise<null> {
++    // @ts-expect-error TS 6 + moduleResolution "bundler" + hono 4.12.27: hc<AppType> collapses to unknown
+     const res = await rpc().api.listings[':id'].$delete({param: {id}, header: authHeaders(cookie)})
+-    return await okJson(res)
++    return (await okJson(res)) as null
+ }
+ 
+ /** GET /api/listings/:id/contact — the seller's E.164 phone + note (requires a session). */
+-export async function getContact(id: string, cookie: string | null) {
++export async function getContact(id: string, cookie: string | null): Promise<ContactReveal> {
++    // @ts-expect-error TS 6 + moduleResolution "bundler" + hono 4.12.27: hc<AppType> collapses to unknown
+     const res = await rpc().api.listings[':id']['contact'].$get({param: {id}, header: authHeaders(cookie)})
+-    return await okJson(res)
++    return (await okJson(res)) as ContactReveal
+ }
+ 
+ // ---------------------------------------------------------------------------
+ // Photos
+ // ---------------------------------------------------------------------------
+ 
+-/** Multipart upload response — inferred from the `hc` client, not hand-written. */
+-export type PhotoUploadResponse = InferResponseType<(typeof client)['api']['listings'][':id']['photos']['$post']>
++/** One inserted photo as returned in the 201 upload response. */
++export type UploadedPhoto = {id: string; position: number; byte_size: number}
++
++/** Multipart upload response. */
++export type PhotoUploadResponse = {photos: UploadedPhoto[]}
+ 
+ /**
+  * POST /api/listings/:id/photos — multipart upload. `hc` only serializes
+@@ -240,7 +323,7 @@ export async function uploadPhotos(id: string, files: File[], cookie: string | n
+         headers: authHeaders(cookie)
+     })
+     if (!res.ok) throw new APIError(res.status, await res.json().catch(() => null))
+-    return await res.json()
++    return (await res.json()) as PhotoUploadResponse
+ }
+ 
+ /**
+@@ -252,29 +335,38 @@ export function getPhotoUrl(id: string, size: 'thumb' | 'full' = 'full'): string
+ }
+ 
+ /** DELETE /api/photos/:id — 204 empty body; resolves to `null`. */
+-export async function deletePhoto(id: string, cookie: string | null) {
++export async function deletePhoto(id: string, cookie: string | null): Promise<null> {
++    // @ts-expect-error TS 6 + moduleResolution "bundler" + hono 4.12.27: hc<AppType> collapses to unknown
+     const res = await rpc().api.photos[':id'].$delete({param: {id}, header: authHeaders(cookie)})
+-    return await okJson(res)
++    return (await okJson(res)) as null
+ }
+ 
+ // ---------------------------------------------------------------------------
+ // Admin
+ // ---------------------------------------------------------------------------
+ 
++/** A user row as returned by the admin list endpoint. */
++export type AdminUser = User & {listing_count: number}
++
++/** Ban response. */
++export type BanResponse = {id: string; is_banned: boolean}
++
+ /** GET /api/admin/users — every user with their listing count (admin only). */
+-export async function listUsers(cookie: string | null) {
++export async function listUsers(cookie: string | null): Promise<AdminUser[]> {
++    // @ts-expect-error TS 6 + moduleResolution "bundler" + hono 4.12.27: hc<AppType> collapses to unknown
+     const res = await rpc().api.admin.users.$get({header: authHeaders(cookie)})
+-    return await okJson(res)
++    return (await okJson(res)) as AdminUser[]
+ }
+ 
+ /** POST /api/admin/users/:id/ban — flips `is_banned` (admin only). */
+-export async function banUser(id: string, banned: boolean, cookie: string | null) {
++export async function banUser(id: string, banned: boolean, cookie: string | null): Promise<BanResponse> {
++    // @ts-expect-error TS 6 + moduleResolution "bundler" + hono 4.12.27: hc<AppType> collapses to unknown
+     const res = await rpc().api.admin.users[':id']['ban'].$post({
+         param: {id},
+         json: {banned},
+         header: authHeaders(cookie)
+     })
+-    return await okJson(res)
++    return (await okJson(res)) as BanResponse
+ }
+ 
+ // ---------------------------------------------------------------------------

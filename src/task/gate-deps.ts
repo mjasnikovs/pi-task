@@ -77,6 +77,16 @@ import {
     type ScriptEscapeFinding
 } from './script-escape.js'
 import {assessRunnerGlobs, runnerGlobVerifyFindings} from './runner-globs.js'
+import {
+    compileSuppressionPatterns,
+    findSuppressionWidening,
+    suppressionPatternsFor,
+    type DiffLine,
+    type SuppressionHit
+} from './suppression-probe.js'
+import {detectEcosystems} from '../workers/docs-ecosystems.js'
+import {qaKindsFromRecord} from './qa-transcript.js'
+import {extractSection} from './task-parsers.js'
 import {captureGitState, reconcileGitState, type ReconcileResult} from './git-state-guard.js'
 import {runWorker} from '../workers/pi-worker-core.js'
 import {getConfig} from '../config/config.js'
@@ -606,6 +616,24 @@ export async function readSpecForVerification(cwd: string, taskId: string): Prom
 }
 
 /**
+ * The task's rendered Q&A, which is what a constraint's `[from: Q<n>]` tag
+ * resolves against (see qa-transcript's `qaKindsFromRecord`). Null when the task
+ * asked nothing, or the file cannot be read — both mean every tagged constraint
+ * reads as `derived`, and `constraint-policy.ts` says what that is worth.
+ */
+export async function readQaRecordForVerification(
+    cwd: string,
+    taskId: string
+): Promise<string | null> {
+    try {
+        const {body} = await readTaskFile(cwd, taskId)
+        return extractSection(body, 'grill Q&A')
+    } catch {
+        return null
+    }
+}
+
+/**
  * The health baseline the verify gate's differential needs: the one stored on the
  * task file, or — for a task file that has none — one established lazily from a
  * DETACHED WORKTREE at HEAD and written back, so the next resolution round does
@@ -659,9 +687,13 @@ export function buildVerifyProbes(params: {
     signal?: AbortSignal
     taskId: string
     spec: string | null
+    /** The task's `## grill Q&A`, so a prohibition carries the WEIGHT of the
+     *  constraint that states it rather than being unwaivable by default. */
+    qaRecord?: string | null
     log?: (msg: string) => void
 }): VerifyProbes {
-    const {cwd, signal, taskId, spec, log} = params
+    const {cwd, signal, taskId, spec, qaRecord, log} = params
+    const kinds = qaRecord ? qaKindsFromRecord(qaRecord) : []
     return {
         // Deterministic self-verification probe: test files the task itself
         // authored/changed become prompt-level findings mandating the child
@@ -672,7 +704,7 @@ export function buildVerifyProbes(params: {
         // under the no-waiver rule — the child otherwise rarely runs `git
         // diff` and cannot even see the violation.
         prohibition: () => {
-            const banned = spec ? extractProhibitions(spec) : []
+            const banned = spec ? extractProhibitions(spec, n => kinds[n - 1] ?? null) : []
             if (banned.length === 0) return Promise.resolve([])
             return collectChangedFiles(cwd, signal).then(files =>
                 findProhibitionViolations(banned, files)
@@ -716,8 +748,69 @@ export function buildVerifyProbes(params: {
         testAssembly: () =>
             collectChangedFiles(cwd, signal).then(changed =>
                 collectTestAssemblyFindings(cwd, changed, signal)
-            )
+            ),
+        // Deterministic suppression-widening probe: checker suppressions this
+        // task NET added. Injected under rule 4i — the child cannot find these
+        // by running the checks, because the suppressions are why they pass.
+        suppressionWidening: () => collectSuppressionHits(cwd, signal)
     }
+}
+
+/**
+ * The task's net-new suppressions: the files its work touched (the same tree
+ * shape the write-guard reads), diffed against the checkpoint HEAD, counted per
+ * pattern.
+ *
+ * The pattern set follows the repo's detected ecosystems, so a Go project is not
+ * scanned for `@ts-expect-error` and a TypeScript one is not scanned for
+ * `//nolint`; `suppressionPatterns` in the config adds project-specific rows.
+ * Failures degrade to no findings — a sharpener, never a blocker.
+ */
+export async function collectSuppressionHits(
+    cwd: string,
+    signal?: AbortSignal
+): Promise<SuppressionHit[]> {
+    const changes = await collectTreeChanges(cwd, signal)
+    const files = [...changes.modified, ...changes.added]
+    if (files.length === 0) return []
+    const patterns = suppressionPatternsFor(
+        detectEcosystems(cwd),
+        compileSuppressionPatterns(getConfig().suppressionPatterns)
+    )
+    const diff = await git(cwd, ['diff', ...DIFF_PREFIX_ARGS, 'HEAD', '--', ...files], signal)
+    const lines = diff.exitCode === 0 ? parseDiffLines(diff.stdout) : []
+    const untracked = await Promise.all(
+        changes.added.map(async rel => {
+            try {
+                const text = await fsp.readFile(path.join(cwd, rel), 'utf8')
+                return text.split('\n').map(t => ({path: rel, text: t, added: true}))
+            } catch {
+                return []
+            }
+        })
+    )
+    return findSuppressionWidening([...lines, ...untracked.flat()], patterns)
+}
+
+/**
+ * A unified diff's content lines, tagged with their side and their file. The `+++`
+ * header names the file and the `---`/`+++` headers themselves are excluded, which
+ * is the one thing a naive `startsWith('+')` scan gets wrong — it counts every
+ * changed file's own header as an added line.
+ */
+export function parseDiffLines(diff: string): DiffLine[] {
+    const out: DiffLine[] = []
+    let file = ''
+    for (const line of diff.split('\n')) {
+        if (line.startsWith('+++ ')) {
+            file = line.slice(4).replace(/^b\//, '').trim()
+            continue
+        }
+        if (line.startsWith('--- ') || line.startsWith('@@')) continue
+        if (line.startsWith('+')) out.push({path: file, text: line.slice(1), added: true})
+        else if (line.startsWith('-')) out.push({path: file, text: line.slice(1), added: false})
+    }
+    return out
 }
 
 /**
@@ -942,6 +1035,7 @@ export function buildGateDeps(params: {
             // file. A task that never reached compose has no spec section —
             // runWorkVerification treats a null spec as a no-op pass.
             const spec = await readSpecForVerification(cwd2, taskId)
+            const qaRecord = await readQaRecordForVerification(cwd2, taskId)
             // One id for the whole gate: read and append must agree on which run
             // these facts belong to.
             const {runId} = currentRunContext(cwd2)
@@ -1016,8 +1110,10 @@ export function buildGateDeps(params: {
                         signal,
                         taskId,
                         spec,
+                        qaRecord,
                         log: makeDebugAppender(runLogPath(cwd2, 'verify-debug.log'))
                     }),
+                    ...(qaRecord === null ? {} : {qaRecord}),
                     // Git-state guard result of the most recent child run: a verdict
                     // computed on a tree the child itself mutated is discarded — but ONLY
                     // when the mutation touched graded state (verdictTainted). A child
@@ -1155,10 +1251,12 @@ export function buildGateDeps(params: {
             // Read the same composed spec the verify gate judged against, so the
             // recommendation reasons over the real contract (degrade to the bare title).
             const spec = (await readSpecForVerification(cwd2, taskId)) ?? taskTitle
+            const qaRecord = await readQaRecordForVerification(cwd2, taskId)
             return researchResolution({
                 cwd: cwd2,
                 signal,
                 spec,
+                ...(qaRecord === null ? {} : {qaRecord}),
                 failReason,
                 runChild: gateChild(recCtx, cwd2, taskTitle, 'recommend', 'verify-debug.log')
             })

@@ -1,0 +1,10 @@
+diff --git a/internal/store/query.go b/internal/store/query.go
+index 1111111..2222222 100644
+--- a/internal/store/query.go
++++ b/internal/store/query.go
+@@ -12,7 +12,7 @@ func (s *Store) Lookup(ctx context.Context, id string) (*Row, error) {
+-	rows, err := s.db.QueryContext(ctx, q, id)
++	rows, err := s.db.QueryContext(ctx, q+id) //nolint:gosec // G201
+ 	if err != nil {
+ 		return nil, err
+ 	}

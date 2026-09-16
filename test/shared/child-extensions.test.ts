@@ -4,7 +4,7 @@ import * as fs from 'node:fs'
 import * as path from 'node:path'
 import {CHILD_BASE_ARGS} from '../../src/shared/child-process.js'
 import {childBaseArgs, extensionArgs} from '../../src/shared/child-extensions.js'
-import {getConfig, sanitizeExtensionWhitelist} from '../../src/config/config.js'
+import {getConfig, sanitizeStringList} from '../../src/config/config.js'
 
 const exists = (ok: boolean) => () => ok
 
@@ -32,11 +32,11 @@ describe('extensionArgs', () => {
     })
 })
 
-describe('sanitizeExtensionWhitelist', () => {
+describe('sanitizeStringList', () => {
     test('non-array and non-string members collapse to a safe list', () => {
-        expect(sanitizeExtensionWhitelist(undefined)).toEqual([])
-        expect(sanitizeExtensionWhitelist('nope')).toEqual([])
-        expect(sanitizeExtensionWhitelist([1, {}, null, '/ok.ts', ' '])).toEqual(['/ok.ts'])
+        expect(sanitizeStringList(undefined)).toEqual([])
+        expect(sanitizeStringList('nope')).toEqual([])
+        expect(sanitizeStringList([1, {}, null, '/ok.ts', ' '])).toEqual(['/ok.ts'])
     })
 })
 

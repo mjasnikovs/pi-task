@@ -16,6 +16,7 @@ import {YOLO_STAMP} from '../../src/task/yolo.js'
 import {getBridge} from '../../src/remote/bridge.js'
 import {broadcast as wsBroadcast} from '../../src/remote/broadcast.js'
 import {_setSink, reset as resetSessionState, snapshot} from '../../src/remote/session-state.js'
+import {formatFixBanner, type FixContext} from '../../src/task/fix-context.js'
 
 /** A GateDeps whose runTask/commit always succeed; override per test. */
 function makeDeps(over: Partial<GateDeps> = {}): GateDeps {
@@ -353,11 +354,11 @@ test('runGatesForTask: recommended AUTOFIX loops back UNATTENDED (no picker) unt
     await withTmpTaskDir(async dir => {
         const handle = makeFakeCtx(dir)
         const {ctx, captured} = handle
-        const fixInstructions: Array<string | undefined> = []
+        const fixContexts: Array<FixContext | undefined> = []
         let verifyCalls = 0
         const deps = makeDeps({
             runTask: (_c, _cwd, _t, opts) => {
-                fixInstructions.push(opts?.fixInstruction)
+                fixContexts.push(opts?.fixContext)
                 return Promise.resolve({taskId: 'TASK_0006', end: {kind: 'completed'}})
             },
             verify: () => {
@@ -373,9 +374,10 @@ test('runGatesForTask: recommended AUTOFIX loops back UNATTENDED (no picker) unt
         // No queueSelect: the picker must NOT be shown — AUTOFIX is auto-applied.
         const r = await runGatesForTask(ctx, deps, baseParams({cwd: dir}))
         expect(r.kind).toBe('done')
-        // Two AUTOFIX re-runs, each carrying the failure as its fixInstruction.
-        expect(fixInstructions).toHaveLength(2)
-        expect(fixInstructions.every(f => f?.includes('build exited 1'))).toBe(true)
+        // Two AUTOFIX re-runs, each carrying the failure as its fix context.
+        expect(fixContexts).toHaveLength(2)
+        expect(fixContexts.every(f => f?.outcome.reason === 'build exited 1')).toBe(true)
+        expect(fixContexts.map(f => f?.attempt)).toEqual([1, 2])
         expect(verifyCalls).toBe(3)
         // The user was never prompted — the fixes ran unattended.
         expect(captured.selects).toHaveLength(0)
@@ -1327,14 +1329,14 @@ test('enforce with a clean tree (no edits) runs only the baseline, not the after
     })
 })
 
-test("runGatesForTask: the recommend child's diagnosis rides into the AUTOFIX fixInstruction", async () => {
+test("runGatesForTask: the recommend child's diagnosis rides into the AUTOFIX fix context", async () => {
     await withTmpTaskDir(async dir => {
         const {ctx} = makeFakeCtx(dir)
-        const fixInstructions: Array<string | undefined> = []
+        const fixContexts: Array<FixContext | undefined> = []
         let verifyCalls = 0
         const deps = makeDeps({
             runTask: (_c, _cwd, _t, opts) => {
-                fixInstructions.push(opts?.fixInstruction)
+                fixContexts.push(opts?.fixContext)
                 return Promise.resolve({taskId: 'TASK_0006', end: {kind: 'completed'}})
             },
             verify: () => {
@@ -1354,23 +1356,24 @@ test("runGatesForTask: the recommend child's diagnosis rides into the AUTOFIX fi
         })
         const r = await runGatesForTask(ctx, deps, baseParams({cwd: dir}))
         expect(r.kind).toBe('done')
-        expect(fixInstructions).toHaveLength(1)
+        expect(fixContexts).toHaveLength(1)
         // The re-run gets the FAIL reason AND the located cause.
-        expect(fixInstructions[0]).toContain('suite fails')
-        expect(fixInstructions[0]).toContain('DIAGNOSIS')
-        expect(fixInstructions[0]).toContain('aliases the table as u')
+        const banner = formatFixBanner(fixContexts[0]!)
+        expect(banner).toContain('suite fails')
+        expect(banner).toContain('DIAGNOSIS')
+        expect(banner).toContain('aliases the table as u')
     })
 })
 
-test('runGatesForTask: no recommend dep → fixInstruction stays the bare failure (no duplicate)', async () => {
+test('runGatesForTask: no recommend dep → the fix context carries no diagnosis (no duplicate)', async () => {
     await withTmpTaskDir(async dir => {
         const handle = makeFakeCtx(dir)
         const {ctx} = handle
-        const fixInstructions: Array<string | undefined> = []
+        const fixContexts: Array<FixContext | undefined> = []
         let verifyCalls = 0
         const deps = makeDeps({
             runTask: (_c, _cwd, _t, opts) => {
-                fixInstructions.push(opts?.fixInstruction)
+                fixContexts.push(opts?.fixContext)
                 return Promise.resolve({taskId: 'TASK_0006', end: {kind: 'completed'}})
             },
             verify: () => {
@@ -1384,8 +1387,9 @@ test('runGatesForTask: no recommend dep → fixInstruction stays the bare failur
         })
         const r = await runGatesForTask(ctx, deps, baseParams({cwd: dir}))
         expect(r.kind).toBe('done')
-        expect(fixInstructions).toHaveLength(1)
-        expect(fixInstructions[0]).toBe('build exited 1')
+        expect(fixContexts).toHaveLength(1)
+        expect(fixContexts[0]?.outcome.reason).toBe('build exited 1')
+        expect(fixContexts[0]?.diagnosis).toBeUndefined()
     })
 })
 

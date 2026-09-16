@@ -59,6 +59,15 @@ export interface PiTaskConfig {
      */
     extensionWhitelist: string[]
     /**
+     * Extra suppression spellings the verify gate's widening probe counts, as
+     * regular-expression SOURCES (see task/suppression-probe.ts). The shipped
+     * registry covers the common checkers across ecosystems; this is for a
+     * project's own — a house `// SAFETY-OVERRIDE` marker, a generated-code
+     * pragma. An entry that does not compile is dropped, never fatal.
+     * DEFAULT empty: the shipped rows are the policy until a project says more.
+     */
+    suppressionPatterns: string[]
+    /**
      * Wall-clock ceiling (ms) on a SINGLE tool execution before the command
      * watchdog steps in. pi's bash tool declares its `timeout` parameter as
      * "Timeout in seconds (optional, no default timeout)" and returns undefined
@@ -286,6 +295,7 @@ export const DEFAULT_CONFIG: PiTaskConfig = {
     researchCache: true,
     searchProvider: 'exa',
     extensionWhitelist: [],
+    suppressionPatterns: [],
     requestTimeoutMs: DEFAULT_REQUEST_TIMEOUT_MS,
     commandTimeoutExemptTools: [],
     streamInactivityMs: DEFAULT_STREAM_INACTIVITY_MS,
@@ -304,10 +314,11 @@ export const DEFAULT_CONFIG: PiTaskConfig = {
 }
 
 /**
- * A hand-edited config can hold anything; keep only string entries so a stray
- * object/number can't reach the child argv as `-e [object Object]`.
+ * A hand-edited config can hold anything; keep only non-blank string entries so a
+ * stray object/number can't reach the child argv as `-e [object Object]`, or
+ * `new RegExp`.
  */
-export function sanitizeExtensionWhitelist(value: unknown): string[] {
+export function sanitizeStringList(value: unknown): string[] {
     if (!Array.isArray(value)) return []
     return value.filter((p): p is string => typeof p === 'string' && p.trim().length > 0)
 }
@@ -349,7 +360,8 @@ export const CONFIG_LOADERS: {
     // A hand-edited or stale enum value must not leak an unknown provider into
     // the dispatch switch — fall back to the default.
     searchProvider: raw => (isSearchProvider(raw) ? raw : DEFAULT_CONFIG.searchProvider),
-    extensionWhitelist: sanitizeExtensionWhitelist,
+    extensionWhitelist: sanitizeStringList,
+    suppressionPatterns: sanitizeStringList,
     requestTimeoutMs: sanitizeRequestTimeoutMs,
     commandTimeoutExemptTools: sanitizeCommandTimeoutExemptTools,
     streamInactivityMs: sanitizeStreamInactivityMs,

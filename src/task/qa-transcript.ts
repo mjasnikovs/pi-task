@@ -51,6 +51,36 @@ export const QA_PROVENANCE: Record<QaKind, string> = {
     typed: ''
 }
 
+/**
+ * Recover each answer's KIND from a rendered record, so a spec's `[from: Q3]`
+ * tag resolves to a provenance long after the dialog's own object is gone — at
+ * verify time the transcript exists only as the `## grill Q&A` text in the task
+ * file.
+ *
+ * Index IS the question number minus one, the same statement `_render` makes.
+ * An answer with no suffix is `typed`: that is what the empty-string row above
+ * declares, and it is also the honest reading of a record whose policy stamped
+ * nothing — the host cannot tell a human's words from an unstamped kind, and
+ * `typed` is the reading that does not invent a provenance.
+ *
+ * YOLO's two kinds share one stamp, so a YOLO answer resolves to `yolo`. They
+ * carry the same weight in `constraint-policy.ts`, which is the only question
+ * this resolution is asked.
+ */
+export function qaKindsFromRecord(record: string): Array<QaKind | undefined> {
+    const kinds: Array<QaKind | undefined> = []
+    for (const line of record.split('\n')) {
+        const answer = /^A(\d+):\s*(.*)$/.exec(line)
+        if (!answer) continue
+        const text = answer[2].trimEnd()
+        const hit = (Object.entries(QA_PROVENANCE) as Array<[QaKind, string]>).find(
+            ([, suffix]) => suffix.length > 0 && text.endsWith(suffix)
+        )
+        kinds[Number(answer[1]) - 1] = hit?.[0] ?? 'typed'
+    }
+    return kinds
+}
+
 export interface QaPolicy {
     /** Kinds whose provenance appears in the RECORD — persisted, and handed on. */
     record: ReadonlySet<QaKind>
