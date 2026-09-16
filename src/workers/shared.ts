@@ -159,6 +159,62 @@ export interface WorkerToolSpec<TParams extends TSchema, TDetails> {
     cacheable?(details: TDetails): boolean
 }
 
+/**
+ * The per-run research cache, as a call wrapper.
+ *
+ * Extracted from `makeWorkerTool` because the host fans out to the SAME workers
+ * outside any tool call: `gatherExternalContext` (task/external-context.ts) looks
+ * up docs, pages and live versions for every task's research phase, in-process,
+ * and paid the network for all of it again on every task of the run. The cache was
+ * never about tool registration; it is about (tool, subject, question) -> answer.
+ *
+ * A null `rawKey`, or no run id stamped, means the call is not cached at all.
+ */
+export async function cachedWorkerCall<TDetails>(
+    cwd: string,
+    tool: string,
+    rawKey: string | null,
+    run: () => Promise<WorkerOutcome<TDetails>>,
+    rules: {
+        cacheable?: (details: TDetails) => boolean
+        pkg?: (details: TDetails) => CachePackage | undefined
+    } = {}
+): Promise<{text: string; details: TDetails}> {
+    // The stored key is namespaced by tool name, joined with a NUL — a byte no tool
+    // name or key can contain, so no pair of them can collide by concatenation.
+    const runId = researchRunId()
+    const cacheKey = runId !== undefined && rawKey !== null ? `${tool}\u0000${rawKey}` : null
+
+    if (runId !== undefined && cacheKey !== null) {
+        const hit = await lookupResearch(cwd, runId, cacheKey)
+        if (hit !== undefined) return {text: hit.text, details: hit.details as TDetails}
+    }
+
+    const outcome = await run()
+    const {text, details} = outcome
+
+    // A non-answer is never stored, whatever the caller's own rule says. The rule
+    // decides answer QUALITY; this decides whether there is an answer.
+    if (
+        outcome.kind === 'answer'
+        && runId !== undefined
+        && cacheKey !== null
+        && (rules.cacheable ? rules.cacheable(details) : true)
+    ) {
+        const provenance = rules.pkg?.(details)
+        await storeResearch(
+            cwd,
+            runId,
+            cacheKey,
+            text,
+            details,
+            provenance?.pkg,
+            provenance?.ecosystem
+        )
+    }
+    return {text, details}
+}
+
 /** Register a worker tool from its spec, supplying the shared registration ritual. */
 export function makeWorkerTool<TParams extends TSchema, TDetails>(
     pi: ExtensionAPI,
@@ -171,41 +227,16 @@ export function makeWorkerTool<TParams extends TSchema, TDetails>(
         parameters: spec.parameters,
         executionMode: 'parallel',
         async execute(_toolCallId, params, signal, _onUpdate, ctx) {
-            // Per-run research cache: serve an earlier sibling's digest for the
-            // same (tool, package/url, query) instead of re-fetching. Active only when
-            // the orchestrator stamped a run id AND this call opts in via cacheKey.
-            const runId = researchRunId()
-            const rawKey = spec.cacheKey ? spec.cacheKey(params) : null
-            const cacheKey =
-                runId !== undefined && rawKey !== null ? `${spec.name}\u0000${rawKey}` : null
-
-            if (runId !== undefined && cacheKey !== null) {
-                const hit = await lookupResearch(ctx.cwd, runId, cacheKey)
-                if (hit !== undefined) return textResult(hit.text, hit.details as TDetails)
-            }
-
-            const outcome = await spec.run(params, signal, ctx)
-            const {text, details} = outcome
-
-            // A non-answer is never stored, whatever the tool's own rule says. The
-            // rule decides answer QUALITY; this decides whether there is an answer.
-            if (
-                outcome.kind === 'answer'
-                && runId !== undefined
-                && cacheKey !== null
-                && (spec.cacheable ? spec.cacheable(details) : true)
-            ) {
-                const provenance = spec.cachePkg?.(params, details)
-                await storeResearch(
-                    ctx.cwd,
-                    runId,
-                    cacheKey,
-                    text,
-                    details,
-                    provenance?.pkg,
-                    provenance?.ecosystem
-                )
-            }
+            const {text, details} = await cachedWorkerCall<TDetails>(
+                ctx.cwd,
+                spec.name,
+                spec.cacheKey ? spec.cacheKey(params) : null,
+                () => spec.run(params, signal, ctx),
+                {
+                    ...(spec.cacheable ? {cacheable: d => spec.cacheable!(d)} : {}),
+                    ...(spec.cachePkg ? {pkg: d => spec.cachePkg!(params, d)} : {})
+                }
+            )
             return textResult(text, details)
         },
         renderCall: (args, theme) => spec.renderCall(args, theme)

@@ -4,14 +4,16 @@
  * Every long-running command — `/task`, `/task-auto`, `/task-auto-resume`,
  * `/task-plan`, and `TaskRunner.run` inside all of them — spends most of its
  * life with the host session idle: the spec phases, the planning children and
- * every gate are child `pi` processes, not host turns. Two things must be true
- * for exactly that window, and both are refcounted because the runs nest
- * (`/task-auto` brackets its loop, each task inside brackets its own run):
+ * every gate are child `pi` processes, not host turns. Three things must be true
+ * for exactly that window, and all of them account for nesting because the runs
+ * nest (`/task-auto` brackets its loop, each task inside brackets its own run):
  *
  *   1. mid-run input is HELD, not queued or turned into a competing turn
  *      (`mid-run-input.ts`: `beginRun`/`endRun`);
  *   2. the raw-stdin interception that makes the terminal behave like the
- *      browser is ARMED (`cancel-input.ts`: `armCancelListener`/`disarm…`).
+ *      browser is ARMED (`cancel-input.ts`: `armCancelListener`/`disarm…`);
+ *   3. the run's per-project facts are DERIVED ONCE and shared by every task in
+ *      it (`run-context.ts`: `openRunContext`/`closeRunContext`).
  *
  * The teardown order is not observable — both halves are synchronous, the
  * listener only consults `isRunActive()` on a keystroke, and no keystroke can
@@ -27,6 +29,9 @@
  * driving the other's lifecycle, or a third counter with both modules demoted to
  * flags — a wider change than the drift it prevents. What prevents drift now is
  * that this bracket is the ONLY production caller of either pair.
+ *
+ * The run context counts nothing: it is opened by the outermost bracket only, and
+ * an inner one is handed the same object.
  */
 import type {ExtensionCommandContext} from '@earendil-works/pi-coding-agent'
 import {armCancelListener, disarmCancelListener} from './cancel-input.js'
@@ -35,6 +40,7 @@ import {reportDroppedInput} from './dropped-input.js'
 import {publishLifecycleNotice} from '../remote/bridge.js'
 import {pushNotify} from '../remote/push.js'
 import {resetCancel} from './cancel-points.js'
+import {closeRunContext, openRunContext} from './run-context.js'
 
 export interface RunBracketOptions {
     /**
@@ -69,11 +75,18 @@ export async function withRun<T>(
     if (outermost) resetCancel()
     beginRun()
     armCancelListener(ctx, opts.onCancel)
+    // The run's per-project facts live as long as the OUTERMOST bracket: one
+    // inventory, one orientation core, one set of verified tooling commands for
+    // every task inside it. An inner bracket joins that run rather than opening
+    // its own — and must not close it either, which is why this follows
+    // `outermost` instead of refcounting a third time.
+    const runContext = outermost ? openRunContext(ctx.cwd) : null
     try {
         return await fn()
     } finally {
         disarmCancelListener()
         if (outermost) resetCancel()
+        if (runContext) closeRunContext(runContext)
         reportDroppedInput(endRun(), ctx)
     }
 }

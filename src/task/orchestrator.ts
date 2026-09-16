@@ -81,6 +81,7 @@ import {
 import {rearmCancelListener} from './cancel-input.js'
 import {takeHeldInput, isRunActive} from './mid-run-input.js'
 import {withRun, announceTerminal} from './run-bracket.js'
+import {currentRunContext} from './run-context.js'
 import {RUN_END_POLICY, runSucceeded, type RunEnd} from './run-end.js'
 import {formatTimings, type TimingEntry} from './timings.js'
 import {getParentContextWindow, resolveContextUsage} from './context-usage.js'
@@ -339,6 +340,10 @@ export class TaskRunner {
     private async _run(): Promise<RunEnd> {
         const cwd = this._cwd
         const ctx = this._ctx
+        // Resolved HERE, not in the constructor: the run bracket that owns the
+        // per-run facts is opened by `run()`, one statement before this. A
+        // caller-supplied seam wins, like `logDebug` below.
+        this._deps.runContext ??= currentRunContext(cwd)
 
         // Initialise or resume the TASK file.
         let id: string

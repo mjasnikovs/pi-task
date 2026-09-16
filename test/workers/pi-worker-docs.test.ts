@@ -513,9 +513,17 @@ test('cache provenance names the RESOLVED registry, not the argument', () => {
 })
 
 test('naming the ecosystem scopes the cache key; letting the manifest decide does not', () => {
-    expect(docsCacheKey({module: 'zod', query: 'Z Object'})).toBe('zod::z object')
+    expect(docsCacheKey({module: 'zod', query: 'Z Object'})).toBe('zod\u0000object')
     expect(docsCacheKey({module: 'zod', query: 'Z Object', ecosystem: 'npm'})).toBe(
-        'npm::zod::z object'
+        'npm::zod\u0000object'
+    )
+})
+
+test('the question half of the key is its sorted tokens, so phrasings share an entry', () => {
+    // Two children asking one question two ways missed each other on every lookup
+    // while the key was the normalised phrase.
+    expect(docsCacheKey({module: 'hono', query: 'How do I mount middleware?'})).toBe(
+        docsCacheKey({module: 'hono', query: 'middleware — how do I mount it'})
     )
 })
 

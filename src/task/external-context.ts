@@ -24,6 +24,8 @@
  */
 
 import {chooseEcosystem, declaredDepNames, defaultEcosystemIo} from '../workers/docs-ecosystems.js'
+import {queryTokenKey} from '../workers/research-cache.js'
+import {cachedWorkerCall, workerAnswer, workerUnavailable} from '../workers/shared.js'
 import {docsRaw} from '../workers/docs-core.js'
 import {fetchRaw} from '../workers/fetch-core.js'
 import {
@@ -263,6 +265,27 @@ export async function buildExternalContext(
 }
 
 /**
+ * One enrichment lookup, through the per-run research cache (workers/shared.ts).
+ *
+ * A null result is a lookup that produced no answer — a refused ecosystem, a dead
+ * registry, a page that would not fetch — and is never stored, so a transient
+ * failure costs one task's block rather than the whole run's. The cached value is
+ * the RESULT, not rendered text: the block assembly below formats it.
+ */
+async function cached<T>(
+    cwd: string,
+    tool: string,
+    key: string,
+    run: () => Promise<T | null>
+): Promise<T | null> {
+    const {details} = await cachedWorkerCall<T | null>(cwd, tool, key, async () => {
+        const value = await run()
+        return value === null ? workerUnavailable('', value, 'no-answer') : workerAnswer('', value)
+    })
+    return details
+}
+
+/**
  * The RESEARCH-phase binding: raw workers, no caps, live versions for every
  * named dep, truncated bodies, timed, and short-circuited when there is nothing
  * to look up.
@@ -289,7 +312,7 @@ export async function gatherExternalContext(refined: string, deps: GatherDeps): 
         const info = await npmVersionFn(pkg, {signal: deps.signal})
         return info ? {info, label: 'npm'} : null
     }
-    const versionLookup = async (pkg: string): Promise<VersionBlock | null> => {
+    const liveVersion = async (pkg: string): Promise<VersionBlock | null> => {
         const choice = chooseEcosystem({
             cwd: deps.cwd,
             declaresPackage: p => p.declaredRange(p.parentPackage(pkg), deps.cwd) !== null,
@@ -310,34 +333,45 @@ export async function gatherExternalContext(refined: string, deps: GatherDeps): 
         const info = await choice.profile.latest(pkg, io)
         return info ? {info, label: choice.profile.registryLabel} : null
     }
+    // A registry round-trip per declared dependency, per task. The answer does not
+    // move within a run, so the first task of the run pays for it.
+    const versionLookup = (pkg: string): Promise<VersionBlock | null> =>
+        cached(deps.cwd, 'enrichment:version', pkg, () => liveVersion(pkg))
 
     return buildExternalContext(
         refined,
         deps,
         {
-            docs: async pkg => {
-                const r = await docsRawFn({
-                    pkg,
-                    query: docsQuery,
-                    cwd: deps.cwd,
-                    signal: deps.signal
-                })
-                return {
-                    npmVersion: r.npmVersion,
-                    ...(r.registryLabel ? {registryLabel: r.registryLabel} : {}),
-                    body:
-                        r.kind === 'ok' && r.chunks.length > 0 ?
-                            r.chunks
-                                .map(c => c.content)
-                                .join('\n\n')
-                                .slice(0, RAW_BODY_LIMIT)
-                        :   undefined
-                }
-            },
-            url: async url => {
-                const r = await fetchRawFn({url, signal: deps.signal})
-                return {body: r.markdown.slice(0, RAW_BODY_LIMIT)}
-            },
+            docs: pkg =>
+                cached(
+                    deps.cwd,
+                    'enrichment:docs',
+                    `${pkg}\u0000${queryTokenKey(docsQuery)}`,
+                    async () => {
+                        const r = await docsRawFn({
+                            pkg,
+                            query: docsQuery,
+                            cwd: deps.cwd,
+                            signal: deps.signal
+                        })
+                        return {
+                            npmVersion: r.npmVersion,
+                            ...(r.registryLabel ? {registryLabel: r.registryLabel} : {}),
+                            body:
+                                r.kind === 'ok' && r.chunks.length > 0 ?
+                                    r.chunks
+                                        .map(c => c.content)
+                                        .join('\n\n')
+                                        .slice(0, RAW_BODY_LIMIT)
+                                :   undefined
+                        }
+                    }
+                ),
+            url: url =>
+                cached(deps.cwd, 'enrichment:url', url, async () => {
+                    const r = await fetchRawFn({url, signal: deps.signal})
+                    return {body: r.markdown.slice(0, RAW_BODY_LIMIT)}
+                }),
             search: deps.searchFn
         },
         {

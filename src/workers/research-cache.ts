@@ -28,6 +28,12 @@
  * A resume therefore REUSES the interrupted run's id — but only on POSITIVE evidence
  * that the digests still describe the same dependency surface.
  *
+ * KEY SHAPE: `<tool>\0<subject>\0<sorted query tokens>` — the tool name, the package
+ * or url the answer is about, and the query reduced to its distinctive tokens. The
+ * token field is both the key and the stored token set, so there is one statement of
+ * it; a lookup that misses exactly falls back to any entry for the same subject whose
+ * tokens CONTAIN all of the new query's (see `coversQuery`).
+ *
  * PER-PACKAGE INVALIDATION. One fingerprint over the whole dependency block cannot be
  * that evidence: a greenfield run ADDS dependencies every few tasks, so every resume
  * sees a moved fingerprint and keeps nothing. Adding a package invalidates nothing that
@@ -78,6 +84,7 @@
  */
 import * as fsp from 'node:fs/promises'
 import * as path from 'node:path'
+import {contentTokens} from '../shared/content-tokens.js'
 import {tasksDir} from '../task/task-io.js'
 import {ECOSYSTEMS, type EcosystemId} from './docs-ecosystems.js'
 
@@ -193,13 +200,15 @@ export function newRunToken(): string {
  * caching is enabled it stamps a FRESH token (so a long-lived host never reuses a
  * prior run's token, and planAuto + the task loop of THIS run share one id); when
  * disabled it clears any token a prior run left, so the workers cache nothing.
+ *
+ * `token` lets the caller supply the run's OWN id (task/run-context.ts) rather
+ * than a second one minted here — one run, one id.
  */
-export function configureResearchRun(enabled: boolean): string | undefined {
+export function configureResearchRun(enabled: boolean, token = newRunToken()): string | undefined {
     if (!enabled) {
         delete process.env[RESEARCH_RUN_ID_ENV]
         return undefined
     }
-    const token = newRunToken()
     process.env[RESEARCH_RUN_ID_ENV] = token
     return token
 }
@@ -212,6 +221,42 @@ export function configureResearchRun(enabled: boolean): string | undefined {
  */
 export function normalizeQuery(s: string): string {
     return s.replace(/\s+/g, ' ').trim().toLowerCase()
+}
+
+/**
+ * The QUESTION half of a cache key: the query's distinctive tokens, sorted.
+ *
+ * Normalised text made the key an exact-phrasing match, and two children asking
+ * one question in two sentences missed each other every time — the run's hit rate
+ * was ~0%. Sorted tokens collapse word order and phrasing; what they do NOT
+ * collapse is scope, which is why a hit also has to pass {@link coversQuery}.
+ */
+export function queryTokenKey(query: string): string {
+    return [...contentTokens(query)].sort().join(' ')
+}
+
+/**
+ * Is `cached` an answer to `asked`? Only when the answer was produced for a
+ * question that asked for AT LEAST as much: every token of the new query must
+ * appear in the cached one.
+ *
+ * The direction matters and is not symmetric. An answer to "hono routing and
+ * middleware" contains the answer to "hono routing"; the reverse does not hold,
+ * and serving it would quietly drop half the question.
+ */
+export function coversQuery(cached: string, asked: string): boolean {
+    const have = new Set(cached.split(' ').filter(t => t.length > 0))
+    return asked.split(' ').every(t => t.length === 0 || have.has(t))
+}
+
+/** The `tool\0subject\0tokens` split of a key, or null when it carries no token
+ *  field (a URL fetch, whose question is the URL itself). */
+function splitTokenKey(key: string): {scope: string; tokens: string} | null {
+    const i = key.lastIndexOf('\u0000')
+    if (i <= 0) return null
+    const scope = key.slice(0, i + 1)
+    const tokens = key.slice(i + 1)
+    return scope.split('\u0000').length < 3 ? null : {scope, tokens}
 }
 
 /** The same question for any ecosystem: what does its manifest pin, name to version. */
@@ -330,8 +375,23 @@ export async function lookupResearch(
 ): Promise<{text: string; details: unknown} | undefined> {
     const file = await readCacheFile(cwd)
     if (!file || file.runId !== runId) return undefined
-    const entry = file.entries[key]
+    const entry = file.entries[key] ?? coveringEntry(file, key)
     return entry ? {text: entry.text, details: entry.details} : undefined
+}
+
+/**
+ * A cached answer to a WIDER question about the same subject, for a key whose last
+ * field is a token set. Exact match is tried first; this is what turns two
+ * phrasings of one question into one lookup.
+ */
+function coveringEntry(file: CacheFile, key: string): CacheEntry | undefined {
+    const asked = splitTokenKey(key)
+    if (!asked) return undefined
+    for (const [k, entry] of Object.entries(file.entries)) {
+        if (!k.startsWith(asked.scope)) continue
+        if (coversQuery(k.slice(asked.scope.length), asked.tokens)) return entry
+    }
+    return undefined
 }
 
 /** Write the cache file atomic-ish, so a concurrent reader never sees it half-written. */

@@ -47,9 +47,7 @@ import * as path from 'node:path'
 import type {SpawnFn} from '../shared/child-process.js'
 import {makeGit, type GitRunner} from '../shared/git-runner.js'
 import {isRegenerableArtifact} from './regenerable-artifacts.js'
-
-/** Keep the gate machinery's own artifacts out of the snapshot and the restore. */
-const EXCLUDE_TASKS_DIR = ':(exclude).pi-tasks'
+import {treeHashWith} from './run-context.js'
 
 export interface GitStateSnapshot {
     /** false → not a usable git worktree; the guard is disabled for this run. */
@@ -158,29 +156,6 @@ function isAlwaysRegenerable(relPath: string, ctCacheDirs: readonly string[]): b
     return ctCacheDirs.some(d => p === d || p.startsWith(d + '/'))
 }
 
-/**
- * Snapshot the worktree content into a tree object via a THROWAWAY index file, so
- * neither the real index nor the stash is touched. Returns null when git cannot
- * build the tree (odd states — the guard then skips tree reconciliation).
- */
-async function captureWorktreeTree(git: GitRunner): Promise<string | null> {
-    const tmpIndex = path.join(
-        os.tmpdir(),
-        `pi-task-guard-index-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`
-    )
-    const env = {GIT_INDEX_FILE: tmpIndex}
-    try {
-        const empty = await git(['read-tree', '--empty'], env)
-        if (empty.exitCode !== 0) return null
-        const add = await git(['add', '-A', '--', '.', EXCLUDE_TASKS_DIR], env)
-        if (add.exitCode !== 0) return null
-        const tree = await git(['write-tree'], env)
-        return tree.exitCode === 0 ? tree.stdout.trim() : null
-    } finally {
-        await fsp.rm(tmpIndex, {force: true}).catch(() => {})
-    }
-}
-
 /** Capture the repo state a gate child must leave untouched. */
 export async function captureGitState(
     cwd: string,
@@ -207,7 +182,7 @@ export async function captureGitState(
         headSha: head.stdout.trim(),
         branchRef: branch.exitCode === 0 ? branch.stdout.trim() : null,
         stashSha: stash.exitCode === 0 ? stash.stdout.trim() : null,
-        treeSha: await captureWorktreeTree(git)
+        treeSha: await treeHashWith(git)
     }
 }
 
@@ -374,7 +349,7 @@ export async function reconcileGitState(
 
     // 2. Worktree content.
     if (before.treeSha) {
-        const afterTree = await captureWorktreeTree(git)
+        const afterTree = await treeHashWith(git)
         if (afterTree && afterTree !== before.treeSha) {
             const tracked = await trackedPathsAt(git, before.headSha)
             const ctCacheDirs = readCtCacheDirs(cwd)

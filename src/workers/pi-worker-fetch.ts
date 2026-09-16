@@ -6,7 +6,7 @@ import {fetchAndClean as defaultFetchAndClean, FetchAndCleanError} from './html-
 import {fetchFocused} from './fetch-core.js'
 import {formatResultText} from '../shared/child-output.js'
 import {childFailureReason, makeWorkerTool, workerAnswer, workerUnavailable} from './shared.js'
-import {normalizeQuery} from './research-cache.js'
+import {queryTokenKey} from './research-cache.js'
 import {isAbstention} from './abstention.js'
 
 const RENDER_QUERY_MAX = 100
@@ -181,8 +181,9 @@ export function fetchCacheable(d: Pick<FetchDetails, 'answer'>): boolean {
     return d.answer !== undefined && !isAbstention(d.answer)
 }
 
-/** The fetch cache key. URL verbatim (path case can matter), question normalised —
- *  same page, different question is a different answer. */
+/** The fetch cache key. URL verbatim (path case can matter), question as its sorted
+ *  distinctive tokens — same page, different question is a different answer, but two
+ *  phrasings of one question are not. */
 export function fetchCacheKey(params: {url: string; query: string}): string {
-    return `${params.url.trim()}::${normalizeQuery(params.query)}`
+    return `${params.url.trim()}\u0000${queryTokenKey(params.query)}`
 }

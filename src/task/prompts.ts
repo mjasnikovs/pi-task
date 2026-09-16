@@ -487,12 +487,19 @@ YOU MAY ONLY READ. Do NOT execute any of the listed commands, not even with --he
 Output exactly two sections:
 
 VERIFIED
-  <command>  <one-line evidence: where it was found>
+  <command>  <class>  <one-line evidence: where it was found>
   ...
 
 REJECTED
   <command>  <one-line reason it can't be confirmed>
   ...
+
+<class> is exactly one of:
+  check  — analyses and EXITS on its own (lint, typecheck, test, format --check)
+  build  — produces artifacts and EXITS on its own (build, compile, bundle)
+  serve  — starts a process that KEEPS RUNNING until killed (dev server, watch mode, repl)
+Any command that does not terminate by itself MUST be classed serve.
+Separate every column with TWO OR MORE spaces.
 
 Do not add other sections, preamble, or commentary.
 

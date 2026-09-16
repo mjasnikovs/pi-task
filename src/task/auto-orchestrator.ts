@@ -81,6 +81,7 @@ import {makeQuestionSource} from './question-source.js'
 import {CoverageLedger} from './plan-rounds.js'
 import {CLARIFY_QUALITY_RULES, PLAN_FORMAT_HINT} from './plan-session.js'
 import {configureResearchRun, resumeResearchRun} from '../workers/research-cache.js'
+import {currentRunContext} from './run-context.js'
 import {
     CONTRACT_EXTRACT_PROMPT,
     parseContractLines,
@@ -1932,10 +1933,12 @@ async function handleTaskAuto(args: string, ctx: ExtensionCommandContext): Promi
     // and the ordinary command path cannot reach us.
     try {
         await withRun(ctx, {onCancel: terminalCancel}, async () => {
-            // Stamp a fresh per-run research-cache id BEFORE planning so enrichment and
+            // Stamp the per-run research-cache id BEFORE planning so enrichment and
             // every task's research phase share one run's cache; disabled ⇒ clears any token a
-            // prior run left, so nothing is cached.
-            configureResearchRun(getConfig().researchCache)
+            // prior run left, so nothing is cached. It is the RUN's own id (the bracket
+            // opened the run context one statement ago), so the cache file and the
+            // env-notes ledger name this run the same way.
+            configureResearchRun(getConfig().researchCache, currentRunContext(cwd).runId)
             const abort = new AbortController()
             const deps = defaultDeps(ctx, cwd, abort.signal, deriveTitle(raw))
             let id: string | null
@@ -2008,6 +2011,10 @@ async function handleTaskAutoResume(args: string, ctx: ExtensionCommandContext):
             // working cache, and a whole-file freshness gate can never hold on a
             // greenfield run that installs packages as it goes — so invalidation is
             // per entry. See resumeResearchRun.
+            //
+            // The RUN context keeps its own fresh id, deliberately: an external doc
+            // digest does not go stale over a pause, and an environment fact measured
+            // against the tree before it does.
             const research = await resumeResearchRun(cwd, getConfig().researchCache)
             if (research.reused) {
                 logPlanDebug(

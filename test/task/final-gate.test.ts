@@ -1233,7 +1233,12 @@ describe('runFinalIntegrationGate — launch-contract scripts EXECUTE (run 11)',
         // that then ship broken. It must not license the gate to skip them.
         await appendEnvNotes(
             dir,
-            ['pre-existing scripts have .rows bug — migrate and seed fail, unrelated to this task'],
+            [
+                {
+                    subject: 'scripts',
+                    fact: 'pre-existing scripts have .rows bug — migrate and seed fail, unrelated to this task'
+                }
+            ],
             'TASK_0002'
         )
         const out = await runFinalIntegrationGate(dir)

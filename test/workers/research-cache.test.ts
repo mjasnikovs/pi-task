@@ -10,6 +10,8 @@ import {
     newRunToken,
     configureResearchRun,
     normalizeQuery,
+    queryTokenKey,
+    coversQuery,
     researchCacheFile,
     lookupResearch,
     storeResearch,
@@ -62,6 +64,59 @@ test('configureResearchRun(true) stamps a fresh token; (false) clears it', () =>
 test('normalizeQuery collapses whitespace and lowercases', () => {
     expect(normalizeQuery('  React   Hooks\n Guide ')).toBe('react hooks guide')
     expect(normalizeQuery('SAME')).toBe(normalizeQuery('same'))
+})
+
+// ─── token keys and containment ──────────────────────────────────────────────
+
+test('queryTokenKey is phrasing- and order-independent', () => {
+    expect(queryTokenKey('How do I mount middleware?')).toBe(
+        queryTokenKey('middleware — how do I mount it')
+    )
+    // Distinctive words are what remain, so a different question keys differently.
+    expect(queryTokenKey('how do I mount middleware')).not.toBe(
+        queryTokenKey('how do I serve static files')
+    )
+})
+
+test('coversQuery holds in one direction only', () => {
+    // The answer to the wider question contains the answer to the narrower one.
+    expect(coversQuery('middleware mount routing', 'middleware mount')).toBe(true)
+    expect(coversQuery('middleware mount', 'middleware mount routing')).toBe(false)
+    expect(coversQuery('middleware mount', 'middleware mount')).toBe(true)
+})
+
+test('a narrower question is answered from a wider one about the same subject', async () => {
+    const cwd = tmpCwd()
+    const wide = `pi-worker-docs\u0000hono\u0000${queryTokenKey('mounting middleware and routing')}`
+    await storeResearch(cwd, 'r', wide, 'the wide answer', {n: 1})
+
+    const narrow = `pi-worker-docs\u0000hono\u0000${queryTokenKey('mounting middleware')}`
+    expect(await lookupResearch(cwd, 'r', narrow)).toEqual({
+        text: 'the wide answer',
+        details: {n: 1}
+    })
+})
+
+test('a WIDER question is a miss, and so is the same question about another subject', async () => {
+    const cwd = tmpCwd()
+    const narrow = `pi-worker-docs\u0000hono\u0000${queryTokenKey('mounting middleware')}`
+    await storeResearch(cwd, 'r', narrow, 'the narrow answer', {})
+
+    // Serving this would silently drop half the question.
+    const wider = `pi-worker-docs\u0000hono\u0000${queryTokenKey('mounting middleware and routing')}`
+    expect(await lookupResearch(cwd, 'r', wider)).toBeUndefined()
+    // Same question, different package.
+    const elsewhere = `pi-worker-docs\u0000zod\u0000${queryTokenKey('mounting middleware')}`
+    expect(await lookupResearch(cwd, 'r', elsewhere)).toBeUndefined()
+    // Same question, different tool.
+    const otherTool = `pi-worker-search\u0000hono\u0000${queryTokenKey('mounting middleware')}`
+    expect(await lookupResearch(cwd, 'r', otherTool)).toBeUndefined()
+})
+
+test('a key with no token field matches exactly, not by containment', async () => {
+    const cwd = tmpCwd()
+    await storeResearch(cwd, 'r', 'pi-worker-fetch\u0000https://x.dev/a', 'page a', {})
+    expect(await lookupResearch(cwd, 'r', 'pi-worker-fetch\u0000https://x.dev/b')).toBeUndefined()
 })
 
 // ─── store / lookup round-trip ───────────────────────────────────────────────
