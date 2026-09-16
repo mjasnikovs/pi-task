@@ -31,7 +31,7 @@
 import type {ExtensionCommandContext} from '@earendil-works/pi-coding-agent'
 import type {RunSingleTaskResult} from './orchestrator.js'
 import type {CommitResult} from './auto-commit.js'
-import {verifyFailClass, type VerifyOutcome} from './verify-work.js'
+import {verifyFailClass, type VerifyFail, type VerifyOutcome} from './verify-work.js'
 import type {EnforceOutcome} from './enforce-guidelines.js'
 import {
     resolutionOptions,
@@ -51,6 +51,7 @@ import {
     type RepairCandidate
 } from './root-cause-repair.js'
 import {attributeEnforceFailure} from './enforce-attribution.js'
+import {healthRedSubject, parseHealthRepairTitle, type HealthRed} from './health-repair.js'
 // The debt ledger is reached through the injected `recordDebt` dep (so it stays
 // absent-in-tests); only the origin TYPE and the cross-task-deletion reason SHAPE
 // come from accept-debt.ts directly — the latter because its writer and its
@@ -235,6 +236,17 @@ export interface GateDeps {
      */
     recordRepairCandidate?: (cwd: string, candidate: RepairCandidate) => Promise<void>
     /**
+     * Close the open static debts naming a health command, stamped with the task
+     * whose verified work made that check pass — a health repair entry
+     * (health-repair.ts) going green. Returns the debts closed. Absent (tests) →
+     * nothing closes.
+     */
+    closeHealthDebts?: (
+        cwd: string,
+        command: string,
+        resolvedBy: string
+    ) => Promise<{taskId: string; reason: string}[]>
+    /**
      * Paths the CURRENT task's own work touches — the AUTHORSHIP discriminator for
      * the root-cause channel: a FAIL blamed on a file this task edited may well be
      * this task's own fault, and only a file it never touched can be somebody
@@ -334,12 +346,15 @@ export async function askVerifyResolution(
     ctx: ExtensionCommandContext,
     title: string,
     failReason: string,
-    rec: ResolutionOutcome
+    rec: ResolutionOutcome,
+    /** The repair ACCEPT would queue (a regressed health check), if any. */
+    acceptQueues?: string
 ): Promise<ResolutionChoice> {
-    const options = resolutionOptions(rec.recommend)
+    const options = resolutionOptions(rec.recommend, acceptQueues)
     const question =
         `Verification FAILED for "${title}".\n\n${failReason}\n\n`
         + `Recommended: ${rec.recommend.toUpperCase()} — ${rec.rationale}`
+        + (acceptQueues ? `\n\nACCEPT queues ${acceptQueues} before the next task.` : '')
     const answer = await new SessionUI(ctx).ask({
         localTitle: 'Verification failed — how should pi proceed?',
         displayQuestion: question,
@@ -350,6 +365,13 @@ export async function askVerifyResolution(
         options
     })
     return classifyResolutionAnswer(answer)
+}
+
+/** The repair a red health check earns, as the picker and the trail name it. */
+function describeHealthRepair(red: HealthRed): string {
+    return red.files.length > 0 ?
+            `a repair for ${red.files.join(', ')} (\`${red.command}\`)`
+        :   `a repair for \`${red.command}\``
 }
 
 /**
@@ -430,6 +452,15 @@ export async function resolveVerifyGate(
             // recording must never break the gate sequence
         }
     }
+    const healthRedOf = async (
+        health: NonNullable<VerifyFail['health']>
+    ): Promise<HealthRed | null> => {
+        try {
+            return healthRedSubject(health, p.cwd, (await deps.repoFiles?.(p.cwd)) ?? null)
+        } catch {
+            return null
+        }
+    }
     // GATE: actually RUN the task's verification against the just-finished work
     // BEFORE it is checked off or committed. Whether this produced a GENUINE clean
     // pass (a real signal ran and the work met it) also decides how the enforce pass
@@ -507,6 +538,12 @@ export async function resolveVerifyGate(
             if (judge) await rec(`resolution: recommended ${recOutcome.recommend.toUpperCase()}`)
             contradiction ??= recOutcome.contradiction ?? null
             const unattended = isYoloMode()
+            // A regressed health check is THIS task's red. Accepting it ships the
+            // red, and the next checkpoint splices a repair before anything builds
+            // on it (health-repair.ts) — named here so a human choosing ACCEPT
+            // sees what the choice queues, and the trail says the same.
+            const regression = verified.health ? await healthRedOf(verified.health) : null
+            const acceptQueues = regression ? describeHealthRepair(regression) : undefined
             const disposition = resolveDisposition({
                 failClass,
                 recommend: recOutcome.recommend,
@@ -541,7 +578,13 @@ export async function resolveVerifyGate(
                 if (disposition.rule !== 'judge-accept') {
                     await rec(`resolution: asking the human — ${disposition.reason}`)
                 }
-                choice = await askVerifyResolution(active, p.title, failReason, recOutcome)
+                choice = await askVerifyResolution(
+                    active,
+                    p.title,
+                    failReason,
+                    recOutcome,
+                    acceptQueues
+                )
             }
             if (choice.action === 'cancel') {
                 await rec('resolution: user dismissed the verify-FAIL picker — paused')
@@ -568,6 +611,11 @@ export async function resolveVerifyGate(
                         `${failReason} — ${disposition.reason}`
                     :   failReason
                 )
+                if (acceptQueues) {
+                    await rec(
+                        `accept: repo health regressed by this task — ${acceptQueues} is spliced before the next task`
+                    )
+                }
                 // ROOT CAUSE: an accepted FAIL that some OTHER task's file caused is
                 // not fixed by accepting it — every later task keeps tripping over
                 // the same bug. Queue the scoped repair so the plan closes it.
@@ -672,6 +720,22 @@ export async function resolveVerifyGate(
         if (verified.inheritedHealth) {
             await rec(`accept-debt: inherited repo health — ${verified.inheritedHealth}`)
             await settleDebt('inherited-health', verified.inheritedHealth)
+        }
+        // A health repair that verified CLEAN — the check it exists for ran green,
+        // nothing inherited — closes the debts that check opened, under its own id.
+        const repair = parseHealthRepairTitle(p.title)
+        if (repair && verified.ok && !verified.reason && !verified.inheritedHealth) {
+            try {
+                const closed = await deps.closeHealthDebts?.(p.cwd, repair.command, p.taskId)
+                if (closed && closed.length > 0) {
+                    await rec(
+                        `accept-debt: closed ${closed.length} debt(s) on \`${repair.command}\` — `
+                            + `${closed.map(d => d.taskId).join(', ')} — repaired by ${p.taskId}`
+                    )
+                }
+            } catch {
+                // closing debts must never break the gate sequence
+            }
         }
         // Loop exited because the work verified OR the user accepted the artifact. A
         // genuine clean pass is ok===true with NO reason; a no-op pass or an

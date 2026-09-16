@@ -2164,3 +2164,123 @@ describe('inherited repo health', () => {
         })
     })
 })
+
+describe('health repair — the gate half (health-repair.ts)', () => {
+    const LINT_RED = {
+        ok: false,
+        commands: [{cmd: 'bun run lint', outcome: 'fail' as const, exitCode: 1}],
+        output: '/tmp/x/src/client/api.ts\n  12:3  error  Unsafe assignment'
+    }
+
+    test('attended: the picker names the repair ACCEPT queues, and the trail records the accept', async () => {
+        await withTmpTaskDir(async dir => {
+            const handle = makeFakeCtx(dir)
+            const {ctx, captured} = handle
+            const trail: string[] = []
+            const deps = makeDeps({
+                verify: () =>
+                    Promise.resolve({
+                        ok: false,
+                        failClass: 'repo-health',
+                        reason: 'repo health: `bun run lint` exited 1',
+                        health: LINT_RED
+                    }),
+                recommend: () => Promise.resolve({recommend: 'accept', rationale: 'upstream bug'}),
+                repoFiles: () => Promise.resolve(['src/client/api.ts']),
+                record: (_c, _i, line) => {
+                    trail.push(line)
+                    return Promise.resolve()
+                }
+            })
+            const queues = 'a repair for src/client/api.ts (`bun run lint`)'
+            handle.queueSelect(`${ACCEPT_LABEL}; queues ${queues}`)
+            const r = await runGatesForTask(ctx, deps, baseParams({cwd: dir}))
+            expect(r.kind).toBe('done')
+            expect(captured.selects[0].options[0]).toBe(`${ACCEPT_LABEL}; queues ${queues}`)
+            expect(trail).toContain(
+                `accept: repo health regressed by this task — ${queues} is spliced before the next task`
+            )
+        })
+    })
+
+    test('a repair entry that verifies CLEAN closes the debts on its command, under its own id', async () => {
+        await withTmpTaskDir(async dir => {
+            const {ctx} = makeFakeCtx(dir)
+            const trail: string[] = []
+            const closes: string[][] = []
+            const deps = makeDeps({
+                verify: () => Promise.resolve({ok: true}),
+                closeHealthDebts: (_c, command, resolvedBy) => {
+                    closes.push([command, resolvedBy])
+                    return Promise.resolve([{taskId: 'TASK_0006', reason: 'r'}])
+                },
+                record: (_c, _i, line) => {
+                    trail.push(line)
+                    return Promise.resolve()
+                }
+            })
+            const r = await runGatesForTask(
+                ctx,
+                deps,
+                baseParams({
+                    cwd: dir,
+                    taskId: 'TASK_0009',
+                    title: 'repair src/client/api.ts: `bun run lint` exits 1 (introduced by TASK_0006)'
+                })
+            )
+            expect(r.kind).toBe('done')
+            expect(closes).toEqual([['bun run lint', 'TASK_0009']])
+            expect(trail).toContain(
+                'accept-debt: closed 1 debt(s) on `bun run lint` — TASK_0006 — repaired by TASK_0009'
+            )
+        })
+    })
+
+    test('a repair entry that still inherits the red closes nothing', async () => {
+        await withTmpTaskDir(async dir => {
+            const {ctx} = makeFakeCtx(dir)
+            let closes = 0
+            const deps = makeDeps({
+                verify: () =>
+                    Promise.resolve({
+                        ok: true,
+                        inheritedHealth:
+                            'repo health: `bun run lint` exited 1 — already failing before this task'
+                    }),
+                closeHealthDebts: () => {
+                    closes += 1
+                    return Promise.resolve([])
+                }
+            })
+            await runGatesForTask(
+                ctx,
+                deps,
+                baseParams({
+                    cwd: dir,
+                    title: 'repair `bun run lint`: exits 1 (no task in this run owns it)'
+                })
+            )
+            expect(closes).toBe(0)
+        })
+    })
+
+    test('a feature entry never closes debts, even on a clean pass', async () => {
+        await withTmpTaskDir(async dir => {
+            const {ctx} = makeFakeCtx(dir)
+            let closes = 0
+            const deps = makeDeps({
+                verify: () => Promise.resolve({ok: true}),
+                closeHealthDebts: () => {
+                    closes += 1
+                    return Promise.resolve([])
+                }
+            })
+            await runGatesForTask(
+                ctx,
+                deps,
+                baseParams({cwd: dir, title: 'Fix `bun run lint` findings'})
+            )
+            expect(closes).toBe(0)
+        })
+    })
+})

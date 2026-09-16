@@ -199,6 +199,12 @@ export interface AcceptDebt {
      * string is the VERIFY-block line itself (`inv-command-provenance`).
      */
     verifyCommand?: string
+    /**
+     * The task whose verified work CLOSED this debt (a health repair whose check
+     * went green — see closeHealthDebts). A closed debt stays in the ledger as the
+     * record of what fixed it, and no re-check reads it again.
+     */
+    resolvedBy?: string
 }
 
 export function acceptDebtFile(cwd: string): string {
@@ -232,6 +238,7 @@ export function parseAcceptDebts(raw: string): AcceptDebt[] {
         // 4th field: the verbatim VERIFY command the reason names.
         // Absent in every legacy record, and absent in most new ones.
         const verifyCommand = parts[3]?.trim()
+        const resolvedBy = parts[4]?.trim()
         out.push({
             taskId: parts[0]!.trim(),
             reason: parts[1]!.trim(),
@@ -239,7 +246,8 @@ export function parseAcceptDebts(raw: string): AcceptDebt[] {
             // implicit class, so an absent origin and a spelled-out 'accepted' must
             // parse to the same record.
             ...(isKnownOrigin(origin) && origin !== 'accepted' ? {origin} : {}),
-            ...(verifyCommand !== undefined && verifyCommand.length > 0 ? {verifyCommand} : {})
+            ...(verifyCommand !== undefined && verifyCommand.length > 0 ? {verifyCommand} : {}),
+            ...(resolvedBy !== undefined && resolvedBy.length > 0 ? {resolvedBy} : {})
         })
     }
     return out
@@ -263,6 +271,16 @@ function serialize(d: AcceptDebt): string {
     // only for the non-accepted classes, so old readers/files round-trip unchanged.
     // The 4th verify-command field forces the origin field to be written (positional
     // format) — 'accepted' spelled out there parses back to the same absent origin.
+    // The 5th field likewise forces an (empty) 4th.
+    if (d.resolvedBy !== undefined && d.resolvedBy.length > 0) {
+        return [
+            d.taskId,
+            d.reason,
+            d.origin ?? 'accepted',
+            d.verifyCommand ?? '',
+            d.resolvedBy
+        ].join(FIELD_SEP)
+    }
     if (d.verifyCommand !== undefined && d.verifyCommand.length > 0) {
         return [d.taskId, d.reason, d.origin ?? 'accepted', d.verifyCommand].join(FIELD_SEP)
     }
@@ -365,6 +383,43 @@ export function extractDeletedDebtPath(reason: string): string | null {
 /** Overwrite the ledger with exactly these records (used to prune resolved debts). */
 export async function writeAcceptDebts(cwd: string, debts: AcceptDebt[]): Promise<void> {
     await ledger.write(cwd, debts)
+}
+
+/** The debts nothing has closed yet — the only ones a re-check may read. */
+export async function readOpenAcceptDebts(cwd: string): Promise<AcceptDebt[]> {
+    return (await readAcceptDebts(cwd)).filter(d => d.resolvedBy === undefined)
+}
+
+/**
+ * Close every open static-class debt that names `command`, stamping the task
+ * whose verified work made that check pass again. Returns the debts closed.
+ * A reason that quotes the command is the whole match: the health-check reason
+ * (`repo health: \`bun run lint\` exited 1`) and its inherited form both do,
+ * and nothing else in the ledger quotes a health command. Best-effort.
+ */
+export async function closeHealthDebts(
+    cwd: string,
+    command: string,
+    resolvedBy: string
+): Promise<AcceptDebt[]> {
+    try {
+        const all = await readAcceptDebts(cwd)
+        const quoted = `\`${command}\``
+        const closing = all.filter(
+            d =>
+                d.resolvedBy === undefined
+                && isStaticClassDebt(d.reason)
+                && d.reason.includes(quoted)
+        )
+        if (closing.length === 0) return []
+        await ledger.write(
+            cwd,
+            all.map(d => (closing.includes(d) ? {...d, resolvedBy} : d))
+        )
+        return closing
+    } catch {
+        return []
+    }
 }
 
 /**
@@ -702,22 +757,28 @@ export async function deriveOpenDebts(
     run: CommandRunner = spawnCommand,
     signal?: AbortSignal
 ): Promise<{openDebts: AcceptDebt[]; debtNote?: string; trail?: string[]}> {
+    const all = await readAcceptDebts(cwd)
+    // Closed debts are kept as the record of what fixed them, and never re-checked.
+    const closed = all.filter(d => d.resolvedBy !== undefined)
     const {
         open: openRaw,
         resolved,
         trail
-    } = await recheckAcceptDebts(await readAcceptDebts(cwd), {
-        staticOk,
-        // Cross-task-deletion debts auto-close iff the deleted file is back in the
-        // tree — a deterministic existence check, corroborating the per-file
-        // provenance the record already carries.
-        fileExists: rel => existsSync(path.join(cwd, rel)),
-        // VERIFY-COMMAND class: a debt that NAMES a command is settled
-        // by running that command, under the gate's own env-gap contract and behind
-        // the no-write guard below.
-        rerunVerify: cmd => rerunDebtVerifyCommand(cwd, cmd, run, signal)
-    })
-    if (resolved.length > 0) await writeAcceptDebts(cwd, openRaw)
+    } = await recheckAcceptDebts(
+        all.filter(d => d.resolvedBy === undefined),
+        {
+            staticOk,
+            // Cross-task-deletion debts auto-close iff the deleted file is back in the
+            // tree — a deterministic existence check, corroborating the per-file
+            // provenance the record already carries.
+            fileExists: rel => existsSync(path.join(cwd, rel)),
+            // VERIFY-COMMAND class: a debt that NAMES a command is settled
+            // by running that command, under the gate's own env-gap contract and behind
+            // the no-write guard below.
+            rerunVerify: cmd => rerunDebtVerifyCommand(cwd, cmd, run, signal)
+        }
+    )
+    if (resolved.length > 0) await writeAcceptDebts(cwd, [...closed, ...openRaw])
     // Conflicting-claim annotation: an existence-as-failure debt whose
     // named file is another task's committed deliverable is a plan defect — surface
     // the contradiction with the debt so nobody (human or child) treats the claim as

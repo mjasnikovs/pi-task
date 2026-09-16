@@ -11,7 +11,8 @@ import {
     stampTaskInProgress,
     beginTaskAttempt,
     recordTaskEnd,
-    insertTaskAfter
+    insertTaskAfter,
+    insertTaskBefore
 } from '../../src/task/auto-io.js'
 import {writeTaskFile, readTaskFile} from '../../src/task/task-io.js'
 import type {TaskFrontMatter} from '../../src/task/task-types.js'
@@ -376,4 +377,29 @@ test('parseCoverageVerdict: an INCOMPLETE that names nothing is unparseable, not
     expect(parseCoverageVerdict('COVERAGE: INCOMPLETE')).toEqual({kind: 'unparseable'})
     expect(parseCoverageVerdict('COVERAGE: INCOMPLETE\nMISSING:')).toEqual({kind: 'unparseable'})
     expect(parseCoverageVerdict('I think the plan is fine.')).toBeNull()
+})
+
+test('insertTaskBefore: index 0 lands the entry at the top; a later index lands before that entry', async () => {
+    await withTmpTaskDir(async dir => {
+        await writeTaskFile(
+            dir,
+            fm('TASK_AUTO_0001', 'in_progress'),
+            buildAutoBody('f', '(none)', ['A', 'B'])
+        )
+        expect(
+            await insertTaskBefore(dir, 'TASK_AUTO_0001', 0, 'repair `bun run lint`: exits 1 (x)')
+        ).toBe(true)
+        expect(
+            await insertTaskBefore(dir, 'TASK_AUTO_0001', 2, 'repair a/b.ts: `tsc` exits 2 (y)')
+        ).toBe(true)
+        const titles = parseTaskList((await readTaskFile(dir, 'TASK_AUTO_0001')).body).map(
+            e => e.title
+        )
+        expect(titles).toEqual([
+            'repair `bun run lint`: exits 1 (x)',
+            'A',
+            'repair a/b.ts: `tsc` exits 2 (y)',
+            'B'
+        ])
+    })
 })

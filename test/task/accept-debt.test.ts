@@ -27,6 +27,9 @@ import {
     writeAcceptDebts,
     classifyVerifyCommand,
     verifyCommandFromReason,
+    closeHealthDebts,
+    readOpenAcceptDebts,
+    deriveOpenDebts,
     type AcceptDebt
 } from '../../src/task/accept-debt.js'
 
@@ -801,5 +804,86 @@ describe('verify-command debt class', () => {
         expect(ran).toBeLessThanOrEqual(3)
         expect(out.open).toHaveLength(10)
         expect(out.trail.some(l => /re-run budget/.test(l))).toBe(true)
+    })
+})
+
+describe('closed debts (resolvedBy) — a repair closes what its check opened', () => {
+    const LINT_REASON = 'repo health: `bun run lint` exited 1'
+
+    test('a 5-field record round-trips, and legacy shapes still parse without it', () => {
+        const [d] = parseAcceptDebts(`TASK_0006\t${LINT_REASON}\tyolo-accepted\t\tTASK_0009`)
+        expect(d).toEqual({
+            taskId: 'TASK_0006',
+            reason: LINT_REASON,
+            origin: 'yolo-accepted',
+            resolvedBy: 'TASK_0009'
+        })
+        expect(
+            parseAcceptDebts(`TASK_0006\t${LINT_REASON}\tyolo-accepted`)[0].resolvedBy
+        ).toBeUndefined()
+    })
+
+    test('closeHealthDebts stamps every open static debt naming the command, and only those', async () => {
+        {
+            const cwd = makeCwd()
+            await recordDebt(cwd, 'TASK_0006', LINT_REASON, 'yolo-accepted')
+            await recordDebt(
+                cwd,
+                'TASK_0007',
+                `${LINT_REASON} — already failing before this task`,
+                'inherited-health'
+            )
+            await recordDebt(
+                cwd,
+                'TASK_0008',
+                'repo health: `tsc --noEmit` exited 2',
+                'yolo-accepted'
+            )
+            await recordDebt(
+                cwd,
+                'TASK_0009',
+                'work did not verify: `bun run lint` is mentioned in prose',
+                'accepted'
+            )
+            const closed = await closeHealthDebts(cwd, 'bun run lint', 'TASK_0010')
+            expect(closed.map(d => d.taskId)).toEqual(['TASK_0006', 'TASK_0007'])
+            const all = await readAcceptDebts(cwd)
+            expect(all.map(d => [d.taskId, d.resolvedBy])).toEqual([
+                ['TASK_0006', 'TASK_0010'],
+                ['TASK_0007', 'TASK_0010'],
+                ['TASK_0008', undefined],
+                ['TASK_0009', undefined]
+            ])
+            // The closed record keeps its origin and survives a re-read from disk.
+            expect(all[0].origin).toBe('yolo-accepted')
+            expect((await readOpenAcceptDebts(cwd)).map(d => d.taskId)).toEqual([
+                'TASK_0008',
+                'TASK_0009'
+            ])
+            // A second close finds nothing open.
+            expect(await closeHealthDebts(cwd, 'bun run lint', 'TASK_0011')).toEqual([])
+        }
+    })
+
+    test('deriveOpenDebts never re-checks a closed debt, and keeps it on disk when pruning', async () => {
+        {
+            const cwd = makeCwd()
+            await recordDebt(cwd, 'TASK_0006', LINT_REASON, 'yolo-accepted')
+            await recordDebt(
+                cwd,
+                'TASK_0008',
+                'repo health: `tsc --noEmit` exited 2',
+                'yolo-accepted'
+            )
+            await closeHealthDebts(cwd, 'bun run lint', 'TASK_0010')
+            // Statics green: the tsc debt is proven resolved and pruned; the closed
+            // lint debt is neither re-checked nor dropped.
+            const {openDebts} = await deriveOpenDebts(cwd, true)
+            expect(openDebts).toEqual([])
+            const kept = await readAcceptDebts(cwd)
+            expect(kept.map(d => [d.taskId, d.resolvedBy])).toEqual([['TASK_0006', 'TASK_0010']])
+            // Statics red: the closed debt still does not surface.
+            expect((await deriveOpenDebts(cwd, false)).openDebts).toEqual([])
+        }
     })
 })
