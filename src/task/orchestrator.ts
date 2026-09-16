@@ -62,7 +62,7 @@ import {
 import {pushNotify} from '../remote/push.js'
 import {getConfig} from '../config/config.js'
 import {appendDebugLine, gateDebugWriter} from './debug-log.js'
-import {beginRun, runLogPath} from './state-dir.js'
+import {runLogPath} from './state-dir.js'
 import {buildGateDeps, type RunTaskFn} from './gate-deps.js'
 import {runGatesForTask, type GateDeps} from './task-gates.js'
 import {parseVerifyBlock} from './spec-validation.js'
@@ -82,6 +82,7 @@ import {
 import {rearmCancelListener} from './cancel-input.js'
 import {takeHeldInput, isRunActive} from './mid-run-input.js'
 import {withRun, announceTerminal} from './run-bracket.js'
+import {currentRunContext} from './run-context.js'
 import {RUN_END_POLICY, runSucceeded, type RunEnd} from './run-end.js'
 import {formatTimings, type TimingEntry} from './timings.js'
 import {getParentContextWindow, resolveContextUsage} from './context-usage.js'
@@ -340,6 +341,10 @@ export class TaskRunner {
     private async _run(): Promise<RunEnd> {
         const cwd = this._cwd
         const ctx = this._ctx
+        // Resolved HERE, not in the constructor: the run bracket that owns the
+        // per-run facts is opened by `run()`, one statement before this. A
+        // caller-supplied seam wins, like `logDebug` below.
+        this._deps.runContext ??= currentRunContext(cwd)
 
         // Initialise or resume the TASK file.
         let id: string
@@ -934,10 +939,6 @@ async function handleTask(args: string, ctx: ExtensionCommandContext): Promise<v
         notifyBoth(ctx, 'Type your prompt after /task (use @ for file completion).', 'info')
         return
     }
-    // A plain /task is a run of one task, and gets a run id for the same reason
-    // /task-auto does: its logs belong to this invocation, not to whatever the
-    // host session ran before it.
-    beginRun()
     // When a gate is enabled, /task awaits the implementation and runs the same
     // verify + enforce gates a /task-auto sub-task does. With both gates off
     // (the default), /task stays fire-and-forget: hand the spec to the main
@@ -1030,7 +1031,6 @@ async function handleTaskResume(args: string, ctx: ExtensionCommandContext): Pro
         }
         id = candidates[0].id
     }
-    beginRun()
     // Match /task: resume through the gates when one is enabled, else fire-and-forget.
     const cfg = getConfig()
     if (cfg.verifyWork || cfg.enforceGuidelines) {

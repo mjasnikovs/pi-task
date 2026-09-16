@@ -228,15 +228,26 @@ describe('replaceToolingWithVerified', () => {
 describe('parseVerifyToolingOutput', () => {
     test('parses verified and rejected sections', () => {
         const output = `VERIFIED
-  npm test  found in package.json scripts
-  tsc  found in node_modules/.bin/
+  npm test  check  found in package.json scripts
+  bun run dev  serve  the dev server script
 
 REJECTED
   pytest  no Python tooling found`
         const result = parseVerifyToolingOutput(output)
-        expect(result.verified).toEqual(['npm test', 'tsc'])
+        expect(result.verified).toEqual([
+            {cmd: 'npm test', class: 'check', evidence: 'found in package.json scripts'},
+            {cmd: 'bun run dev', class: 'serve', evidence: 'the dev server script'}
+        ])
         expect(result.rejected[0].cmd).toBe('pytest')
         expect(result.rejected[0].reason).toBe('no Python tooling found')
+    })
+
+    test('a line with no class column reads as a check', () => {
+        // The old two-column shape, and what a model that ignores the format emits.
+        const result = parseVerifyToolingOutput('VERIFIED\n  tsc  found in node_modules/.bin/')
+        expect(result.verified).toEqual([
+            {cmd: 'tsc', class: 'check', evidence: 'found in node_modules/.bin/'}
+        ])
     })
 
     test('handles empty sections gracefully', () => {

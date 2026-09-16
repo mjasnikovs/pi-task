@@ -6,14 +6,12 @@
  * land under the state dir, and `.pi-tasks/` gains NOTHING as they grow. The
  * second is what lets `snapshotTrail` keep copying `.pi-tasks/` whole.
  */
-import {afterEach, beforeEach, describe, expect, test} from 'bun:test'
+import {afterEach, describe, expect, test} from 'bun:test'
 import * as fs from 'node:fs'
 import * as fsp from 'node:fs/promises'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import {
-    RUN_ID_ENV,
-    beginRun,
     currentRunId,
     pruneRunLogs,
     repoHash,
@@ -23,6 +21,7 @@ import {
     stateHome
 } from '../../src/task/state-dir.js'
 import {makeDebugAppender} from '../../src/task/debug-log.js'
+import {closeRunContext, openRunContext} from '../../src/task/run-context.js'
 import {TaskRunner} from '../../src/task/orchestrator.js'
 import {happy} from '../test-utils/happy-phases.js'
 import {makeFakeCtx} from '../test-utils/fake-ctx.js'
@@ -31,12 +30,7 @@ import {tmpDir} from '../test-utils/tmp-dir.js'
 
 const savedXdg = process.env.XDG_STATE_HOME
 
-beforeEach(() => {
-    delete process.env[RUN_ID_ENV]
-})
-
 afterEach(() => {
-    delete process.env[RUN_ID_ENV]
     if (savedXdg === undefined) delete process.env.XDG_STATE_HOME
     else process.env.XDG_STATE_HOME = savedXdg
 })
@@ -84,28 +78,37 @@ describe('path layout', () => {
 })
 
 describe('run id', () => {
-    test('beginRun mints a fresh id and stamps it for the rest of the run', () => {
-        const first = beginRun()
-        expect(currentRunId()).toBe(first)
-        expect(process.env[RUN_ID_ENV]).toBe(first)
-        const second = beginRun()
-        expect(second).not.toBe(first)
-        expect(currentRunId()).toBe(second)
+    test("inside a run the id is the run context's, so every task shares one directory", () => {
+        const rc = openRunContext('/work/repo')
+        try {
+            expect(currentRunId('/work/repo')).toBe(rc.runId)
+        } finally {
+            closeRunContext(rc)
+        }
     })
 
-    test('a line written outside any run still gets a directory of its own', () => {
-        expect(process.env[RUN_ID_ENV]).toBeUndefined()
-        const id = currentRunId()
+    test('a line written outside any run still gets one stable directory', () => {
+        const id = currentRunId('/work/repo')
         expect(id.length).toBeGreaterThan(0)
-        expect(currentRunId()).toBe(id)
+        expect(currentRunId('/work/repo')).toBe(id)
+        const rc = openRunContext('/work/repo')
+        try {
+            expect(currentRunId('/work/repo')).not.toBe(id)
+        } finally {
+            closeRunContext(rc)
+        }
     })
 
     test('runLogPath puts the file in this run id directory', () => {
         process.env.XDG_STATE_HOME = '/state'
-        const id = beginRun()
-        expect(runLogPath('/work/repo', 'verify-debug.log')).toBe(
-            path.join(stateDir('/work/repo', id), 'verify-debug.log')
-        )
+        const rc = openRunContext('/work/repo')
+        try {
+            expect(runLogPath('/work/repo', 'verify-debug.log')).toBe(
+                path.join(stateDir('/work/repo', rc.runId), 'verify-debug.log')
+            )
+        } finally {
+            closeRunContext(rc)
+        }
     })
 })
 
@@ -170,7 +173,6 @@ describe('the trail leaves the repository', () => {
     test('a whole task run writes its log to the state dir and none to .pi-tasks', async () => {
         await withTmpTaskDir(async cwd => {
             const {ctx} = makeFakeCtx(cwd)
-            const runId = beginRun()
             await new TaskRunner({
                 ctx,
                 cwd,
@@ -179,7 +181,9 @@ describe('the trail leaves the repository', () => {
                 seams: happy()
             }).run()
 
-            const runDir = stateDir(cwd, runId)
+            const runs = fs.readdirSync(repoStateDir(cwd))
+            expect(runs).toHaveLength(1)
+            const runDir = stateDir(cwd, runs[0])
             const logs = fs.readdirSync(runDir).filter(f => f.endsWith('-debug.log'))
             expect(logs).toEqual(['TASK_0001-debug.log'])
             expect(await readWhenWritten(path.join(runDir, logs[0]))).toContain('run: start')

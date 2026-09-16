@@ -38,7 +38,12 @@
  */
 import {USER_CANCELLED} from './child-runner.js'
 import {isModelErrorMessage} from '../workers/worker-failure.js'
-import {buildEnvNotesBlock, ENV_NOTE_EMIT_INSTRUCTION, extractEnvNotes} from './env-notes.js'
+import {
+    buildEnvNotesBlock,
+    ENV_NOTE_EMIT_INSTRUCTION,
+    extractEnvNotes,
+    type EmittedNote
+} from './env-notes.js'
 import {buildContractsVerifyBlock} from './contracts.js'
 import {findSkipEscapes, skipEscapeVerifyFindings} from './skip-escape.js'
 import {crossTaskDeletionVerifyFindings, type CrossTaskDeletion} from './task-provenance.js'
@@ -691,11 +696,13 @@ export function buildVerifyPrompt(
     context: {
         /** Environment facts earlier gate children discovered — see env-notes.ts. */
         envNotes?: string
+        /** This run's id: the notes it recorded lead, older runs' follow. */
+        envRunId?: string
         /** Cross-slice interface facts the design pins — see contracts.ts. */
         contracts?: string
     } = {}
 ): string {
-    const {envNotes, contracts} = context
+    const {envNotes, envRunId, contracts} = context
     // NOTICE BLOCKS in table order; RULES sorted by their hand-assigned number.
     const noticeBlocks = PROBE_ADAPTERS.flatMap(adapter => {
         const lines = findings[adapter.key]
@@ -708,7 +715,8 @@ export function buildVerifyPrompt(
             : 0
         )
         .flatMap(a => [...(a.rule ?? []), ''])
-    const envBlock = envNotes && envNotes.trim().length > 0 ? [buildEnvNotesBlock(envNotes)] : []
+    const envBlock =
+        envNotes && envNotes.trim().length > 0 ? [buildEnvNotesBlock(envNotes, envRunId)] : []
     const contractsBlock =
         contracts && contracts.trim().length > 0 ? [buildContractsVerifyBlock(contracts)] : []
     return [
@@ -993,7 +1001,10 @@ export interface VerificationDeps {
      */
     envNotes?: {
         read: () => Promise<string>
-        append: (notes: string[]) => Promise<void>
+        append: (notes: readonly EmittedNote[]) => Promise<void>
+        /** The run these notes belong to, so the child's prompt can lead with the
+         *  facts measured against the tree it is standing in. */
+        runId?: string
     }
     /**
      * Per-run cross-slice contract registry (see contracts.ts): `read` supplies the
@@ -1080,7 +1091,11 @@ export async function runWorkVerification(deps: VerificationDeps): Promise<Verif
         try {
             text = await deps.runChild(
                 VERIFY_TOOLS,
-                buildVerifyPrompt(deps.spec, findings, {envNotes, contracts}),
+                buildVerifyPrompt(deps.spec, findings, {
+                    envNotes,
+                    ...(deps.envNotes?.runId === undefined ? {} : {envRunId: deps.envNotes.runId}),
+                    contracts
+                }),
                 deps.signal
             )
         } catch (err) {

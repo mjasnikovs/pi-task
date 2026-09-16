@@ -8,7 +8,7 @@ import type {exaSearch as defaultExaSearch} from './exa-search.js'
 import type {SearchProvider} from './search-types.js'
 import {search} from './search-core.js'
 import {makeWorkerTool, workerAnswer, workerUnavailable} from './shared.js'
-import {normalizeQuery} from './research-cache.js'
+import {queryTokenKey} from './research-cache.js'
 
 const Params = Type.Object({
     query: Type.String({description: 'Search query.'}),
@@ -96,9 +96,11 @@ export function registerPiWorkerSearch(
         // the live web again. Three parts key the entry: the PROVIDER, because two
         // engines' result sets for one query are different answers and must not serve
         // for each other; the query, lowercased and whitespace-collapsed by
-        // `normalizeQuery` so phrasing variants share an entry; and the COUNT, because a
-        // larger request is a different result set.
-        cacheKey: params => `${provider()}::${normalizeQuery(params.query)}::${params.count ?? ''}`,
+        // `queryTokenKey` so phrasing variants share an entry; and the COUNT, because a
+        // larger request is a different result set. The tokens go LAST because that is
+        // where research-cache.ts looks for the question it may widen a hit from.
+        cacheKey: params =>
+            `${provider()}::${params.count ?? ''}\u0000${queryTokenKey(params.query)}`,
         // Only a non-empty result set is worth caching. An empty one falls through so a
         // later attempt can succeed; no-key and engine errors never reach this at all,
         // since makeWorkerTool refuses to store an `unavailable` outcome.

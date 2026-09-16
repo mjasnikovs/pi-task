@@ -32,6 +32,7 @@ import type {docsRaw, docsFocused} from '../workers/docs-core.js'
 import type {fetchRaw, fetchFocused} from '../workers/fetch-core.js'
 import type {npmVersionLookup} from '../workers/npm-version.js'
 import type {SearchCoreInput, SearchCoreResult} from '../workers/search-core.js'
+import type {RunContext} from './run-context.js'
 
 // Sentinel error thrown when the user dismisses a grill-me dialog or cancels a
 // run. Defined here (not in failure-classifier.ts) to avoid a circular dependency.
@@ -132,6 +133,13 @@ export interface PhaseDeps {
     cwd: string
     taskId: string
     signal: AbortSignal
+    /**
+     * What is true of the RUN rather than of this task: the inventory, the
+     * orientation core, the manifest deps, the ecosystems, the verified tooling.
+     * Absent → the phase builds a throwaway context for itself, which is the old
+     * per-task behaviour (see run-context.ts).
+     */
+    runContext?: RunContext
     onChildOutput?: (line: string) => void
     onContextUsage?: (snapshot: ContextSnapshot) => void
     /**

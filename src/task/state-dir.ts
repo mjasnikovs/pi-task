@@ -15,13 +15,7 @@ import * as fsp from 'node:fs/promises'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import {newRunToken} from '../workers/research-cache.js'
-
-/**
- * The run this process is serving. An env var rather than a module variable for
- * the same reason the research cache uses one (`research-cache.ts`): a run spans
- * several sessions and module registries, and one id has to reach all of them.
- */
-export const RUN_ID_ENV = 'PI_TASK_RUN_ID'
+import {openRunId} from './run-context.js'
 
 /** How many of a repository's runs keep their logs. */
 export const RUN_LOG_KEEP = 20
@@ -50,25 +44,21 @@ export function stateDir(cwd: string, runId: string): string {
     return path.join(repoStateDir(cwd), runId)
 }
 
-/**
- * Mint a fresh id for the run starting now. Every command that opens a run calls
- * it, so one run's logs land in one directory however many tasks it spans.
- */
-export function beginRun(): string {
-    const id = newRunToken()
-    process.env[RUN_ID_ENV] = id
-    return id
-}
+let fallbackRunId: string | undefined
 
-/** This run's id, minting one for a line written outside any run. */
-export function currentRunId(): string {
-    const id = process.env[RUN_ID_ENV]?.trim()
-    return id && id.length > 0 ? id : beginRun()
+/**
+ * The id whose directory a line written now belongs in: the open run's (the run
+ * bracket owns it — `run-context.ts`). A caller outside any bracket, a direct
+ * `runSingleTask` or a test, shares one per-process id so its lines still land
+ * together instead of one directory per line.
+ */
+export function currentRunId(cwd: string): string {
+    return openRunId(cwd) ?? (fallbackRunId ??= newRunToken())
 }
 
 /** A log file in the current run's directory. */
 export function runLogPath(cwd: string, file: string): string {
-    return path.join(stateDir(cwd, currentRunId()), file)
+    return path.join(stateDir(cwd, currentRunId(cwd)), file)
 }
 
 /**

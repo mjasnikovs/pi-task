@@ -29,6 +29,7 @@ import {gitCommitAll, gitDropLastCommit, git} from './auto-commit.js'
 import {runGuidelineEnforcement} from './enforce-guidelines.js'
 import {runWorkVerification, extractSpecForVerification, type VerifyProbes} from './verify-work.js'
 import {readEnvNotes, appendEnvNotes} from './env-notes.js'
+import {currentRunContext} from './run-context.js'
 import {readContracts} from './contracts.js'
 import {recordDebt} from './accept-debt.js'
 import {recordRepairCandidate} from './root-cause-repair.js'
@@ -865,6 +866,9 @@ export function buildGateDeps(params: {
             // file. A task that never reached compose has no spec section —
             // runWorkVerification treats a null spec as a no-op pass.
             const spec = await readSpecForVerification(cwd2, taskId)
+            // One id for the whole gate: read and append must agree on which run
+            // these facts belong to.
+            const {runId} = currentRunContext(cwd2)
             // DEAD AIR (the reason this loader exists). The gate's DETERMINISTIC
             // stage — repo health plus the nine PROBE_ADAPTERS rows — runs before
             // the verify child, and the child's own loader only starts once the
@@ -950,11 +954,13 @@ export function buildGateDeps(params: {
                     // the re-archaeology; its own ENV-NOTE lines are stored for the
                     // next one, stamped with this task's id as their origin so a
                     // later child sees a cited fact is second-hand and must
-                    // re-validate before excusing a failure. Facts only — verdict
-                    // rules unaffected.
+                    // re-validate before excusing a failure, and with the RUN's id so
+                    // the facts measured against this tree lead the block. Facts
+                    // only — verdict rules unaffected.
                     envNotes: {
                         read: () => readEnvNotes(cwd2),
-                        append: notes => appendEnvNotes(cwd2, notes, taskId)
+                        append: notes => appendEnvNotes(cwd2, notes, taskId, runId),
+                        runId
                     },
                     // Per-run cross-slice contract registry under `.pi-tasks/`: the
                     // verbatim interface facts the design pins that multiple slices

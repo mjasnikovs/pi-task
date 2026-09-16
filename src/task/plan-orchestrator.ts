@@ -72,7 +72,7 @@ import {withRun, announceTerminal} from './run-bracket.js'
 import {getConfig} from '../config/config.js'
 import {isYoloMode} from './yolo.js'
 import {appendDebugLine, gateDebugWriter} from './debug-log.js'
-import {beginRun, runLogPath} from './state-dir.js'
+import {runLogPath} from './state-dir.js'
 import {getParentContextWindow} from './context-usage.js'
 import {ChildStatus, runPlanningChild, statusCallbacks} from './child-status.js'
 import * as fsp from 'node:fs/promises'
@@ -340,8 +340,6 @@ export async function handleTaskPlan(
         notifyBoth(ctx, 'Describe the task after /task-plan (use @ for file completion).', 'info')
         return
     }
-
-    beginRun()
 
     // Inline any @file the user referenced, exactly as /task-auto's planner does:
     // a one-line "Implement @spec.md" reads as trivial to a model that cannot see

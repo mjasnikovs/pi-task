@@ -26,7 +26,7 @@ import {
 } from './shared.js'
 import {isTypeOnlyAnswer} from '../task/type-only-answer.js'
 import {logDocsAnswer} from './typeonly-log.js'
-import {normalizeQuery} from './research-cache.js'
+import {normalizeQuery, queryTokenKey} from './research-cache.js'
 import {projectDocsRaw} from './docs-project.js'
 import {projectDocsBudget, projectDocsBudgetExhausted} from '../task/research-fanout-budget.js'
 import {isAbstention} from './abstention.js'
@@ -584,12 +584,13 @@ export function docsCacheable(
     return d.typeOnly !== true && d.excerptFabricated !== true && d.abstained !== true
 }
 
-/** The docs cache key: a package's answer is per (module, question), with the question
- *  lowercased and its whitespace collapsed so phrasing variants share one entry. Returns
- *  null for the project-source `.` lookup, which is never cached — the working tree
- *  mutates as tasks implement.
+/** The docs cache key: a package's answer is per (module, question), the question
+ *  reduced to its sorted distinctive tokens so phrasing variants share one entry and a
+ *  narrower question can be answered from a wider one's digest (research-cache.ts).
+ *  Returns null for the project-source `.` lookup, which is never cached — the working
+ *  tree mutates as tasks implement.
  *
- *  The ecosystem joins the key only when the caller named one, so the keys of every
+ *  The ecosystem joins the key only when the caller named one, so the subjects of every
  *  call that lets the manifest decide are the ones they always were. */
 export function docsCacheKey(params: {
     module: string
@@ -598,7 +599,7 @@ export function docsCacheKey(params: {
 }): string | null {
     if (params.module === '.') return null
     const scope = params.ecosystem ? `${params.ecosystem}::` : ''
-    return `${scope}${normalizeQuery(params.module)}::${normalizeQuery(params.query)}`
+    return `${scope}${normalizeQuery(params.module)}\u0000${queryTokenKey(params.query)}`
 }
 
 /** Package provenance for per-entry resume invalidation: the package ROOT of the

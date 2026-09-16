@@ -1,3 +1,4 @@
+import type {EmittedNote} from '../../src/task/env-notes.js'
 import {describe, expect, test} from 'bun:test'
 import {
     buildVerifyPrompt,
@@ -731,14 +732,14 @@ describe('runWorkVerification', () => {
 
     test('env notes reach the prompt with the caveat; emitted ENV-NOTE lines are captured even on FAIL', async () => {
         let prompt = ''
-        const appended: string[][] = []
+        const appended: EmittedNote[][] = []
         const out = await runWorkVerification({
             cwd: '/x',
             spec: 'GOAL\nx',
             envNotes: {
                 read: () => Promise.resolve('postgres at localhost:5432 absent'),
                 append: notes => {
-                    appended.push(notes)
+                    appended.push([...notes])
                     return Promise.resolve()
                 }
             },
@@ -751,8 +752,8 @@ describe('runWorkVerification', () => {
         expect(prompt).toContain('KNOWN ENVIRONMENT FACTS')
         expect(prompt).toContain('postgres at localhost:5432 absent')
         expect(prompt).toContain('NOT a license')
-        expect(prompt).toContain('ENV-NOTE: <one-line fact>')
-        expect(appended).toEqual([['bun 1.3.14 installed']])
+        expect(prompt).toContain('ENV-NOTE[<subject>]: <one-line fact>')
+        expect(appended).toEqual([[{subject: 'bun installed', fact: 'bun 1.3.14 installed'}]])
     })
 
     test('an env-notes cache failure never blocks verification', async () => {

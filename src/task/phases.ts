@@ -6,7 +6,6 @@
 import {fileURLToPath} from 'node:url'
 import type {ExtensionCommandContext} from '@earendil-works/pi-coding-agent'
 import {docsFocused} from '../workers/docs-core.js'
-import {detectEcosystems} from '../workers/docs-ecosystems.js'
 import {fetchFocused} from '../workers/fetch-core.js'
 import {runWorker, type RunWorkerInput} from '../workers/pi-worker-core.js'
 import {
@@ -29,12 +28,10 @@ import {
     enforceDirectives
 } from './user-directives.js'
 import {demoteUnsourcedAttributions} from './context-attribution.js'
-import {getFileInventory} from './file-inventory.js'
-import {buildOrientation, orientationTier} from './orientation.js'
+import {orientationTier} from './orientation.js'
 import {getConfig} from '../config/config.js'
-import {readFile} from 'node:fs/promises'
-import {resolve} from 'node:path'
 import {buildExternalContext, gatherExternalContext} from './external-context.js'
+import {currentRunContext, type RunContext} from './run-context.js'
 import {
     REFINE_PROMPT,
     RESEARCH_FILES_PROMPT,
@@ -182,6 +179,15 @@ export interface PhaseConfig {
     postCommit?: (deps: PhaseDeps, pc: PhaseContext, out: string) => Promise<void>
 }
 
+/**
+ * This run's context, or a throwaway one for a caller outside a run bracket (a
+ * direct phase call in a test). Every per-project fact a phase asks for goes
+ * through it, so a /task-auto run derives each one once instead of per task.
+ */
+function runContextFor(deps: PhaseDeps): RunContext {
+    return deps.runContext ?? currentRunContext(deps.cwd)
+}
+
 // ─── Tooling helpers ─────────────────────────────────────────────────────────
 
 /** Extract the TOOLING section commands from a research output string. */
@@ -256,20 +262,12 @@ const REFINE_PRESERVE_DIRECTIVE =
  */
 export async function refineExistingFilesBlock(deps: PhaseDeps): Promise<string> {
     if (!getConfig().orientation) return ''
-    const inventoryRaw = await getFileInventory(deps.cwd, deps.signal).catch(() => '')
-    if (inventoryRaw.length === 0) return ''
-    const paths = inventoryRaw
-        .split('\n')
+    const runContext = runContextFor(deps)
+    const paths = (await runContext.inventoryPaths())
         .map(l => l.trim())
-        .filter(l => l.length > 0 && (orientationTier(l) === 0 || orientationTier(l) === 1))
+        .filter(l => orientationTier(l) === 0 || orientationTier(l) === 1)
     if (paths.length === 0) return ''
-    const {block} = await buildOrientation(paths, async p => {
-        try {
-            return await readFile(resolve(deps.cwd, p), 'utf8')
-        } catch {
-            return null
-        }
-    })
+    const {block} = await runContext.orientationOf(paths)
     return block.trim().length === 0 ? '' : `${REFINE_PRESERVE_DIRECTIVE}\n\n${block.trim()}`
 }
 
@@ -445,36 +443,53 @@ export async function phaseVerifyTooling(deps: PhaseDeps, research: string): Pro
         return replaceToolingWithVerified(research, [])
     }
 
-    const toolingList = commands.join('\n')
-    let verifyOutput: string
-    try {
-        verifyOutput = await runPhaseChild(
-            deps,
-            'verify-tooling',
-            'read,bash',
-            VERIFY_TOOLING_PROMPT(toolingList)
-        )
-    } catch (e) {
-        if (isFatalChildCause(e)) throw e
-        // The fallback ships the tooling list UNVERIFIED, which is the right
-        // degrade for a child that merely failed. A hung command is different: it
-        // cost the ceiling on every strike and says the SPEC named something
-        // unbounded, so it is the one cause worth a trail line rather than silence.
-        if (e instanceof ChildFailureError && e.failure.kind === 'command-timeout') {
-            deps.logDebug?.(`verify-tooling: ${e.message} — shipping the list unverified`)
+    // UNVERIFIED is the degrade for a child that merely failed, and it is decided
+    // here rather than inside the run context so a failure is never cached as a
+    // verdict: the next task asks again.
+    let unverified = false
+    let inconclusive = false
+    const verified = await runContextFor(deps).verifiedToolingFor(commands, async unknown => {
+        let output: string
+        try {
+            output = await runPhaseChild(
+                deps,
+                'verify-tooling',
+                'read,bash',
+                VERIFY_TOOLING_PROMPT(unknown.join('\n'))
+            )
+        } catch (e) {
+            if (isFatalChildCause(e)) throw e
+            // A hung command is the one cause worth a trail line: it cost the
+            // ceiling on every strike and says the SPEC named something unbounded.
+            if (e instanceof ChildFailureError && e.failure.kind === 'command-timeout') {
+                deps.logDebug?.(`verify-tooling: ${e.message} — shipping the list unverified`)
+            }
+            unverified = true
+            return {verified: [], rejected: []}
         }
-        return replaceToolingWithVerified(research, commands)
-    }
+        const parsed = parseVerifyToolingOutput(output)
+        inconclusive = parsed.verified.length === 0 && parsed.rejected.length === 0
+        return {
+            verified: parsed.verified.map(v => ({cmd: v.cmd, class: v.class})),
+            rejected: parsed.rejected.map(r => r.cmd)
+        }
+    })
 
-    const parsed = parseVerifyToolingOutput(verifyOutput)
-    const verifiedSection =
-        parsed.verified.length > 0 ? parsed.verified.join('\n')
-        : parsed.rejected.length > 0 ? '(none verified)'
-        : '(verification inconclusive)'
+    if (unverified) return replaceToolingWithVerified(research, commands)
 
-    await setTaskSection(deps.cwd, deps.taskId, 'verified tooling', verifiedSection)
+    const cmds = verified.map(v => v.cmd)
+    // Written per task for provenance even though the verdicts are the run's: the
+    // task file has to say what THIS task was told its tooling was.
+    await setTaskSection(
+        deps.cwd,
+        deps.taskId,
+        'verified tooling',
+        cmds.length > 0 ? verified.map(v => `${v.cmd}  ${v.class}`).join('\n')
+        : inconclusive ? '(verification inconclusive)'
+        : '(none verified)'
+    )
 
-    return replaceToolingWithVerified(research, parsed.verified)
+    return replaceToolingWithVerified(research, cmds)
 }
 
 /**
@@ -555,25 +570,6 @@ export function scopedToolingGoal(refined: string): string {
 }
 
 /**
- * Dependency names declared by the project manifest, used by the CONTEXT post-check to
- * tell "this bullet is about an external library" from "this bullet is about our source".
- * A missing or malformed package.json yields none, which makes the post-check a no-op
- * rather than an error — a non-node project must still be able to run research.
- */
-async function manifestDependencyNames(cwd: string): Promise<string[]> {
-    try {
-        const raw = await readFile(resolve(cwd, 'package.json'), 'utf8')
-        const pkg = JSON.parse(raw) as {
-            dependencies?: Record<string, string>
-            devDependencies?: Record<string, string>
-        }
-        return [...Object.keys(pkg.dependencies ?? {}), ...Object.keys(pkg.devDependencies ?? {})]
-    } catch {
-        return []
-    }
-}
-
-/**
  * Prepended to worker:apis's prompt on the ONE retry the zero-retrieval gate triggers. It
  * names the exact failure (a section written with no retrieval) so the correction is concrete,
  * and bounds the retrieval to the symbols about to be listed — a broad "read everything"
@@ -609,17 +605,20 @@ const CONTEXT_SILENT_RETRY_PREAMBLE =
     + 'question. One claim per bullet. Better to emit three sharp sourced bullets than to say nothing.'
 
 export async function phaseResearch(deps: PhaseDeps, refined: string): Promise<string> {
-    const fileInventoryFn = deps.getFileInventory ?? getFileInventory
+    const runContext = runContextFor(deps)
     const runWorkerFn =
         deps.runWorker ?? ((_label: string, input: RunWorkerInput) => runWorker(input))
     const externalContext = await gatherExternalContext(refined, deps)
 
-    // Pre-compute the project file inventory once and hand it to every worker.
+    // The project file inventory, derived ONCE PER RUN and handed to every worker.
     // Workers can then jump straight to targeted read/grep on known paths
     // instead of each spawning its own discovery loop (find/ls). A '' result
     // (non-git repo, git missing, abort) silently falls back to the original
-    // behavior.
-    const inventoryRaw = await fileInventoryFn(deps.cwd, deps.signal).catch(() => '')
+    // behavior. The seam wins when a caller supplied one.
+    const inventoryRaw =
+        deps.getFileInventory ?
+            await deps.getFileInventory(deps.cwd, deps.signal).catch(() => '')
+        :   await runContext.inventory()
     const inventoryHeader =
         inventoryRaw.length > 0 ? `PROJECT FILE INVENTORY\n${inventoryRaw}\n\n` : ''
 
@@ -637,17 +636,14 @@ export async function phaseResearch(deps: PhaseDeps, refined: string): Promise<s
     // works from the inventory and grep, and TOOLING is scoped to the GOAL prose
     // and single-read-guarded, so for those two the block is pure prefill with no
     // read to displace. Orientation only goes where reads actually happen.
-    const orientationPaths =
+    const orientation =
         getConfig().orientation && inventoryRaw.length > 0 ?
-            inventoryRaw.split('\n').filter(l => l.trim().length > 0)
-        :   []
-    const orientation = await buildOrientation(orientationPaths, async path => {
-        try {
-            return await readFile(resolve(deps.cwd, path), 'utf8')
-        } catch {
-            return null
-        }
-    }).catch(() => ({block: '', supplied: new Set<string>()}))
+            deps.getFileInventory ?
+                await runContext.orientationOf(
+                    inventoryRaw.split('\n').filter(l => l.trim().length > 0)
+                )
+            :   await runContext.orientation()
+        :   {block: '', supplied: new Set<string>()}
     if (orientation.supplied.size > 0) {
         deps.logDebug?.(`orientation: pre-supplied ${orientation.supplied.size} core files`)
     }
@@ -657,7 +653,7 @@ export async function phaseResearch(deps: PhaseDeps, refined: string): Promise<s
     // Braces for the CONTEXT worker's LIVE-DATA RULE (the belt is the prompt itself).
     // Judged against the EXTERNAL CONTEXT this run actually gathered — the same string
     // the worker is handed below — and the manifest's dependency names.
-    const manifestPackages = await manifestDependencyNames(deps.cwd)
+    const manifestPackages = runContext.manifestDeps()
 
     // The spec-cited-URL lever from ./spec-urls.ts is built and unit-tested but is
     // NOT WIRED HERE: pointing the worker at a page it should have read did not
@@ -783,7 +779,7 @@ export async function phaseResearch(deps: PhaseDeps, refined: string): Promise<s
                 + RESEARCH_APIS_PROMPT(
                     refined,
                     prior.find(s => s.name === 'FILES')?.text || undefined,
-                    detectEcosystems(deps.cwd)
+                    runContext.ecosystems()
                 )
                 + (searchConfigured() ? RESEARCH_SEARCH_HINT : '')
                 // Empty unless PI_TASK_PROJECT_DOCS_BUDGET is set. The tool-side

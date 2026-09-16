@@ -92,6 +92,22 @@ function makeHasTarget(cwd: string, target: string): boolean {
 }
 
 /**
+ * Every file `discoverHealthCommands` consults. Exported because a verified
+ * command is only as good as the manifest that vouched for it: `manifestHash`
+ * (run-context.ts) hashes exactly this set, so a project that gains a `lint`
+ * script invalidates the run's tooling verdicts and nothing else does.
+ */
+export const HEALTH_MANIFEST_FILES = [
+    'package.json',
+    'Makefile',
+    'Cargo.toml',
+    'pyproject.toml',
+    'deno.json',
+    'deno.jsonc',
+    'go.mod'
+] as const
+
+/**
  * Discover the project's OWN whole-repo static-analysis commands. First manifest
  * that exists wins; returns only the STATIC commands actually available for that
  * ecosystem (never test/build/run). An empty list means "nothing static to run".

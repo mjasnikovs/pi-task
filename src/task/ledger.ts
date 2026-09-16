@@ -4,11 +4,11 @@
  * requirements, requirements-owned).
  *
  * The ritual is seven steps: read the file (ANY error → ''), parse it into records,
- * key the records, drop an incoming item whose key is already present, cap to the
- * newest MAX (oldest dropped), mkdir the tasks dir, write the whole file back
- * (`lines.join('\n') + '\n'`, plain `writeFile`, NOT atomic). Every fault is
- * swallowed — a ledger is a sharpener or an auditing aid, never a blocker of the
- * phase or gate that calls it.
+ * key the records, settle an incoming item whose key is already present (see
+ * `conflict`), cap to the newest MAX (oldest dropped), mkdir the tasks dir, write
+ * the whole file back (`lines.join('\n') + '\n'`, plain `writeFile`, NOT atomic).
+ * Every fault is swallowed — a ledger is a sharpener or an auditing aid, never a
+ * blocker of the phase or gate that calls it.
  *
  * What varies per site is the DATA SHAPE (file name, cap, key, line format, parser)
  * and exactly one RULE — what an append does when it adds nothing new (see
@@ -21,8 +21,9 @@
  *   • `read` is `parse(readRaw)`; every adapter's parser skips blank lines and lines
  *     it cannot read, so a corrupt line is dropped, never thrown on.
  *   • `append` with an empty batch is a no-op — it does not even create `.pi-tasks/`.
- *     Within a batch the first item with a key wins; a key already stored wins over
- *     the batch.
+ *     Under the default `conflict` the first item with a key wins within a batch,
+ *     and a key already stored wins over the batch; under `'replace'` the last
+ *     statement of a key wins and moves to the end.
  *   • `write` overwrites with exactly these records; an empty list writes an empty
  *     file (this is how a drained queue and a fully-resolved debt ledger look).
  *   • Neither `append` nor `write` ever throws.
@@ -55,6 +56,16 @@ export interface LedgerSpec<T> {
      * writer produces, so it is an option, not a unification.
      */
     onNoop?: 'rewrite' | 'skip'
+    /**
+     * What `append` does when an incoming record's key is already stored:
+     *   'keep-first' (default) — the stored record wins, so provenance traces to
+     *     whoever established it first;
+     *   'replace' — the incoming record wins and moves to the end of the file, so
+     *     the freshest statement of a fact is the one that survives the cap.
+     * env-notes is the second kind: a re-measured environment fact SUPERSEDES the
+     * earlier one, and keeping the first is how a stale fact becomes permanent.
+     */
+    conflict?: 'keep-first' | 'replace'
 }
 
 export interface Ledger<T> {
@@ -73,6 +84,7 @@ export interface Ledger<T> {
 export function makeLedger<T>(spec: LedgerSpec<T>): Ledger<T> {
     const {file, max, key, serialize, parse} = spec
     const onNoop = spec.onNoop ?? 'rewrite'
+    const conflict = spec.conflict ?? 'keep-first'
     const filePath = (cwd: string): string => path.join(tasksDir(cwd), file)
 
     async function readRaw(cwd: string): Promise<string> {
@@ -99,13 +111,20 @@ export function makeLedger<T>(spec: LedgerSpec<T>): Ledger<T> {
             const existing = await read(cwd)
             const seen = new Set(existing.map(key))
             const merged = [...existing]
+            let added = 0
             for (const item of items) {
                 const k = key(item)
-                if (seen.has(k)) continue
-                seen.add(k)
+                if (seen.has(k)) {
+                    if (conflict === 'keep-first') continue
+                    const at = merged.findIndex(m => key(m) === k)
+                    if (at !== -1) merged.splice(at, 1)
+                } else {
+                    seen.add(k)
+                    added++
+                }
                 merged.push(item)
             }
-            if (merged.length === existing.length && onNoop === 'skip') return
+            if (added === 0 && onNoop === 'skip') return
             const kept = max === undefined ? merged : merged.slice(-max)
             await persist(cwd, kept)
         } catch {

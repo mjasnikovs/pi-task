@@ -5,6 +5,7 @@
  */
 
 import {MAX_GRILL_QUESTIONS} from './phases.js'
+import type {ToolingClass} from './run-context.js'
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -206,11 +207,19 @@ export function parseAutoAnswer(raw: string): AutoAnswer {
 
 // ─── Verify tooling output parser ────────────────────────────────────────────
 
+const TOOLING_CLASSES: readonly ToolingClass[] = ['check', 'build', 'serve']
+
+/** The class column of a VERIFIED line, or null when the child wrote something else. */
+function toolingClass(field: string): ToolingClass | null {
+    const t = field.trim().toLowerCase()
+    return TOOLING_CLASSES.find(c => c === t) ?? null
+}
+
 export function parseVerifyToolingOutput(output: string): {
-    verified: string[]
+    verified: Array<{cmd: string; class: ToolingClass; evidence: string}>
     rejected: Array<{cmd: string; reason: string}>
 } {
-    const verified: string[] = []
+    const verified: Array<{cmd: string; class: ToolingClass; evidence: string}> = []
     const rejected: Array<{cmd: string; reason: string}> = []
     let section: 'verified' | 'rejected' | null = null
     for (const raw of output.split('\n')) {
@@ -224,12 +233,24 @@ export function parseVerifyToolingOutput(output: string): {
             continue
         }
         if (!line) continue
-        // Lines look like: "  <cmd>  <evidence/reason>"
+        // Lines look like: "  <cmd>  <class>  <evidence>" (REJECTED has no class).
         const match = line.match(/^(\S.*?)\s{2,}(.+)$/)
         if (!match) continue
         const [, cmd, detail] = match
-        if (section === 'verified') verified.push(cmd.trim())
-        else if (section === 'rejected') rejected.push({cmd: cmd.trim(), reason: detail.trim()})
+        if (section === 'rejected') {
+            rejected.push({cmd: cmd.trim(), reason: detail.trim()})
+            continue
+        }
+        if (section !== 'verified') continue
+        const columns = detail.match(/^(\S+)\s{2,}(.+)$/)
+        const cls = columns ? toolingClass(columns[1]) : null
+        // A line with no class column is a check: the TOOLING list is verification
+        // commands, and the prompt requires a long-running one to say `serve`.
+        verified.push({
+            cmd: cmd.trim(),
+            class: cls ?? 'check',
+            evidence: (cls && columns ? columns[2] : detail).trim()
+        })
     }
     return {verified, rejected}
 }

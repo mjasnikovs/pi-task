@@ -1,4 +1,4 @@
-import {test, expect, describe} from 'bun:test'
+import {test, expect, describe, afterEach} from 'bun:test'
 import {tmpDir} from '../test-utils/tmp-dir.js'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
@@ -9,8 +9,15 @@ import {
     type VersionBlock
 } from '../../src/task/external-context.js'
 import type {PhaseDeps} from '../../src/task/child-runner.js'
+import {RESEARCH_RUN_ID_ENV} from '../../src/workers/research-cache.js'
 
 const deps = {cwd: '/tmp', signal: new AbortController().signal}
+
+const savedRunId = process.env[RESEARCH_RUN_ID_ENV]
+afterEach(() => {
+    if (savedRunId === undefined) delete process.env[RESEARCH_RUN_ID_ENV]
+    else process.env[RESEARCH_RUN_ID_ENV] = savedRunId
+})
 
 function docsOk(pkg: string, content: string, npmLatest?: string): PhaseDeps['docsRaw'] {
     return async () => ({
@@ -161,6 +168,47 @@ describe('gatherExternalContext', () => {
             npmVersionLookup: async () => null
         })
         expect(out).toBe('')
+    })
+
+    // The enrichment fan-out is a network round-trip per declared dependency, and it
+    // ran again on EVERY task of a run for answers that had not moved. It goes
+    // through the same per-run cache the worker tools use.
+    test("the second task of a run is answered from the first task's lookups", async () => {
+        const cwd = tmpDir('enrichment-cache-')
+        process.env[RESEARCH_RUN_ID_ENV] = 'run-enrichment'
+        const versionCalls: string[] = []
+        const run = (): Promise<string> =>
+            gatherExternalContext('use `zod` for validation', {
+                ...deps,
+                cwd,
+                npmVersionLookup: async pkg => {
+                    versionCalls.push(pkg)
+                    return {pkg, latest: '3.23.8', recent: ['3.23.8']}
+                }
+            })
+        const first = await run()
+        const second = await run()
+        expect(second).toBe(first)
+        expect(second).toContain('latest: 3.23.8')
+        expect(versionCalls).toEqual(['zod'])
+    })
+
+    test('with no run id stamped, nothing is cached', async () => {
+        const cwd = tmpDir('enrichment-nocache-')
+        delete process.env[RESEARCH_RUN_ID_ENV]
+        const versionCalls: string[] = []
+        const run = (): Promise<string> =>
+            gatherExternalContext('use `zod` for validation', {
+                ...deps,
+                cwd,
+                npmVersionLookup: async pkg => {
+                    versionCalls.push(pkg)
+                    return {pkg, latest: '3.23.8', recent: ['3.23.8']}
+                }
+            })
+        await run()
+        await run()
+        expect(versionCalls).toEqual(['zod', 'zod'])
     })
 })
 
