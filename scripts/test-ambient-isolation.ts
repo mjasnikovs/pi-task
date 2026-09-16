@@ -31,6 +31,7 @@
  * prune each other, and swept on exit so it does not become the next `/tmp`
  * inode leak (see test-utils/tmp-dir.ts).
  */
+import {afterAll} from 'bun:test'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
@@ -43,17 +44,21 @@ process.env.PI_TASK_CONFIG_PATH = path.join(os.tmpdir(), 'pi-task-test-config-ab
 
 const stateHome = path.join(os.tmpdir(), `pi-task-test-state-${process.pid}`)
 process.env.XDG_STATE_HOME = stateHome
-// `--isolate` re-evaluates this preload for every test file; the sweep and the
-// exit hook belong to the process, not to the file that happened to load first.
-const g = globalThis as {__piTaskTestStateSwept?: boolean}
-if (!g.__piTaskTestStateSwept) {
-    g.__piTaskTestStateSwept = true
-    fs.rmSync(stateHome, {recursive: true, force: true})
-    process.once('exit', () => {
-        try {
-            fs.rmSync(stateHome, {recursive: true, force: true})
-        } catch {
-            // A state dir still held open must never fail a green run.
-        }
-    })
+
+/** Best-effort, like every sweep here: a directory still held open must never
+ *  fail a run that is otherwise green. */
+function sweepStateHome(): void {
+    try {
+        fs.rmSync(stateHome, {recursive: true, force: true})
+    } catch {
+        // See above.
+    }
 }
+
+// A run left behind by a crash, or by a recycled pid, is not this run's state.
+sweepStateHome()
+// `afterAll` and not `process.on('exit')`: bun's runner does not reliably reach
+// exit listeners, and an un-swept dir per run is the `/tmp` inode leak
+// test-utils/tmp-dir.ts was written for. `--isolate` re-evaluates this preload
+// per test file, so this runs at each file's end — no file needs another's state.
+afterAll(sweepStateHome)
