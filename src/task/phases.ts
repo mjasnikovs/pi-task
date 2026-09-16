@@ -855,15 +855,8 @@ export async function phaseResearch(
         }
     ]
 
-    // Persisting a worker's section is a read-modify-write of the shared task
-    // file, so writes are chained through one lock — a no-op in serial mode,
-    // load-bearing in graph mode where two workers can settle together.
-    let persistChain: Promise<void> = Promise.resolve()
-    const persistSection = (heading: string, text: string): Promise<void> => {
-        const next = persistChain.then(() => setTaskSection(deps.cwd, deps.taskId, heading, text))
-        persistChain = next.catch(() => {})
-        return next
-    }
+    const persistSection = (heading: string, text: string): Promise<void> =>
+        setTaskSection(deps.cwd, deps.taskId, heading, text)
 
     /**
      * This phase's binding of the research-worker driver: everything about THIS

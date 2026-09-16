@@ -259,3 +259,39 @@ describe('appendGateRecord', () => {
         })
     })
 })
+
+/**
+ * The task file has many writers that overlap in time: research workers in graph
+ * mode, the loop-events trail, the gate recorder. Each is a read-modify-write, so
+ * unserialised they erase each other, and a reader between a truncating write and
+ * its content sees "malformed front matter" — the Windows CI failure that pinned
+ * this. Every section a writer set must be there afterwards, and no read in the
+ * middle may fail.
+ */
+describe('concurrent writers on one task file', () => {
+    test('overlapping section writes all land and never tear the file', async () => {
+        await withTmpTaskDir(async cwd => {
+            await writeTaskFile(cwd, makeFm('TASK_0001'), '\n')
+            const headings = Array.from({length: 12}, (_, i) => `section ${i}`)
+            const readsOk: boolean[] = []
+            await Promise.all([
+                ...headings.map(h => setTaskSection(cwd, 'TASK_0001', h, `body of ${h}`)),
+                ...headings.map(h => appendGateRecord(cwd, 'TASK_0001', `gate ${h}`)),
+                ...headings.map(() =>
+                    readTaskFile(cwd, 'TASK_0001').then(
+                        () => readsOk.push(true),
+                        () => readsOk.push(false)
+                    )
+                )
+            ])
+            for (const h of headings) {
+                expect(await readSection(cwd, 'TASK_0001', h)).toBe(`body of ${h}`)
+            }
+            const gates = (await readSection(cwd, 'TASK_0001', 'gates')) ?? ''
+            expect(gates.split('\n')).toHaveLength(headings.length)
+            expect(readsOk).not.toContain(false)
+            const leftovers = (await fsp.readdir(tasksDir(cwd))).filter(f => f.endsWith('.tmp'))
+            expect(leftovers).toEqual([])
+        })
+    })
+})

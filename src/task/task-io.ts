@@ -80,10 +80,42 @@ export async function readTaskFile(
     return {frontMatter: fm, body}
 }
 
+/**
+ * One writer per task file at a time. Research workers in graph mode, the
+ * loop-events trail and the gate recorder all rewrite the same file from
+ * overlapping continuations; without this, two read-modify-write pairs interleave
+ * and the second one erases the first, or a reader catches a half-written file
+ * and reports it as malformed front matter.
+ */
+const fileChains = new Map<string, Promise<unknown>>()
+
+async function withTaskFile<T>(file: string, fn: () => Promise<T>): Promise<T> {
+    const prev = fileChains.get(file) ?? Promise.resolve()
+    const next = prev.then(fn, fn)
+    fileChains.set(
+        file,
+        next.catch(() => {})
+    )
+    try {
+        return await next
+    } finally {
+        if (fileChains.get(file) === next) fileChains.delete(file)
+    }
+}
+
 export async function writeTaskFile(cwd: string, fm: TaskFrontMatter, body: string): Promise<void> {
     await ensureTasksDir(cwd)
+    const file = taskFilePath(cwd, fm.id)
     const content = `${emitFrontMatter(fm)}\n${body}`
-    await fsp.writeFile(taskFilePath(cwd, fm.id), content, 'utf8')
+    // Written beside and renamed over: a reader never sees a truncated file.
+    const tmp = `${file}.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`
+    await fsp.writeFile(tmp, content, 'utf8')
+    try {
+        await fsp.rename(tmp, file)
+    } catch (err) {
+        await fsp.rm(tmp, {force: true}).catch(() => {})
+        throw err
+    }
 }
 
 export async function updateTaskFrontMatter(
@@ -91,13 +123,15 @@ export async function updateTaskFrontMatter(
     id: string,
     patch: Partial<TaskFrontMatter>
 ): Promise<void> {
-    const {frontMatter, body} = await readTaskFile(cwd, id)
-    const next: TaskFrontMatter = {
-        ...frontMatter,
-        ...patch,
-        updated_at: new Date().toISOString()
-    }
-    await writeTaskFile(cwd, next, body)
+    await withTaskFile(taskFilePath(cwd, id), async () => {
+        const {frontMatter, body} = await readTaskFile(cwd, id)
+        const next: TaskFrontMatter = {
+            ...frontMatter,
+            ...patch,
+            updated_at: new Date().toISOString()
+        }
+        await writeTaskFile(cwd, next, body)
+    })
 }
 
 // ─── Section read/write (append if absent, rewrite if present) ───────────────
@@ -112,14 +146,28 @@ export async function readSection(
     return m ? m[2].trim() : null
 }
 
-export async function setTaskSection(
+export function setTaskSection(
     cwd: string,
     id: string,
     heading: string,
     content: string
 ): Promise<void> {
+    return withTaskFile(taskFilePath(cwd, id), () =>
+        rewriteSection(cwd, id, heading, () => content)
+    )
+}
+
+/** The read-modify-write itself; callers hold the file's chain. */
+async function rewriteSection(
+    cwd: string,
+    id: string,
+    heading: string,
+    render: (existing: string | null) => string
+): Promise<void> {
     const {frontMatter, body} = await readTaskFile(cwd, id)
     const re = sectionRegex(heading)
+    const m = re.exec(body)
+    const content = render(m ? m[2].trim() : null)
     let next: string
     if (re.test(body)) {
         // Use a replacer FUNCTION, not a replacement string: `content` is
@@ -150,14 +198,13 @@ export async function setTaskSection(
  * calls `setTaskSection` with what THIS pass produced and erases what the first
  * pass proved. `merge` receives null when the section is absent.
  */
-export async function mergeTaskSection(
+export function mergeTaskSection(
     cwd: string,
     id: string,
     heading: string,
     merge: (old: string | null) => string
 ): Promise<void> {
-    const existing = await readSection(cwd, id, heading)
-    await setTaskSection(cwd, id, heading, merge(existing))
+    return withTaskFile(taskFilePath(cwd, id), () => rewriteSection(cwd, id, heading, merge))
 }
 
 /**
@@ -172,18 +219,21 @@ export async function appendGateRecord(cwd: string, id: string, line: string): P
     try {
         const stamp = new Date().toISOString()
         const entry = `- ${stamp} ${line.replace(/\s*\n\s*/g, ' ').trim()}`
-        const existing = await readSection(cwd, id, 'gates')
-        await setTaskSection(cwd, id, 'gates', existing ? `${existing}\n${entry}` : entry)
+        await mergeTaskSection(cwd, id, 'gates', existing =>
+            existing ? `${existing}\n${entry}` : entry
+        )
     } catch {
         // Recording is observability, not control flow — never propagate.
     }
 }
 
 /** Remove a section (heading + body) if present; a no-op when it's absent. */
-export async function removeTaskSection(cwd: string, id: string, heading: string): Promise<void> {
-    const {frontMatter, body} = await readTaskFile(cwd, id)
-    const re = sectionRegex(heading)
-    if (!re.test(body)) return
-    const next = body.replace(re, '')
-    await writeTaskFile(cwd, {...frontMatter, updated_at: new Date().toISOString()}, next)
+export function removeTaskSection(cwd: string, id: string, heading: string): Promise<void> {
+    return withTaskFile(taskFilePath(cwd, id), async () => {
+        const {frontMatter, body} = await readTaskFile(cwd, id)
+        const re = sectionRegex(heading)
+        if (!re.test(body)) return
+        const next = body.replace(re, '')
+        await writeTaskFile(cwd, {...frontMatter, updated_at: new Date().toISOString()}, next)
+    })
 }

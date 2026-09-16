@@ -19,7 +19,7 @@ import {classifyWorkerFailure, type WorkerFailure} from '../workers/worker-failu
 import {isFatalKill} from '../workers/worker-kill.js'
 import {describeLoopHit, MAX_LOOP_RESTARTS} from './loop-detector.js'
 import {MAX_LEAK_RETRIES} from '../shared/leaked-tool-call.js'
-import {readSection, setTaskSection} from './task-io.js'
+import {mergeTaskSection} from './task-io.js'
 import {streamStallCause} from '../shared/stream-watchdog.js'
 import {getConfig} from '../config/config.js'
 import {groupChildArgs, groupWindow} from '../config/group-args.js'
@@ -490,12 +490,8 @@ export async function appendLoopEvents(
     if (r.loopHit) lines.push(line(r.loopHit, r.attempts, 'phase failed'))
     if (lines.length === 0) return
     try {
-        const existing = (await readSection(cwd, taskId, 'loop events')) ?? ''
-        await setTaskSection(
-            cwd,
-            taskId,
-            'loop events',
-            [existing, ...lines].filter(Boolean).join('\n')
+        await mergeTaskSection(cwd, taskId, 'loop events', existing =>
+            [existing ?? '', ...lines].filter(Boolean).join('\n')
         )
     } catch {
         /* best-effort: a trail is never worth failing a phase for */
