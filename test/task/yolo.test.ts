@@ -2,7 +2,6 @@ import {describe, expect, test} from 'bun:test'
 import {
     yoloPickAnswer,
     yoloPickAutoAnswer,
-    yoloVerifyResolution,
     yoloFinalGateChoice,
     isYoloMode,
     YOLO_STAMP
@@ -17,7 +16,6 @@ describe('yolo policy fires ONLY with the flag on', () => {
         expect(
             yoloPickAutoAnswer(false, {kind: 'answered', text: 'use SQLite', raw: ''})
         ).toBeNull()
-        expect(yoloVerifyResolution(false)).toBeNull()
         expect(yoloFinalGateChoice(false, true)).toBeNull()
         expect(yoloFinalGateChoice(false, false)).toBeNull()
     })
@@ -107,10 +105,6 @@ describe('yoloPickAutoAnswer — the anti-synthesis unknown is never auto-accept
 })
 
 describe('yolo bounded-loop policies', () => {
-    test('verify-FAIL picker auto-picks ACCEPT, never AUTOFIX (the budget is already spent)', () => {
-        expect(yoloVerifyResolution(true)).toEqual({action: 'accept'})
-    })
-
     test('final gate autofixes only WHILE the card is offered, then leaves the run FAILED', () => {
         expect(yoloFinalGateChoice(true, true)).toEqual({action: 'autofix'})
         // canAutofix goes false at MAX_FINAL_GATE_AUTOFIX — never 'accept', which

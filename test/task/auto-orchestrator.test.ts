@@ -718,7 +718,11 @@ test('runAutoLoop: enforce edits that REGRESS the verify signal are reverted, no
                 return Promise.resolve(
                     verifyCalls === 1 ?
                         {ok: true}
-                    :   {ok: false, reason: 'work did not verify: tsc 3 errors'}
+                    :   {
+                            ok: false,
+                            failClass: 'model-verdict',
+                            reason: 'work did not verify: tsc 3 errors'
+                        }
                 )
             },
             enforce: () => Promise.resolve({ok: true}),
@@ -755,7 +759,11 @@ test('runAutoLoop: verify FAIL + user dismisses the picker → run pauses, task 
                 return Promise.resolve({committed: true})
             },
             verify: () =>
-                Promise.resolve({ok: false, reason: 'work did not verify: bun run build exited 1'}),
+                Promise.resolve({
+                    ok: false,
+                    failClass: 'model-verdict',
+                    reason: 'work did not verify: bun run build exited 1'
+                }),
             recommend: () => Promise.resolve({recommend: 'autofix', rationale: 'build is broken'})
         }
         // No queueSelect → the picker is dismissed (cancel).
@@ -785,7 +793,11 @@ test('runAutoLoop: verify FAIL + user ACCEPTS → run proceeds, checks off and c
                 return Promise.resolve({committed: true})
             },
             verify: () =>
-                Promise.resolve({ok: false, reason: 'work did not verify: over-strict check'}),
+                Promise.resolve({
+                    ok: false,
+                    failClass: 'model-verdict',
+                    reason: 'work did not verify: over-strict check'
+                }),
             recommend: () =>
                 Promise.resolve({recommend: 'accept', rationale: 'gate misjudged a valid file'})
         }
@@ -827,7 +839,11 @@ test('runAutoLoop: AUTOFIX loops back to the gate uncapped until the work verifi
                 // AUTOFIX from the picker.
                 return Promise.resolve(
                     verifyCalls <= 3 ?
-                        {ok: false, reason: 'work did not verify: bun run build exited 1'}
+                        {
+                            ok: false,
+                            failClass: 'model-verdict',
+                            reason: 'work did not verify: bun run build exited 1'
+                        }
                     :   {ok: true}
                 )
             },
@@ -2381,7 +2397,12 @@ test('runAutoLoop: gate failure demotes the INNER task file from its handoff "co
             runChild: () => Promise.resolve(''),
             runTask: () => Promise.resolve({taskId: 'TASK_0006', end: {kind: 'completed'}}),
             commit: () => Promise.resolve({committed: true}),
-            verify: () => Promise.resolve({ok: false, reason: 'work did not verify: broken'}),
+            verify: () =>
+                Promise.resolve({
+                    ok: false,
+                    failClass: 'model-verdict',
+                    reason: 'work did not verify: broken'
+                }),
             recommend: () => Promise.resolve({recommend: 'autofix', rationale: 'broken'})
         }
         // No queued select → picker dismissed → gate 'paused'.

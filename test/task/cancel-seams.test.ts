@@ -499,7 +499,8 @@ describe('seam gate:pre-resolution — before a resolution round', () => {
                 fixRuns.push(t)
                 return Promise.resolve({taskId: 'TASK_0006', end: {kind: 'completed'}})
             },
-            verify: () => Promise.resolve({ok: false, reason: 'build exited 1'}),
+            verify: () =>
+                Promise.resolve({ok: false, failClass: 'model-verdict', reason: 'build exited 1'}),
             recommend: () => Promise.resolve({recommend: 'autofix', rationale: 'real defect'}),
             enforce: () => Promise.resolve({ok: true})
         })

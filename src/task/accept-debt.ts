@@ -102,12 +102,30 @@ const FIELD_SEP = '\t'
  *     defect is recorded here and a scoped repair task is queued into the plan
  *     (root-cause-repair.ts). Recording without queuing would let the same root
  *     cause be re-recorded by each task it fails, with nothing ever fixing it.
+ *   - 'spec-contradiction' — the gate's decision table proved the failing criterion
+ *     can only be met by editing a path the SAME spec freezes, on any fail class
+ *     (gate-resolution.ts). Supersedes 'frozen-blocked', which said the same thing
+ *     about repo-health alone; that origin stays registered because debts already
+ *     on disk carry it.
+ *   - 'dismissed' — a human was shown the verify-FAIL picker and walked away. The
+ *     defect is no less real for not being answered, and this is the class that
+ *     used to leave no ledger entry at all.
+ *   - 'inherited-health' — the repo entered the task ALREADY failing its own static
+ *     check, so the FAIL is not this task's regression (see the differential health
+ *     delta). Recorded rather than blamed: the task proceeds, the pre-existing
+ *     breakage is still surfaced at run end.
+ *   - 'abandoned' — the loop gave up on the task past its attempt budget without a
+ *     verified artifact. Nothing else records what was left unfinished.
  */
 export type DebtOrigin =
     | 'accepted'
     | 'enforce-revert'
     | 'enforce-kept'
     | 'frozen-blocked'
+    | 'spec-contradiction'
+    | 'dismissed'
+    | 'inherited-health'
+    | 'abandoned'
     | 'cross-task-deletion'
     | 'yolo-accepted'
     | 'final-gate'
@@ -130,6 +148,12 @@ const DEBT_LABELS: Record<DebtOrigin, string> = {
         'enforce re-verify FAILED on a check the enforce diff cannot reach — the guideline edits were KEPT (reverting them could not fix it) and the defect indicts the ORIGINAL work, still shipped',
     'frozen-blocked':
         'repo health blocked by a spec-frozen path (cross-task contradiction — no task may perform the fixing edit)',
+    'spec-contradiction':
+        "the failing criterion can only be met by editing a path this task's own spec freezes (no re-run under the same freeze converges)",
+    dismissed: 'the verify-FAIL picker was DISMISSED — a human saw the defect and answered nothing',
+    'inherited-health':
+        "the repo was ALREADY failing its own static check before this task ran (pre-existing, not this task's regression)",
+    abandoned: 'the task was abandoned past its attempt budget with no verified artifact',
     'cross-task-deletion':
         "a sibling task's committed deliverable was DELETED by this task's work and the deletion was accepted (still missing from the tree)",
     'yolo-accepted':

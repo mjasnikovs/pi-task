@@ -6,11 +6,11 @@
  * just-finished work:
  *
  *   1. VERIFY — RUN the composed spec's VERIFY block in the real workspace and
- *      judge a PASS/FAIL. On a FAIL a fresh read-only child recommends AUTOFIX or
- *      ACCEPT: an AUTOFIX recommendation re-runs the implementation turn UNATTENDED
- *      (no prompt) and loops back to the gate, bounded by MAX_AUTO_AUTOFIX; the user
- *      is shown the boxed picker only when the recommendation is ACCEPT (blessing the
- *      artifact as-is) or when that unattended-autofix cap is reached.
+ *      judge a PASS/FAIL. A FAIL goes to gate-resolution.ts's decision table,
+ *      which returns one of three actions: re-run the implementation turn
+ *      UNATTENDED and loop back, accept the artifact and write the defect to the
+ *      debt ledger, or show the user the boxed picker. This module owns none of
+ *      that policy — it only carries the actions out.
  *   2. ENFORCE — hold the committed work to the project's AGENTS.md / CLAUDE.md
  *      rules. Runs in `edit` mode (fix in place) only when the verify gate produced
  *      a genuine clean pass to guard the edits against; otherwise `flag` mode
@@ -39,8 +39,10 @@ import {
     type ResolutionOutcome,
     type ResolutionChoice
 } from './verify-resolution.js'
+import {resolveDisposition, type SpecContradiction} from './gate-resolution.js'
+import type {LintFixResult} from './lint-fix.js'
 import {SessionUI, notifyBoth, notifyRun} from '../remote/bridge.js'
-import {isYoloMode, yoloVerifyResolution, YOLO_STAMP} from './yolo.js'
+import {isYoloMode, YOLO_STAMP} from './yolo.js'
 import {
     extractFailingCommand,
     findRepairCandidate,
@@ -121,9 +123,10 @@ export interface GateDeps {
         mode: 'edit' | 'flag'
     ) => Promise<EnforceOutcome>
     /**
-     * After a verify FAIL, research whether to recommend AUTOFIX or ACCEPT — only
-     * sets which card the picker tints RECOMMENDED; the user always decides. Absent
-     * → the picker defaults the recommendation to AUTOFIX.
+     * After a verify FAIL, research whether the work is genuinely wrong (AUTOFIX),
+     * good as-is (ACCEPT), or blocked by a contradiction in its own spec. One input
+     * to the decision table, which alone decides what happens next. Absent → the
+     * table sees the conservative AUTOFIX default.
      */
     recommend?: (
         ctx: ExtensionCommandContext,
@@ -143,8 +146,9 @@ export interface GateDeps {
      * exactly the static findings (revert-guarded — see lint-fix.ts), instead of the
      * full implementation re-run AUTOFIX reaches for. Smallest tool first: a static
      * finding does not need the whole turn re-run to fix it. Runs at most once per
-     * gate sequence; not-applied falls through to the picker. Absent → the loop goes
-     * straight to recommend/picker.
+     * gate sequence; a `frozen-path` result mints the SpecContradiction that ends
+     * the loop, anything else falls through to the decision table unchanged. Absent
+     * → the loop goes straight to the judge and the table.
      */
     lintFix?: (
         ctx: ExtensionCommandContext,
@@ -152,7 +156,7 @@ export interface GateDeps {
         taskTitle: string,
         taskId: string,
         failReason: string
-    ) => Promise<{ok: boolean; reason?: string}>
+    ) => Promise<LintFixResult>
     /**
      * Deterministic whole-repo static check (repo-health), used as the PRE-COMMIT
      * gate on an edit-mode enforce pass: an enforce edit that breaks the project's
@@ -190,12 +194,13 @@ export interface GateDeps {
      * see accept-debt.ts), stamped with the DebtOrigin that says how it was reached.
      * The final integration gate re-checks every recorded debt at run end and surfaces
      * the ones still open, so a defect the gate found is never lost by whatever the
-     * loop then did with the WORK — accepted by a human ('accepted'), auto-picked
-     * unattended by yolo mode ('yolo-accepted'), reverted with the enforce commit
-     * ('enforce-revert'), kept because the enforce diff could not have caused it
-     * ('enforce-kept'), blocked by a spec-frozen path ('frozen-blocked'), a sibling's
-     * deliverable deleted and accepted ('cross-task-deletion'), or another task's
-     * pre-existing bug this one merely tripped over ('root-cause').
+     * loop then did with the WORK — accepted by a human ('accepted'), dismissed at
+     * the picker ('dismissed'), accepted unattended by yolo mode ('yolo-accepted'),
+     * reverted with the enforce commit ('enforce-revert'), kept because the enforce
+     * diff could not have caused it ('enforce-kept'), unreachable under the task's
+     * own spec ('spec-contradiction'), a sibling's deliverable deleted and accepted
+     * ('cross-task-deletion'), or another task's pre-existing bug this one merely
+     * tripped over ('root-cause').
      *
      * The ORIGIN is load-bearing, not a label: the final gate reports by class, and
      * an unattended auto-pick may never be recorded as the 'accepted' class, which
@@ -298,52 +303,6 @@ export type GateResult =
     /** An AUTOFIX re-run's implementation itself failed. */
     | {kind: 'failed'; ctx: ExtensionCommandContext; reason?: string}
 
-/**
- * How many times a verify FAIL may be auto-fixed UNATTENDED (the research
- * recommended AUTOFIX, so pi re-runs the impl turn without prompting) before the
- * loop falls back to the human picker. Each AUTOFIX is a full implementation
- * re-run, so a non-converging loop must not run forever with nobody able to break
- * it — after this many consecutive auto attempts that still FAIL, the picker is
- * shown so a person can decide. A recommendation to ACCEPT always shows the picker
- * regardless of this count (blessing an artifact as-is is a human's call).
- */
-export const MAX_AUTO_AUTOFIX = 3
-
-/** Which of the four disjoint branches sent a FAIL to the terminal YOLO ACCEPT. */
-export interface YoloAcceptContext {
-    /** Rule 5c: the spec-required check could not run (tooling absent). */
-    isUnobserved: boolean
-    /** Cross-task contradiction: the repo-health fix needs a spec-frozen path. */
-    isFrozenBlocked: boolean
-    /** What the resolution research recommended, when it was consulted at all. */
-    recommend: ResolutionOutcome['recommend']
-    /** Unattended AUTOFIX attempts already spent on this task. */
-    autoFixCount: number
-}
-
-/**
- * The reason an auto-ACCEPT is being written — NAMED, not assumed.
- *
- * Four disjoint branches reach the terminal auto-ACCEPT, and only ONE of them has
- * spent the autofix budget. An UNOBSERVED FAIL never consults the research; a
- * frozen-blocked one is a contradiction no re-run can resolve; an ACCEPT
- * recommendation can arrive with the budget untouched. A single "autofix budget
- * spent" line would be false on three of the four, and a durable trail that
- * misstates why a defect shipped reads as an exhausted fixer that never tried.
- */
-export function yoloAcceptReason(c: YoloAcceptContext): string {
-    if (c.isUnobserved)
-        return 'verify UNOBSERVED — tooling absent, an unattended re-run cannot provision it'
-    if (c.isFrozenBlocked)
-        return 'repo-health blocked by a spec-frozen path — an impl re-run under the same freeze cannot converge'
-    if (c.recommend === 'autofix') {
-        return `autofix budget spent (${c.autoFixCount}/${MAX_AUTO_AUTOFIX})`
-    }
-    return c.autoFixCount === 0 ?
-            `judge recommended ACCEPT (autofix budget 0/${MAX_AUTO_AUTOFIX} unused)`
-        :   `judge recommended ACCEPT (autofix budget ${c.autoFixCount}/${MAX_AUTO_AUTOFIX} already spent)`
-}
-
 // The trail-side output ceiling lives in clamp-output.ts, so the render probe's
 // evidence clamps identically — one ceiling, one implementation.
 
@@ -416,9 +375,9 @@ type VerifyGateStep =
 
 /**
  * The VERIFY resolution loop: run the task's verification against the finished
- * work, and negotiate a FAIL through the graduated ladder (bounded lint fix →
- * recommendation → unattended autofix → picker) until it verifies, is accepted,
- * or terminates.
+ * work, and carry out what gate-resolution.ts's decision table says to do with a
+ * FAIL (bounded lint fix first, then the table's autofix / accept / ask) until it
+ * verifies, is accepted, or terminates.
  *
  * Split from `runGatesForTask` at the single boolean that crosses to the ENFORCE
  * half (`cleanPass`). This loop has four terminal exits and carries the whole
@@ -438,7 +397,22 @@ export async function resolveVerifyGate(
             v.reason ?
                 `verify: PASS (${v.reason})`
             :   'verify: PASS'
-        :   `verify: FAIL — ${v.reason ?? 'did not verify'}`
+        :   `verify: FAIL — ${v.reason}`
+    /**
+     * The loop's ONLY debt-bearing exit. Every way out of a FAIL that leaves the
+     * task FINISHED — accepted by a human, accepted unattended, blocked by a spec
+     * contradiction, or dismissed at the picker — goes through here, so a defect
+     * cannot leave this gate with no ledger entry (five did in AUTO_0002). The
+     * exits that leave the task UNFINISHED and resumable (a cancel, a re-run that
+     * could not start) are deliberately not debts: that work is coming back.
+     */
+    const settleDebt = async (origin: DebtOrigin, reason: string): Promise<void> => {
+        try {
+            await deps.recordDebt?.(p.cwd, p.taskId, reason, origin)
+        } catch {
+            // recording must never break the gate sequence
+        }
+    }
     // GATE: actually RUN the task's verification against the just-finished work
     // BEFORE it is checked off or committed. Whether this produced a GENUINE clean
     // pass (a real signal ran and the work met it) also decides how the enforce pass
@@ -450,24 +424,12 @@ export async function resolveVerifyGate(
         notifyBoth(active, `${p.tag}: verifying "${p.title}"…`, 'info')
         let verified = await deps.verify(active, p.cwd, p.title, p.taskId)
         await rec(verdictLine(verified))
-        // A FAIL no longer dead-stops. When the research recommends AUTOFIX, pi
-        // re-runs the impl turn UNATTENDED (no picker) — the human is consulted only
-        // when the recommendation is ACCEPT (blessing the artifact as-is). The
-        // unattended fix is BOUNDED by MAX_AUTO_AUTOFIX: once that many consecutive
-        // auto attempts still FAIL, the picker returns so a person can break the loop.
         let lintFixAttempted = false
         let autoFixCount = 0
-        // Set when the bounded lint-fix reports the `frozen-path:` rejection: the
-        // repo-health FAIL can only be fixed by editing a path THIS task's spec
-        // froze. An impl re-run happens under the same freeze — rule 4b fails the
-        // task if it complies with the linter — so unattended AUTOFIX rounds
-        // CANNOT converge and are skipped;
-        // the picker is forced with the cross-task contradiction named, and the
-        // defect is recorded as a durable debt for the final gate.
-        let frozenContradiction: string | null = null
-        let frozenDebtRecorded = false
-        // YOLO only: has the one-attempt rescue below already been spent on this task?
-        let yoloRescueUsed = false
+        // A contradiction outlives the round that proved it: it is a fact about the
+        // SPEC, not about one verdict. Re-deriving it per round is how a loop spends
+        // its whole budget on a freeze that was already named in round one (0053).
+        let contradiction: SpecContradiction | null = null
         while (!verified.ok) {
             // SAFE CHECKPOINT (before a resolution round): a round is a bounded
             // lint fix, a research child and possibly a whole implementation
@@ -487,12 +449,12 @@ export async function resolveVerifyGate(
                 await updateTaskFrontMatter(p.cwd, p.taskId, {state: 'cancelled'}).catch(() => {})
                 return {stop: {kind: 'cancelled', ctx: active}}
             }
-            const failReason = verified.reason ?? 'did not verify'
+            const failReason = verified.reason
             // GRADUATED resolution: a repo-health FAIL (pure static findings) gets ONE
             // bounded fix attempt before the picker — smallest tool first. Applied →
             // re-verify and re-enter the loop on the fresh verdict; not applied (guard
-            // trip, no convergence) → fall through to the ordinary picker unchanged.
-            const failClass = verifyFailClass(verified)
+            // trip, no convergence) → fall through to the decision table unchanged.
+            const failClass = verifyFailClass(verified) ?? 'model-verdict'
             if (!lintFixAttempted && deps.lintFix && failClass === 'repo-health') {
                 lintFixAttempted = true
                 notifyRun(
@@ -513,165 +475,82 @@ export async function resolveVerifyGate(
                     await rec(verdictLine(verified))
                     continue
                 }
-                if ((fix.reason ?? '').startsWith('frozen-path:')) {
-                    frozenContradiction = fix.reason ?? null
-                }
+                if (fix.contradiction) contradiction = fix.contradiction
             }
-            // UNOBSERVED (rule 5c): a spec-required behavioral check could not run because
-            // its observation tooling is absent. An unattended AUTOFIX re-run cannot install
-            // a missing tool, so it would only burn MAX_AUTO_AUTOFIX turns and re-FAIL — the
-            // decision (provision the tool, or accept the unproven behavior) is the human's.
-            // Skip the (moot) recommendation research and force the picker.
-            const isUnobserved = verified.unobserved === true
-            // FROZEN-BLOCKED (cross-task contradiction): skip the recommendation
-            // research too — it would only re-derive what the deterministic lint-fix
-            // rejection already proved. The picker shows the contradiction; ACCEPT
-            // records the (already-recorded) defect as the human's call. Applies
-            // only while the FAIL is still the repo-health one the contradiction
-            // explains — a later, different FAIL gets the ordinary resolution path.
-            const isFrozenBlocked = frozenContradiction !== null && failClass === 'repo-health'
+            // Two FAILs make the recommendation research MOOT before it runs. An
+            // UNOBSERVED one (rule 5c) is a check that could not RUN for want of
+            // tooling, and a contradiction has already been PROVEN deterministically
+            // — asking a model to re-derive either costs a child and decides nothing.
+            const unobserved = verified.unobserved === true
+            const judge = contradiction === null && !unobserved ? deps.recommend : undefined
             const recOutcome: ResolutionOutcome =
-                isUnobserved ? {recommend: 'autofix', rationale: failReason}
-                : isFrozenBlocked ?
-                    {
-                        recommend: 'accept',
-                        rationale:
-                            `${frozenContradiction} — the failing static check can only be fixed by `
-                            + `editing a path this task's spec freezes (a cross-task contradiction: `
-                            + `the spec forbids the very edit the repo needs; the "owning" earlier `
-                            + `step already completed). An implementation re-run under the same `
-                            + `freeze cannot converge. ACCEPT records it as durable debt the final `
-                            + `gate re-checks; fixing it needs a plan-level change, not a re-run.`
-                    }
-                : deps.recommend ?
-                    await deps.recommend(active, p.cwd, p.title, p.taskId, failReason)
+                judge ?
+                    await judge(active, p.cwd, p.title, p.taskId, failReason)
                 :   {recommend: 'autofix', rationale: failReason}
-            await rec(
-                isUnobserved ?
-                    'resolution: verify UNOBSERVED — spec-required check could not run (tooling absent); '
-                        + 'forcing the human picker, an unattended re-run cannot provision it'
-                : isFrozenBlocked ?
-                    'resolution: repo-health FAIL is blocked by spec-frozen path(s) — cross-task '
-                    + 'contradiction; unattended AUTOFIX skipped (an impl re-run under the same '
-                    + 'freeze cannot converge), forcing the human picker'
-                :   `resolution: recommended ${recOutcome.recommend.toUpperCase()}`
-            )
-            if (isFrozenBlocked && !frozenDebtRecorded) {
-                frozenDebtRecorded = true
-                // Durable regardless of what the human picks next: the contradiction
-                // is real, cross-task, and outside this task's power to fix — the
-                // final gate must surface it at run end (static-class: it auto-closes
-                // iff the run-end static check passes).
-                try {
-                    await deps.recordDebt?.(
-                        p.cwd,
-                        p.taskId,
-                        `${failReason} — ${frozenContradiction}`,
-                        'frozen-blocked'
-                    )
-                } catch {
-                    // recording must never break the gate sequence
-                }
-            }
-            // AUTO-RESOLVE the AUTOFIX path: when the research says the work is
-            // genuinely wrong, re-run the fix WITHOUT prompting the user. The picker is
-            // reserved for the ACCEPT recommendation (the human decides whether to bless
-            // an artifact the gate FAILed) and for the bounded fallback: after
-            // MAX_AUTO_AUTOFIX consecutive unattended attempts that still FAIL, hand
-            // control back so a person can break a non-converging loop.
-            const autoFixNow =
-                !isUnobserved
-                && !isFrozenBlocked
-                && recOutcome.recommend === 'autofix'
-                && autoFixCount < MAX_AUTO_AUTOFIX
-                // A rescue attempt that still FAILed is terminal under YOLO: the
-                // recommendation that got us here was ACCEPT, so a later flip to
-                // AUTOFIX must not bootstrap the full budget from it.
-                && !yoloRescueUsed
-            // YOLO, THE RESCUE BRANCH: the recommendation is ACCEPT, nobody can be
-            // asked, and the unattended budget is UNTOUCHED. Accepting here would
-            // ship a defect having attempted nothing, on a judgement the human who
-            // would normally weigh it never saw. So spend ONE attempt first.
-            // Bounded by construction: one, not MAX_AUTO_AUTOFIX, so an ACCEPT
-            // recommendation can never restart a full loop; if it still FAILs the
-            // next turn falls through to the same auto-ACCEPT and the same debt.
-            const yoloRescueNow =
-                isYoloMode()
-                && !yoloRescueUsed
-                && !isUnobserved
-                && !isFrozenBlocked
-                && recOutcome.recommend === 'accept'
-                && autoFixCount === 0
-            // YOLO: the picker is unreachable with nobody watching, and every
-            // unattended attempt this task may make has been made — so the only
-            // option left that terminates is ACCEPT, recorded as its own
-            // 'yolo-accepted' debt. Deliberately NOT a re-entry into autofix:
-            // MAX_AUTO_AUTOFIX exists to break a non-converging loop, and an
-            // auto-pick here would restart the budget from the site that proves it ran out.
-            const yoloChoice =
-                autoFixNow || yoloRescueNow ? null : yoloVerifyResolution(isYoloMode())
+            if (judge) await rec(`resolution: recommended ${recOutcome.recommend.toUpperCase()}`)
+            contradiction ??= recOutcome.contradiction ?? null
+            const unattended = isYoloMode()
+            const disposition = resolveDisposition({
+                failClass,
+                recommend: recOutcome.recommend,
+                unobserved,
+                contradiction,
+                attempts: autoFixCount,
+                unattended
+            })
             let choice: ResolutionChoice
-            if (yoloChoice !== null) {
-                choice = yoloChoice
-                // NAME the branch. This line is the durable record of why a defect
-                // shipped, and three of the four branches that reach it have spent
-                // no budget at all.
-                await rec(
-                    `resolution: auto-ACCEPTED despite verify FAIL — ${yoloAcceptReason({
-                        isUnobserved,
-                        isFrozenBlocked,
-                        recommend: recOutcome.recommend,
-                        autoFixCount
-                    })}, nobody to ask ${YOLO_STAMP}`
-                )
-            } else if (autoFixNow || yoloRescueNow) {
+            if (disposition.action === 'autofix') {
                 autoFixCount += 1
-                if (yoloRescueNow) yoloRescueUsed = true
-                await rec(
-                    yoloRescueNow ?
-                        `resolution: auto-AUTOFIX (${YOLO_STAMP} rescue — judge recommended ACCEPT with the unattended `
-                            + `budget unspent; one attempt, ${autoFixCount}/${MAX_AUTO_AUTOFIX})`
-                    :   `resolution: auto-AUTOFIX (recommended, unattended ${autoFixCount}/${MAX_AUTO_AUTOFIX})`
-                )
+                await rec(`resolution: auto-AUTOFIX (${disposition.reason})`)
                 notifyRun(
                     active,
-                    `${p.tag}: verify FAIL on "${p.title}" — auto-fixing (${
-                        yoloRescueNow ? `${YOLO_STAMP} one attempt before accepting` : 'recommended'
-                    }, ${autoFixCount}/${MAX_AUTO_AUTOFIX})…`,
+                    `${p.tag}: verify FAIL on "${p.title}" — auto-fixing (${disposition.reason})…`,
                     'info'
                 )
                 choice = {action: 'autofix'}
+            } else if (disposition.action === 'accept') {
+                // NAME the rule that decided. This line is the durable record of why
+                // a defect shipped, and the rules that reach it have spent wildly
+                // different amounts of the budget — some none at all.
+                await rec(
+                    `resolution: auto-ACCEPTED despite verify FAIL — ${disposition.reason}${
+                        unattended ? `, nobody to ask ${YOLO_STAMP}` : ''
+                    }`
+                )
+                choice = {action: 'accept'}
             } else {
+                // Why the picker is up, when that is not already the line above:
+                // the judge-accept row's reason only restates the recommendation.
+                if (disposition.rule !== 'judge-accept') {
+                    await rec(`resolution: asking the human — ${disposition.reason}`)
+                }
                 choice = await askVerifyResolution(active, p.title, failReason, recOutcome)
             }
             if (choice.action === 'cancel') {
                 await rec('resolution: user dismissed the verify-FAIL picker — paused')
+                await settleDebt('dismissed', failReason)
                 return {stop: {kind: 'paused', ctx: active, reason: failReason}}
             }
             if (choice.action === 'accept') {
-                const byYolo = yoloChoice !== null
-                if (!byYolo) await rec('resolution: user ACCEPTED the work despite verify FAIL')
-                // Durable debt: the human blessed a FAILing artifact as-is, so the
-                // defect ships and nothing else in this task revisits it. Record it
-                // to the run ledger; the final integration gate re-checks it at run
-                // end and surfaces it if still open. Best-effort.
-                // The frozen-blocked routing above already recorded this defect (with
-                // the contradiction named) — don't double-enter it in the ledger.
-                if (!frozenDebtRecorded) {
-                    try {
-                        // Provenance splits here, mandatorily: an auto-pick writes the
-                        // 'yolo-accepted' origin, never the plain 'accepted' one that
-                        // asserts a human weighed the failing artifact.
-                        await deps.recordDebt?.(
-                            p.cwd,
-                            p.taskId,
-                            failReason,
-                            byYolo ? 'yolo-accepted' : 'accepted'
-                        )
-                    } catch {
-                        // recording must never break the gate sequence
-                    }
+                // Provenance splits here, mandatorily. The table's own accept carries
+                // the origin that names the rule which decided; only a PICKER answer
+                // earns the plain 'accepted' class, which asserts a human weighed
+                // this failing artifact.
+                const origin: DebtOrigin =
+                    disposition.action === 'accept' ? disposition.debtOrigin : 'accepted'
+                if (origin === 'accepted') {
+                    await rec('resolution: user ACCEPTED the work despite verify FAIL')
                 }
+                // Durable debt: the defect ships and nothing else in this task
+                // revisits it. The final integration gate re-checks it at run end and
+                // surfaces it if still open. The reason LEADS with the fail text so
+                // its minted class prefix still routes the run-end re-check.
+                await settleDebt(
+                    origin,
+                    disposition.rule === 'spec-contradiction' ?
+                        `${failReason} — ${disposition.reason}`
+                    :   failReason
+                )
                 // ROOT CAUSE: an accepted FAIL that some OTHER task's file caused is
                 // not fixed by accepting it — every later task keeps tripping over
                 // the same bug. Queue the scoped repair so the plan closes it.
@@ -697,7 +576,7 @@ export async function resolveVerifyGate(
                 notifyRun(
                     active,
                     `${p.tag}: accepted "${p.title}" despite verify FAIL (${failReason.slice(0, 120)}) — proceeding.${
-                        byYolo ? ` ${YOLO_STAMP}` : ''
+                        unattended ? ` ${YOLO_STAMP}` : ''
                     }`,
                     'warning'
                 )
@@ -709,11 +588,11 @@ export async function resolveVerifyGate(
             // hand its diagnosis to the re-run rather than making it re-derive the
             // cause from the bare FAIL line. Skipped when there is no researched
             // rationale beyond the failure text itself.
-            // Only the picker branch may claim a person chose this: the two
-            // unattended branches already recorded themselves one line above, and a
-            // trail that says "user chose" when nobody was asked is the same lie the
-            // accept line used to tell.
-            if (!autoFixNow && !yoloRescueNow) {
+            // Only the picker branch may claim a person chose this: the unattended
+            // branch already recorded itself one line above, and a trail that says
+            // "user chose" when nobody was asked is the same lie the accept line
+            // used to tell.
+            if (disposition.action === 'ask') {
                 await rec('resolution: user chose AUTOFIX — re-running the implementation turn')
             }
             notifyBoth(active, `${p.tag}: autofixing "${p.title}"…`, 'info')

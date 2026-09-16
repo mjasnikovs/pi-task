@@ -113,7 +113,8 @@ test('runGatedTask: verify FAIL + dismiss → task left resumable, dismissal ann
                 commits.push(m)
                 return Promise.resolve({committed: true})
             },
-            verify: () => Promise.resolve({ok: false, reason: 'build exited 1'}),
+            verify: () =>
+                Promise.resolve({ok: false, failClass: 'model-verdict', reason: 'build exited 1'}),
             recommend: () => Promise.resolve({recommend: 'autofix', rationale: 'broken'})
         })
         // The fake ctx's select returns undefined when nothing was queued, which is
@@ -151,7 +152,8 @@ test('runGatedTask: a cancelled AUTOFIX re-run leaves the file cancelled', async
                 await writeTaskFile(dir, {...frontMatter, state: 'cancelled'}, body)
                 return {taskId: 'TASK_0006', end: {kind: 'cancelled'}}
             },
-            verify: () => Promise.resolve({ok: false, reason: 'build exited 1'}),
+            verify: () =>
+                Promise.resolve({ok: false, failClass: 'model-verdict', reason: 'build exited 1'}),
             recommend: () => Promise.resolve({recommend: 'autofix', rationale: 'a real defect'})
         })
         await runGatedTask(ctx, dir, 'build a thing', {deps})
@@ -179,7 +181,8 @@ test('runGatedTask: an INTERRUPTED autofix re-run is still demoted', async () =>
                     end: {kind: turn === 1 ? 'completed' : 'interrupted'}
                 })
             },
-            verify: () => Promise.resolve({ok: false, reason: 'build exited 1'}),
+            verify: () =>
+                Promise.resolve({ok: false, failClass: 'model-verdict', reason: 'build exited 1'}),
             recommend: () => Promise.resolve({recommend: 'autofix', rationale: 'a real defect'})
         })
         await runGatedTask(ctx, dir, 'build a thing', {deps})
