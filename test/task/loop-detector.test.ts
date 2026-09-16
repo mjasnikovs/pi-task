@@ -1,5 +1,9 @@
 import {describe, expect, test} from 'bun:test'
 import {
+    describeLoopHit,
+    formatLoopHint,
+    formatReadSet,
+    LOOP_THRESHOLD,
     LoopDetector,
     loopKey,
     stableStringify,
@@ -324,5 +328,91 @@ describe('LoopDetector path-aware detection', () => {
         ].map(name => ({name, args: {file_path: QUERIES}}))
         const d = new LoopDetector(20, 5)
         expect(enforceFixSequence.some(call => d.record(call) !== null)).toBe(true)
+    })
+})
+
+describe('the read-set a loop restart carries', () => {
+    /**
+     * A loop kill fires from the tool-call hook, before a byte of answer text has
+     * streamed, so `loop` is deliberately absent from CARRY_FORWARD_REASONS
+     * (pi-worker-core.ts) and the read-set is the ONLY thing the re-spawn inherits.
+     * These assert the detector keeps it and the hint spends it.
+     */
+    const read = (path: string, offset?: number, limit?: number): ToolCall => ({
+        name: 'read',
+        args: {
+            path,
+            ...(offset === undefined ? {} : {offset}),
+            ...(limit === undefined ? {} : {limit})
+        }
+    })
+
+    test('the read-set spans the WHOLE attempt, not the detector window', () => {
+        const d = new LoopDetector(4)
+        for (let n = 0; n < 8; n++) d.record(read(`src/f${n}.ts`))
+        // `buf` holds four entries; all eight paths are still named.
+        expect(d.visited()).toHaveLength(8)
+        expect(d.visited()[0]).toBe('src/f0.ts')
+    })
+
+    test('a path read in pieces is one entry covering the widest span', () => {
+        const d = new LoopDetector()
+        d.record(read('DESIGN/spec.md', 1, 100))
+        d.record(read('DESIGN/spec.md', 400, 100))
+        expect(d.visited()).toEqual(['DESIGN/spec.md (lines 1-499)'])
+    })
+
+    test('the hint names the files the killed attempt already opened', () => {
+        const d = new LoopDetector()
+        d.record(read('src/types/index.ts'))
+        let hit = null
+        for (let n = 0; n < LOOP_THRESHOLD; n++) hit = d.record(read('src/server/index.ts', 1, 50))
+        expect(hit).not.toBeNull()
+        const hint = formatLoopHint(hit!, d.visited())
+        expect(hint).toContain('You have already read, do not re-open:')
+        expect(hint).toContain('src/types/index.ts')
+        expect(hint).toContain('src/server/index.ts')
+    })
+
+    test('an attempt that opened nothing adds no clause', () => {
+        expect(formatReadSet([])).toBe('')
+    })
+
+    test('a long read-set is elided with an honest count', () => {
+        const many = Array.from({length: 45}, (_, n) => `src/f${n}.ts`)
+        const clause = formatReadSet(many)
+        expect(clause).toContain('src/f0.ts')
+        expect(clause).not.toContain('src/f44.ts')
+        expect(clause).toContain('and 5 more')
+    })
+})
+
+describe('describeLoopHit', () => {
+    // The sentinel this replaces: a stall hit carried windowSize 0 and every
+    // renderer printed "in the last 0 calls" for a rule that counts no window.
+    const call = {name: 'read', args: {path: 'a.ts'}}
+
+    test('a streak kill says what it measured — never "the last 0 calls"', () => {
+        const text = describeLoopHit({call, count: 12, stall: 'no-new-ground'})
+        expect(text).toContain('12 consecutive tool calls')
+        expect(text).not.toContain('0 calls')
+        expect(text).not.toContain('undefined')
+    })
+
+    test('a context-churn kill names the window it overran', () => {
+        const text = describeLoopHit({
+            call,
+            count: 200_000,
+            windowSize: 128_000,
+            stall: 'context-churn'
+        })
+        expect(text).toContain('128000-token context window')
+        expect(text).not.toContain('undefined')
+    })
+
+    test('a genuine loop still reports calls in a window', () => {
+        expect(describeLoopHit({call, count: 5, windowSize: 20})).toContain(
+            '×5 in the last 20 calls'
+        )
     })
 })

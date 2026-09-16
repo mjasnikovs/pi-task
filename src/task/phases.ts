@@ -28,10 +28,11 @@ import {
     enforceDirectives
 } from './user-directives.js'
 import {demoteUnsourcedAttributions} from './context-attribution.js'
-import {orientationTier} from './orientation.js'
+import {ORIENTATION_TIERS, orientationTier} from './orientation.js'
 import {getConfig} from '../config/config.js'
 import {buildExternalContext, gatherExternalContext} from './external-context.js'
 import {currentRunContext, type RunContext} from './run-context.js'
+import {readableMentions} from './mentions.js'
 import {
     REFINE_PROMPT,
     RESEARCH_FILES_PROMPT,
@@ -112,8 +113,10 @@ import {
     isFatalChildCause
 } from './child-runner.js'
 import {
+    runResearchStage,
     runResearchWorker,
     researchWorkerCacheHeading,
+    type ResearchSection,
     type ResearchWorkerSpec
 } from './research-worker.js'
 import {SessionUI, notifyRun} from '../remote/bridge.js'
@@ -267,7 +270,10 @@ export async function refineExistingFilesBlock(deps: PhaseDeps): Promise<string>
     const runContext = runContextFor(deps)
     const paths = (await runContext.inventoryPaths())
         .map(l => l.trim())
-        .filter(l => orientationTier(l) === 0 || orientationTier(l) === 1)
+        .filter(l => {
+            const tier = orientationTier(l)
+            return tier !== null && tier <= ORIENTATION_TIERS.config
+        })
     if (paths.length === 0) return ''
     const {block} = await runContext.orientationOf(paths)
     return block.trim().length === 0 ? '' : `${REFINE_PRESERVE_DIRECTIVE}\n\n${block.trim()}`
@@ -612,7 +618,11 @@ const CONTEXT_SILENT_RETRY_PREAMBLE =
     + 'ONLY when quoting an EXTERNAL CONTEXT block; otherwise write it as an "unverified:" open '
     + 'question. One claim per bullet. Better to emit three sharp sourced bullets than to say nothing.'
 
-export async function phaseResearch(deps: PhaseDeps, refined: string): Promise<string> {
+export async function phaseResearch(
+    deps: PhaseDeps,
+    refined: string,
+    rawPrompt = ''
+): Promise<string> {
     const runContext = runContextFor(deps)
     const runWorkerFn =
         deps.runWorker ?? ((_label: string, input: RunWorkerInput) => runWorker(input))
@@ -630,27 +640,34 @@ export async function phaseResearch(deps: PhaseDeps, refined: string): Promise<s
     const inventoryHeader =
         inventoryRaw.length > 0 ? `PROJECT FILE INVENTORY\n${inventoryRaw}\n\n` : ''
 
-    // Pre-read the project's orientation core (manifest, config, domain types,
-    // schema, entrypoints, API surface) ONCE and hand the full contents to the
-    // READ-HEAVY workers in their header. The workers run as separate child
-    // processes, so without this each one that explores re-reads the same hot
-    // files cold. Bounded by a hard byte budget so it can't overflow on a large
-    // repo; purely additive (nothing is blocked) so it can only remove a
-    // redundant read, never hide a file.
+    // The spec document(s) this task's own prompt points at. A cited doc is the
+    // one file orientation cannot select by convention and the one every worker
+    // needs — in the mx5 run it was read 50 times — so the mentions are threaded
+    // here and the `cited` rule (orientation.ts) puts it first in line for the
+    // byte budget.
+    const cited = await readableMentions(deps.cwd, rawPrompt)
+
+    // Pre-read the project's orientation core (the cited doc, manifest, config,
+    // project rules, domain types, schema, entrypoints, API surface) ONCE and hand
+    // the full contents to the EXPLORING workers in their header. The workers run
+    // as separate child processes, so without this each one that explores re-reads
+    // the same hot files cold. Bounded by a hard byte budget so it can't overflow
+    // on a large repo; purely additive (nothing is blocked) so it can only remove
+    // a redundant read, never hide a file.
     //
-    // Applied to FILES and APIS only — NOT CONTEXT/TOOLING, and the split is by
-    // whether the worker reads at all. FILES and APIS explore by reading, so
-    // pre-supplying the core replaces reads they would otherwise make. CONTEXT
-    // works from the inventory and grep, and TOOLING is scoped to the GOAL prose
-    // and single-read-guarded, so for those two the block is pure prefill with no
-    // read to displace. Orientation only goes where reads actually happen.
+    // All but TOOLING, and the split is by whether the worker reads at all. FILES,
+    // APIS and CONTEXT all explore — CONTEXT with `read,grep` — so pre-supplying
+    // the core replaces reads they would otherwise make. TOOLING is scoped to the
+    // GOAL prose and single-read-guarded, so for it the block is pure prefill with
+    // no read to displace.
     const orientation =
         getConfig().orientation && inventoryRaw.length > 0 ?
             deps.getFileInventory ?
                 await runContext.orientationOf(
-                    inventoryRaw.split('\n').filter(l => l.trim().length > 0)
+                    inventoryRaw.split('\n').filter(l => l.trim().length > 0),
+                    cited
                 )
-            :   await runContext.orientation()
+            :   await runContext.orientation(cited)
         :   {block: '', supplied: new Set<string>()}
     if (orientation.supplied.size > 0) {
         deps.logDebug?.(`orientation: pre-supplied ${orientation.supplied.size} core files`)
@@ -720,53 +737,17 @@ export async function phaseResearch(deps: PhaseDeps, refined: string): Promise<s
             return r
         })
 
-    // Run the four workers ONE AT A TIME by default. Which order wins depends on
-    // the backend: concurrent streams share one local GPU and slow each other
-    // down, so the sum of four fast workers can beat the max of four slowed ones,
-    // while a backend that genuinely serves parallel streams has no such tradeoff.
-    // `parallelResearchWorkers` is the opt-in for those backends. The worker's
-    // reasoning level (config/reasoning.ts `research` group) changes decode length
-    // and so changes the answer too, which is why this is a config knob and not a
-    // constant.
+    // The four workers and the ONE dependency between them: APIS is written
+    // against the FILES map, and everything else is independent. `runResearchStage`
+    // reads that off `after`, so FILES runs, then APIS, with CONTEXT and TOOLING
+    // alongside both — and `researchConcurrency: 'serial'` still runs them in order
+    // for a single local GPU, where concurrent streams share one device.
     //
     // Result order (files, apis, context, tooling) is preserved for assembly.
     // Resolved once: `searchConfigured()` reads the environment, and the tools
     // string and the `-e` paths must be derived from the SAME answer.
     const apisChannels = apisWorkerChannels()
-    const workerSpecs: Array<{
-        /** Section heading this worker's output is assembled under. */
-        section: string
-        /** The worker's child NAME — what the loader and the debug trail print, and
-         *  the key into `GROUP_BY_CHILD`, so it also decides the worker's
-         *  own model and reasoning cells. */
-        label: string
-        /** Static, or built from the sections completed so far (serial mode
-         *  hands APIS the finished FILES map; parallel mode hands it nothing). */
-        prompt: string | ((prior: ReadonlyArray<{name: string; text: string}>) => string)
-        tools?: string
-        extensions?: string[]
-        /** Deterministic gate over the worker's own output, run BEFORE the section is
-         *  persisted, so nothing it rejects survives into the cache or into compose. */
-        postProcess?: (text: string) => string
-        /** When set, a non-empty section produced with ZERO grounding-retrieval calls
-         *  (groundingRetrievalCount === 0 — see isGroundingRetrieval) is re-run ONCE
-         *  with this preamble prepended, forcing a retrieval-first pass. The retry
-         *  replaces the original only if it actually retrieved; otherwise the original
-         *  is kept (no regression, entry count preserved). Deterministic handle: a
-         *  section built on zero retrieval is ungrounded by construction, no semantic
-         *  judgement needed. */
-        zeroRetrievalRetry?: string
-        /** When set, a section that comes out SILENT — zero parseable bullets from a
-         *  loop-degrade banner or a hallucinated non-bullet fragment (classifyContextSilence
-         *  → genuineLoss) — is re-run ONCE with this preamble prepended. The retry replaces
-         *  the original only if it produces bullets; otherwise the original is kept. A
-         *  legitimately-empty section (honest "nothing to surface") is NOT retried —
-         *  `classifyContextSilence` is what tells the two apart. */
-        retryIfSilent?: string
-        /** This worker can issue project-source docs lookups, so the fan-out bounds
-         *  apply to it (see task/research-fanout-budget.ts). */
-        fanoutBounded?: true
-    }> = [
+    const workerSpecs: ResearchWorkerSpec[] = [
         {
             section: 'FILES',
             label: 'worker:files',
@@ -776,11 +757,12 @@ export async function phaseResearch(deps: PhaseDeps, refined: string): Promise<s
         {
             section: 'APIS',
             label: 'worker:apis',
+            // The one declared edge: FILES' finished map rides along, so the worker
+            // doesn't re-derive where-things-live through project-docs queries the
+            // FILES worker just answered.
+            after: ['FILES'],
             // Read-heavy: gets the orientation core (see note above). Search/fetch
             // ride along only when a Brave key exists — see SEARCH_EXTENSION_PATH.
-            // FILES' finished map rides along when available (serial default), so
-            // the worker doesn't re-derive where-things-live through project-docs
-            // queries the FILES worker just answered.
             prompt: prior =>
                 orientation.block
                 + promptHeader
@@ -821,7 +803,9 @@ export async function phaseResearch(deps: PhaseDeps, refined: string): Promise<s
         {
             section: 'CONTEXT',
             label: 'worker:context',
-            prompt: promptHeader + RESEARCH_CONTEXT_PROMPT(refined),
+            // Read-heavy too: it holds `read,grep` and reads to understand, so the
+            // core displaces reads here exactly as it does for FILES and APIS.
+            prompt: orientation.block + promptHeader + RESEARCH_CONTEXT_PROMPT(refined),
             // Context owns architectural understanding, not path discovery —
             // FILES handles that. Dropping `find`/`ls` keeps the worker from
             // spawning long enumeration loops whose output then inflates
@@ -873,7 +857,7 @@ export async function phaseResearch(deps: PhaseDeps, refined: string): Promise<s
 
     // Persisting a worker's section is a read-modify-write of the shared task
     // file, so writes are chained through one lock — a no-op in serial mode,
-    // load-bearing in parallel mode where two workers can settle together.
+    // load-bearing in graph mode where two workers can settle together.
     let persistChain: Promise<void> = Promise.resolve()
     const persistSection = (heading: string, text: string): Promise<void> => {
         const next = persistChain.then(() => setTaskSection(deps.cwd, deps.taskId, heading, text))
@@ -887,8 +871,8 @@ export async function phaseResearch(deps: PhaseDeps, refined: string): Promise<s
      */
     const drive = (
         spec: ResearchWorkerSpec,
-        prior: ReadonlyArray<{name: string; text: string}>
-    ): Promise<{name: string; text: string}> =>
+        prior: ReadonlyArray<ResearchSection>
+    ): Promise<ResearchSection> =>
         runResearchWorker(
             spec,
             {
@@ -915,29 +899,7 @@ export async function phaseResearch(deps: PhaseDeps, refined: string): Promise<s
             prior
         )
 
-    const sections: Array<{name: string; text: string}> = []
-    if (!getConfig().parallelResearchWorkers) {
-        // Default: ONE AT A TIME (see the note above the worker specs) — a fatal
-        // failure throws before later workers run, and each worker can see the
-        // finished sections before it (APIS builds on the FILES map).
-        for (const spec of workerSpecs) {
-            sections.push(await drive(spec, sections))
-        }
-    } else {
-        // Opt-in for parallel-capable backends. allSettled (not all): every
-        // worker runs to its own outcome first, so one fatal failure cannot
-        // orphan the others' output — their sections persist for the resume
-        // before the failure is thrown. Assembly order stays the spec order
-        // regardless of completion order. No prior sections exist here, so prompt
-        // builders get none — APIS runs without the FILES map it gets when serial.
-        const settled = await Promise.allSettled(workerSpecs.map(spec => drive(spec, [])))
-        for (const s of settled) {
-            if (s.status === 'rejected') throw s.reason
-        }
-        for (const s of settled) {
-            if (s.status === 'fulfilled') sections.push(s.value)
-        }
-    }
+    const sections = await runResearchStage(workerSpecs, drive, getConfig().researchConcurrency)
 
     // All workers succeeded — the assembled output below becomes the canonical
     // 'research' section (written by the orchestrator). The per-worker caches
@@ -1506,7 +1468,7 @@ export async function refinePhase(d: PhaseDeps, p: PhaseContext): Promise<string
  */
 export async function researchPhase(d: PhaseDeps, p: PhaseContext): Promise<string> {
     const tResearch = Date.now()
-    const rawResearch = await phaseResearch(d, p.refined)
+    const rawResearch = await phaseResearch(d, p.refined, p.rawPrompt)
     d.recordSubStep?.('workers', Date.now() - tResearch)
     const tVerify = Date.now()
     const out = await phaseVerifyTooling(d, rawResearch)

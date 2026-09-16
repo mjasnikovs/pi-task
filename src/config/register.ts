@@ -20,6 +20,7 @@ import {
     COMMAND_TIMEOUT_OPTIONS,
     DEBUG_LOG_OPTIONS,
     getConfig,
+    RESEARCH_CONCURRENCY_OPTIONS,
     sanitizeDebugLogs,
     saveConfig,
     STREAM_INACTIVITY_OPTIONS,
@@ -318,14 +319,23 @@ export const ITEMS: ConfigItem[] = [
             + 'types, schema — so they spend their steps on the question instead of on finding '
             + 'their way around'
     ),
-    booleanItem(
-        'research',
-        'parallelResearchWorkers',
-        'parallel research',
-        'Run the 4 research workers at once instead of one after another. Only faster if '
-            + 'your model backend can answer several requests at the same time — on a single '
-            + 'local GPU it is measurably slower, so leave it off there'
-    ),
+    {
+        id: 'researchConcurrency',
+        section: 'research',
+        label: 'research workers',
+        description:
+            'How the 4 research workers are run. "by dependency" starts each one as soon as '
+            + 'the work it builds on is done, so three of them overlap; "one at a time" runs '
+            + 'them in order, which is faster on a single local GPU, where parallel requests '
+            + 'share one device',
+        values: RESEARCH_CONCURRENCY_OPTIONS.map(o => o.label),
+        format: cfg =>
+            RESEARCH_CONCURRENCY_OPTIONS.find(o => o.value === cfg.researchConcurrency)!.label,
+        apply: (cfg, chosen) => {
+            const opt = RESEARCH_CONCURRENCY_OPTIONS.find(o => o.label === chosen)
+            if (opt) cfg.researchConcurrency = opt.value
+        }
+    },
     booleanItem(
         'research',
         'researchCache',

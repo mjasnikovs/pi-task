@@ -21,13 +21,27 @@ export interface PiTaskConfig {
     enforceGuidelines: boolean
     verifyWork: boolean
     /**
-     * Run the four research workers concurrently instead of one at a time
-     * (task/phases.ts). DEFAULT OFF. Serial is also what lets a worker read the
-     * sections finished before it — APIS builds on the FILES map, and gets
-     * nothing under the parallel branch. Measure your own backend before
-     * turning this on.
+     * What shape the research phase runs its four workers in (task/phases.ts).
+     *
+     * `graph` (DEFAULT) runs each worker as soon as the sections it declares it
+     * comes `after` are finished: FILES first, then APIS, with CONTEXT and TOOLING
+     * alongside. The FILES→APIS handoff survives, which the old all-at-once
+     * parallel mode lost.
+     *
+     * `serial` runs them one at a time, for a single local GPU where concurrent
+     * streams share one device and slow each other down.
      */
-    parallelResearchWorkers: boolean
+    researchConcurrency: ResearchConcurrency
+    /**
+     * Extra paths the project tour must never pre-read, as `.gitignore`-style
+     * patterns (`docs/generated/**`, `fixtures/`).
+     *
+     * The shipped exclusions — vendored dependencies, build output, the agent's
+     * own directories — are `VENDORED_DIRS` in task/orientation.ts, and the
+     * repo's `.gitignore` is read on top of them. This is the hand-edited third
+     * source, for a tracked directory that is bulk to this project alone.
+     */
+    orientationExclude: string[]
     /**
      * Cache docs/search/fetch worker RESULTS for the duration of one /task-auto
      * run, so sibling tasks re-asking the same (package/url, query) reuse the
@@ -197,6 +211,37 @@ export interface PiTaskConfig {
 /** How verbose the `*-debug.log` trail is. See {@link PiTaskConfig.debugLogs}. */
 export type DebugLogLevel = 'off' | 'events' | 'full'
 
+/** How the research workers are scheduled. See {@link PiTaskConfig.researchConcurrency}. */
+export type ResearchConcurrency = 'graph' | 'serial'
+
+/** The concurrency choices offered by /task-config, in cycle order. */
+export const RESEARCH_CONCURRENCY_OPTIONS: ReadonlyArray<{
+    label: string
+    value: ResearchConcurrency
+}> = [
+    {label: 'by dependency', value: 'graph'},
+    {label: 'one at a time', value: 'serial'}
+] as const
+
+/** Pin a hand-edited or stale value to one of the offered choices. */
+export function sanitizeResearchConcurrency(value: unknown): ResearchConcurrency {
+    return RESEARCH_CONCURRENCY_OPTIONS.some(o => o.value === value) ?
+            (value as ResearchConcurrency)
+        :   DEFAULT_RESEARCH_CONCURRENCY
+}
+
+const DEFAULT_RESEARCH_CONCURRENCY: ResearchConcurrency = 'graph'
+
+/**
+ * The boolean this setting shipped as, and how a stored one is read.
+ *
+ * `true` meant "all four at once", which is the graph without its one edge, so it
+ * maps to `graph`; `false` meant one at a time. Kept as a documented alias rather
+ * than dropped, because dropping it silently re-enables concurrency on the local
+ * GPU of every user who turned it off.
+ */
+export const DEPRECATED_PARALLEL_KEY = 'parallelResearchWorkers'
+
 /**
  * The debug-log choices offered by /task-config, in cycle order (quietest →
  * loudest, so the cycle reads as a volume dial). Unlike the timeout options the
@@ -241,6 +286,15 @@ export function sanitizeRequestTimeoutMs(value: unknown): number {
     return COMMAND_TIMEOUT_OPTIONS.some(o => o.ms === value) ?
             (value as number)
         :   DEFAULT_REQUEST_TIMEOUT_MS
+}
+
+/** Keep only non-empty string patterns from a hand-edited exclusion list. */
+export function sanitizeIgnorePatterns(value: unknown): string[] {
+    if (!Array.isArray(value)) return []
+    return value
+        .filter((p): p is string => typeof p === 'string')
+        .map(p => p.trim())
+        .filter(p => p.length > 0)
 }
 
 /** Keep only exact, unique Pi tool names from an advanced config override. */
@@ -291,7 +345,10 @@ export const DEFAULT_CONFIG: PiTaskConfig = {
     orientation: true,
     enforceGuidelines: true,
     verifyWork: true,
-    parallelResearchWorkers: false,
+    // GRAPH: three of the four workers have no dependency on each other, and the
+    // one that does keeps its input. See ResearchConcurrency.
+    researchConcurrency: DEFAULT_RESEARCH_CONCURRENCY,
+    orientationExclude: [],
     researchCache: true,
     searchProvider: 'exa',
     extensionWhitelist: [],
@@ -354,7 +411,8 @@ export const CONFIG_LOADERS: {
     orientation: asBoolean('orientation'),
     enforceGuidelines: asBoolean('enforceGuidelines'),
     verifyWork: asBoolean('verifyWork'),
-    parallelResearchWorkers: asBoolean('parallelResearchWorkers'),
+    researchConcurrency: sanitizeResearchConcurrency,
+    orientationExclude: sanitizeIgnorePatterns,
     researchCache: asBoolean('researchCache'),
     yoloMode: asBoolean('yoloMode'),
     // A hand-edited or stale enum value must not leak an unknown provider into
@@ -392,6 +450,15 @@ export function loadConfig(raw: unknown): PiTaskConfig {
         // loader answers a missing key with its own default, which is what the
         // old `delete parsed.X` + spread did.
         ;(out as Record<string, unknown>)[key] = CONFIG_LOADERS[key](stored[key])
+    }
+    // The deprecated boolean answers only for a config saved before the setting
+    // became an enum — a file carrying both was written by this version, so the
+    // enum is the user's live choice and the boolean is the leftover.
+    if (
+        stored.researchConcurrency === undefined
+        && typeof stored[DEPRECATED_PARALLEL_KEY] === 'boolean'
+    ) {
+        out.researchConcurrency = stored[DEPRECATED_PARALLEL_KEY] ? 'graph' : 'serial'
     }
     return out
 }
