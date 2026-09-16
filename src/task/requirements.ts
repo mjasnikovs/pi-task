@@ -631,9 +631,15 @@ export interface OwnedRequirement {
     /** The verbatim design quote (the obligation). */
     quote: string
     anchor: string
-    /** The plan title of the task the coverage map assigned it to — matched
-     *  against the executing task's title at phase time (ids don't exist yet at
-     *  plan time, and spliced repair tasks shift them). */
+    /**
+     * The plan key (`TaskEntry.key`) of the task the coverage map assigned it to —
+     * the join. Allocated at plan time and stable under every later rewrite of the
+     * title. Absent on a ledger written before keys existed, which still joins on
+     * the title.
+     */
+    key?: string
+    /** The plan title of the owning task. Display and legacy join only — a title
+     *  is prose, and a task that rewords its own is still the same task. */
     title: string
     /**
      * DETACHED: the files this obligation
@@ -658,6 +664,7 @@ const ownedLedger = makeLedger<OwnedRequirement>({
     serialize: o =>
         `OWNED: "${o.quote}"${o.anchor ? ` [anchor: ${o.anchor}]` : ''}`
         + (o.pending && o.pending.length > 0 ? ` [pending: ${o.pending.join(', ')}]` : '')
+        + (o.key ? ` [key: ${o.key}]` : '')
         + ` [title: ${o.title.replace(/\n/g, ' ')}]`,
     parse: parseOwnedRequirements
 })
@@ -683,31 +690,56 @@ export async function readOwnedRequirements(cwd: string): Promise<OwnedRequireme
 export function parseOwnedRequirements(text: string): OwnedRequirement[] {
     const out: OwnedRequirement[] = []
     for (const m of text.matchAll(
-        /^OWNED:\s*"([^"\n]+)"(?:\s*\[anchor:\s*([^\]]*)\])?(?:\s*\[pending:\s*([^\]]*)\])?\s*\[title:\s*([^\n]+)\]\s*$/gim
+        /^OWNED:\s*"([^"\n]+)"(?:\s*\[anchor:\s*([^\]]*)\])?(?:\s*\[pending:\s*([^\]]*)\])?(?:\s*\[key:\s*([^\]]*)\])?\s*\[title:\s*([^\n]+)\]\s*$/gim
     )) {
         const pending = (m[3] ?? '')
             .split(',')
             .map(p => p.trim())
             .filter(p => p.length > 0)
+        const key = (m[4] ?? '').trim()
         out.push({
             quote: m[1].trim(),
             anchor: (m[2] ?? '').trim(),
-            title: m[4].replace(/\]\s*$/, '').trim(),
+            title: m[5].replace(/\]\s*$/, '').trim(),
+            ...(key.length > 0 ? {key} : {}),
             ...(pending.length > 0 ? {pending} : {})
         })
     }
     return out
 }
 
+/** A DETACHED entry (`pending`) is owned by nobody until a task claims it, so no
+ *  join returns it — its `title` is provenance, not ownership. */
+const isOwned = (o: OwnedRequirement): boolean => !(o.pending && o.pending.length > 0)
+
 /** The owned entries whose plan title matches THIS task's title (normalised
  *  equality — titles travel verbatim from the plan list into task creation;
- *  spliced repair tasks simply match nothing). A DETACHED entry (`pending`) is
- *  owned by nobody until a task claims it, so it is never returned here — its
- *  `title` is provenance, not ownership. */
+ *  spliced repair tasks simply match nothing). */
 export function ownedForTitle(owned: OwnedRequirement[], title: string): OwnedRequirement[] {
     const t = normalise(title)
     if (t.length === 0) return []
-    return owned.filter(o => normalise(o.title) === t && !(o.pending && o.pending.length > 0))
+    return owned.filter(o => normalise(o.title) === t && isOwned(o))
+}
+
+/** The owned entries assigned to THIS task's plan entry. */
+export function ownedForKey(owned: OwnedRequirement[], key: string): OwnedRequirement[] {
+    return owned.filter(o => o.key === key && isOwned(o))
+}
+
+/**
+ * THIS task's owned entries. The key is the join; the title is the fallback for a
+ * ledger written before keys existed, and only then — once ANY entry carries a
+ * key the ledger is a keyed one, and a task the plan did not key (a spliced
+ * repair step) owns nothing, which is the same answer the title join gave it.
+ */
+export function ownedForTask(
+    owned: OwnedRequirement[],
+    join: {key?: string; title: string}
+): OwnedRequirement[] {
+    if (join.key !== undefined && owned.some(o => o.key !== undefined)) {
+        return ownedForKey(owned, join.key)
+    }
+    return ownedForTitle(owned, join.title)
 }
 
 /** The injection block for a task's OWN mapped obligations. Mirrors

@@ -53,10 +53,12 @@ import {
 import {
     appendGateRecord,
     readSection,
+    readTaskFile,
     removeTaskSection,
     setTaskSection,
     updateTaskFrontMatter
 } from './task-io.js'
+import {extractSection} from './task-parsers.js'
 import {applyDeprecations} from './deprecated-constraint.js'
 import {applyRefutations} from './refuted-constraint.js'
 import {spawnSync} from 'node:child_process'
@@ -91,7 +93,7 @@ import {
     buildOwnedRequirementsBlock,
     readOwnedRequirements,
     writeOwnedRequirements,
-    ownedForTitle,
+    ownedForTask,
     appendOwnedConstraints,
     type OwnedRequirement
 } from './requirements.js'
@@ -303,9 +305,8 @@ export async function phaseCarriedBlocks(deps: PhaseDeps): Promise<string> {
 }
 
 /**
- * The owned (task-mapped) requirements for THIS task: matched by
- * the plan title the coverage map keyed them to, which is the task's stored
- * `raw prompt` section verbatim. Empty outside /task-auto runs, for spliced
+ * The owned (task-mapped) requirements for THIS task, joined on the plan key the
+ * coverage map assigned them to. Empty outside /task-auto runs, for spliced
  * repair tasks, and when the plan recorded no mapping — all of which make this a
  * no-op. This is the BELT (a prompt block, into refine and compose);
  * `appendOwnedConstraints` on the final spec is the BRACES. The belt is a request
@@ -313,19 +314,26 @@ export async function phaseCarriedBlocks(deps: PhaseDeps): Promise<string> {
  */
 async function ownedForThisTask(deps: PhaseDeps): Promise<OwnedRequirement[]> {
     try {
-        const title = (await readSection(deps.cwd, deps.taskId, 'raw prompt')) ?? ''
-        return ownedForTitle(await readOwnedRequirements(deps.cwd), title.trim())
+        return ownedForTask(await readOwnedRequirements(deps.cwd), await planJoin(deps))
     } catch {
         return []
     }
 }
 
-/** This task's plan title — the owned ledger's join key. */
-async function planTitle(deps: PhaseDeps): Promise<string> {
+/**
+ * How this task addresses the owned ledger: its plan key, and its plan title —
+ * the stored `raw prompt` section verbatim — for a ledger written before keys.
+ */
+async function planJoin(deps: PhaseDeps): Promise<{key?: string; title: string}> {
     try {
-        return ((await readSection(deps.cwd, deps.taskId, 'raw prompt')) ?? '').trim()
+        const {frontMatter, body} = await readTaskFile(deps.cwd, deps.taskId)
+        const title = extractSection(body, 'raw prompt') ?? ''
+        return {
+            ...(frontMatter.plan_key !== undefined && {key: frontMatter.plan_key}),
+            title: title.trim()
+        }
     } catch {
-        return ''
+        return {title: ''}
     }
 }
 
@@ -357,11 +365,11 @@ export async function resolveOwnedFreezeForThisTask(
 ): Promise<string> {
     const ledger = await readOwnedRequirements(deps.cwd).catch(() => [])
     if (ledger.length === 0) return spec
-    const title = await planTitle(deps)
-    if (title.length === 0) return spec
+    const join = await planJoin(deps)
+    if (join.title.length === 0) return spec
     const res = detachUnsatisfiableRequirements({
         spec,
-        title,
+        ...join,
         ledger,
         isSource: repoSourceOracle(deps.cwd)
     })
@@ -387,9 +395,9 @@ export async function resolveOwnedFreezeForThisTask(
 export async function claimOwnedFreezeForThisTask(deps: PhaseDeps, refined: string): Promise<void> {
     const ledger = await readOwnedRequirements(deps.cwd).catch(() => [])
     if (unclaimedPendingRequirements(ledger).length === 0) return
-    const title = await planTitle(deps)
-    if (title.length === 0) return
-    const res = claimPendingRequirements({intent: refined, title, ledger})
+    const join = await planJoin(deps)
+    if (join.title.length === 0) return
+    const res = claimPendingRequirements({intent: refined, ...join, ledger})
     if (res.actions.length === 0) return
     deps.logDebug?.(formatReassignActions(res.actions))
     await writeOwnedRequirements(deps.cwd, res.ledger)

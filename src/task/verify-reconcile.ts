@@ -215,17 +215,17 @@ export function absenceProbeText(conflicts: AbsenceConflict[]): string {
 }
 
 /** Parse SIBLING titles out of `buildScopeFence`'s listing, whose rows read
- *  `[N] head` and `[N] (THIS STEP) head`. The "(THIS STEP)" row is dropped — a
- *  task may legitimately assert about its own deliverables. '' and undefined
- *  (a bare /task with no plan) yield none. */
+ *  `[N] [done|this|later] head`. The `[this]` row is dropped — a task may
+ *  legitimately assert about its own deliverables; a `[done]` sibling is kept,
+ *  since its deliverable is in the tree and asserting its ABSENCE is the very
+ *  defect this feeds. '' and undefined (a bare /task with no plan) yield none. */
 export function siblingTitlesFromPlanContext(planContext: string | undefined): string[] {
     if (!planContext) return []
     const out: string[] = []
     for (const line of planContext.split('\n')) {
-        const m = /^\[\d+\](.*)$/.exec(line.trim())
-        if (!m) continue
-        if (m[1].startsWith(' (THIS STEP)')) continue
-        const title = m[1].trim()
+        const m = /^\[\d+\] \[(done|this|later)\] (.*)$/.exec(line.trim())
+        if (!m || m[1] === 'this') continue
+        const title = m[2].trim()
         if (title.length > 0) out.push(title)
     }
     return out

@@ -192,9 +192,12 @@ describe('absenceProbeText', () => {
 })
 
 describe('siblingTitlesFromPlanContext', () => {
-    test('parses buildScopeFence output, excluding THIS STEP', () => {
+    test('parses buildScopeFence output, excluding the [this] row and keeping [done]', () => {
         const fence = buildScopeFence(
-            ['Implement admin features — /admin page', 'Polish and finalize — brand pass'],
+            [
+                {index: 0, title: 'Implement admin features — /admin page', done: true},
+                {index: 1, title: 'Polish and finalize — brand pass', done: false}
+            ],
             1
         )
         expect(siblingTitlesFromPlanContext(fence)).toEqual([

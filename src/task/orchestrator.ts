@@ -189,6 +189,13 @@ export interface TaskRunnerOptions {
      */
     planContext?: string
     /**
+     * The /task-auto plan entry this run implements (`TaskEntry.key`). Recorded in
+     * the task file's front matter, which is where every phase reads it back —
+     * this option only exists to carry it in on a fresh start. Undefined for a
+     * bare /task, which belongs to no plan.
+     */
+    planKey?: string
+    /**
      * Marks this run as a verify-FAIL re-attempt. When set (only by /task-auto's
      * autofix path, with `resumeId` pointing at the already-composed task), the
      * text — the verify gate's failure reason plus any guidance the user typed —
@@ -215,6 +222,7 @@ export class TaskRunner {
     private readonly _sendSpec: ((spec: string) => Promise<void>) | undefined
     private readonly _onStart: ((taskId: string) => void | Promise<void>) | undefined
     private readonly _planContext: string | undefined
+    private readonly _planKey: string | undefined
     private readonly _fixInstruction: string | undefined
     /** See {@link TaskRunnerOptions.implAwaited}. */
     private readonly _implAwaited: boolean
@@ -244,6 +252,7 @@ export class TaskRunner {
         this._sendSpec = opts.sendSpec
         this._onStart = opts.onStart
         this._planContext = opts.planContext
+        this._planKey = opts.planKey
         this._fixInstruction = opts.fixInstruction
         this._implAwaited = opts.implAwaited ?? false
         this._startedAt = Date.now()
@@ -351,7 +360,13 @@ export class TaskRunner {
             title = frontMatter.title
             label = frontMatter.label
             resumePhase = frontMatter.phase
-            await updateTaskFrontMatter(cwd, id, {state: 'in_progress'})
+            // A re-entry backfills the plan key onto a file written before this
+            // run knew one (an older task, or a resume that reaches a task the
+            // plan has since keyed); it never clears one already on disk.
+            await updateTaskFrontMatter(cwd, id, {
+                state: 'in_progress',
+                ...(this._planKey !== undefined && {plan_key: this._planKey})
+            })
         } else {
             id = await allocateTaskId(cwd)
             title = '(refining…)'
@@ -362,7 +377,8 @@ export class TaskRunner {
                 phase: 'refine',
                 created_at: now,
                 updated_at: now,
-                title
+                title,
+                ...(this._planKey !== undefined && {plan_key: this._planKey})
             }
             await writeTaskFile(
                 cwd,
@@ -616,7 +632,7 @@ export class TaskRunner {
 
 export interface RunSingleTaskOptions extends Pick<
     TaskRunnerOptions,
-    'resumeId' | 'seams' | 'onStart' | 'planContext' | 'fixInstruction'
+    'resumeId' | 'seams' | 'onStart' | 'planContext' | 'planKey' | 'fixInstruction'
 > {
     /** Await the session going idle after the spec is delivered, so the caller
      *  blocks until the agent has implemented it. Default false. */
@@ -744,6 +760,7 @@ export async function runSingleTask(
                 seams: opts.seams,
                 onStart: opts.onStart,
                 planContext: opts.planContext,
+                planKey: opts.planKey,
                 fixInstruction: opts.fixInstruction,
                 implAwaited: opts.waitForImplementation
             })
@@ -797,6 +814,7 @@ export const gateRunTask: RunTaskFn = (c, cwd, t, opts) =>
         resumeId: opts?.resumeId,
         onStart: opts?.onStart,
         planContext: opts?.planContext,
+        planKey: opts?.planKey,
         fixInstruction: opts?.fixInstruction
         // NO `seams` here, deliberately. Threading them would need a field on
         // `GateParams` and another on `GateDeps`, and nothing — production or

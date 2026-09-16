@@ -8,6 +8,7 @@ import {
     parseCoverageVerdict,
     buildAutoBody,
     checkOffTask,
+    stampTaskInProgress,
     insertTaskAfter
 } from '../../src/task/auto-io.js'
 import {writeTaskFile, readTaskFile} from '../../src/task/task-io.js'
@@ -56,11 +57,20 @@ test('parseDecomposeList: no cap — keeps every title past the old 30 ceiling',
     expect(out[44]).toBe('Task 45')
 })
 
-test('buildAutoBody + parseTaskList round-trip', () => {
+test('buildAutoBody + parseTaskList round-trip, every entry keyed at plan time', () => {
     const body = buildAutoBody('add rate limiting', 'Q1: ...\nA1: ...', ['Task A', 'Task B'])
+    expect(body).toContain('- [ ] P01  Task A')
     expect(parseTaskList(body)).toEqual([
-        {index: 0, title: 'Task A', done: false},
-        {index: 1, title: 'Task B', done: false}
+        {index: 0, key: 'P01', title: 'Task A', done: false},
+        {index: 1, key: 'P02', title: 'Task B', done: false}
+    ])
+})
+
+test('parseTaskList: the full grammar — key, inner id and attempts, all round-tripping', () => {
+    const body = '## tasks\n\n- [ ] P01 TASK_0006 a2  Task A\n- [x] P02 TASK_0007 a1  Task B\n'
+    expect(parseTaskList(body)).toEqual([
+        {index: 0, key: 'P01', title: 'Task A', done: false, producedId: 'TASK_0006', attempts: 2},
+        {index: 1, key: 'P02', title: 'Task B', done: true, producedId: 'TASK_0007', attempts: 1}
     ])
 })
 
@@ -82,6 +92,46 @@ test('parseTaskList: unchecked line with a stamped id captures producedId, stays
     expect(entries[1]).toEqual({index: 1, title: 'Task B', done: false})
 })
 
+// The grammar's fields are token-shaped, so a TITLE that happens to open with one
+// must still be read whole. The two-space delimiter is what decides it.
+test('parseTaskList: a title that opens like a field is read whole', () => {
+    const body = [
+        '## tasks',
+        '',
+        '- [ ] TASK_0006 is broken — fix the loader',
+        '- [ ] (auto) tighten the retry budget',
+        '- [ ] P01  TASK_0042 is the culprit',
+        '- [ ] a3 attempts were lost on resume',
+        ''
+    ].join('\n')
+    expect(parseTaskList(body)).toEqual([
+        {index: 0, title: 'TASK_0006 is broken — fix the loader', done: false},
+        {index: 1, title: '(auto) tighten the retry budget', done: false},
+        {index: 2, key: 'P01', title: 'TASK_0042 is the culprit', done: false},
+        {index: 3, title: 'a3 attempts were lost on resume', done: false}
+    ])
+})
+
+test('stampTaskInProgress: mints attempt 1 and keeps the plan key', async () => {
+    await withTmpTaskDir(async dir => {
+        const body = buildAutoBody('feat', '(none)', ['Task A', 'Task B'])
+        await writeTaskFile(dir, fm('TASK_AUTO_0001', 'in_progress'), body)
+        await stampTaskInProgress(dir, 'TASK_AUTO_0001', 1, 'TASK_0042', 'Task B')
+        const entries = parseTaskList((await readTaskFile(dir, 'TASK_AUTO_0001')).body)
+        expect(entries[1]).toEqual({
+            index: 1,
+            key: 'P02',
+            title: 'Task B',
+            done: false,
+            producedId: 'TASK_0042',
+            attempts: 1
+        })
+        // A second stamp does not re-mint the counter (WS4 owns increments).
+        await stampTaskInProgress(dir, 'TASK_AUTO_0001', 1, 'TASK_0042', 'Task B')
+        expect(parseTaskList((await readTaskFile(dir, 'TASK_AUTO_0001')).body)[1].attempts).toBe(1)
+    })
+})
+
 test('parseTaskList: ignores non-checkbox lines inside the section', () => {
     const body = '## tasks\n\n- [ ] Real\nsome note\n- [x] TASK_0001  Done one\n'
     expect(parseTaskList(body).map(e => e.title)).toEqual(['Real', 'Done one'])
@@ -94,7 +144,13 @@ test('checkOffTask: rewrites the Nth checkbox line, stamps id, leaves others', a
         await checkOffTask(dir, 'TASK_AUTO_0001', 1, 'TASK_0042', 'Task B')
         const entries = parseTaskList((await readTaskFile(dir, 'TASK_AUTO_0001')).body)
         expect(entries[0].done).toBe(false)
-        expect(entries[1]).toEqual({index: 1, title: 'Task B', done: true, producedId: 'TASK_0042'})
+        expect(entries[1]).toEqual({
+            index: 1,
+            key: 'P02',
+            title: 'Task B',
+            done: true,
+            producedId: 'TASK_0042'
+        })
     })
 })
 
@@ -104,7 +160,26 @@ test('checkOffTask: empty producedId writes a plain checked line that round-trip
         await writeTaskFile(dir, fm('TASK_AUTO_0001', 'in_progress'), body)
         await checkOffTask(dir, 'TASK_AUTO_0001', 0, '', 'Only one')
         const entries = parseTaskList((await readTaskFile(dir, 'TASK_AUTO_0001')).body)
-        expect(entries[0]).toEqual({index: 0, title: 'Only one', done: true})
+        expect(entries[0]).toEqual({index: 0, key: 'P01', title: 'Only one', done: true})
+    })
+})
+
+// The key is the ownership join, so it must survive the one rewrite that touches
+// the line after the plan is written: a title the check-off supplies afresh.
+test('checkOffTask: a rewritten title leaves the plan key and the attempt count alone', async () => {
+    await withTmpTaskDir(async dir => {
+        const body = buildAutoBody('feat', '(none)', ['Task A'])
+        await writeTaskFile(dir, fm('TASK_AUTO_0001', 'in_progress'), body)
+        await stampTaskInProgress(dir, 'TASK_AUTO_0001', 0, 'TASK_0042', 'Task A')
+        await checkOffTask(dir, 'TASK_AUTO_0001', 0, 'TASK_0042', 'Task A — reworded by refine')
+        expect(parseTaskList((await readTaskFile(dir, 'TASK_AUTO_0001')).body)[0]).toEqual({
+            index: 0,
+            key: 'P01',
+            title: 'Task A — reworded by refine',
+            done: true,
+            producedId: 'TASK_0042',
+            attempts: 1
+        })
     })
 })
 
@@ -142,11 +217,25 @@ test('insertTaskAfter: splices a new entry directly after the given index', asyn
         // Existing state is untouched: the finished entry keeps its check + id.
         expect(entries[0]).toEqual({
             index: 0,
+            key: 'P01',
             title: 'Task A',
             done: true,
             producedId: 'TASK_0001'
         })
         expect(entries[1].done).toBe(false)
+        // The spliced step gets the next FREE key, never one the plan already
+        // spent — the entries it pushed down keep theirs.
+        expect(entries.map(e => e.key)).toEqual(['P01', 'P04', 'P02', 'P03'])
+    })
+})
+
+test('insertTaskAfter: a splice into a legacy (unkeyed) plan mints a non-colliding key', async () => {
+    await withTmpTaskDir(async dir => {
+        const body = '## tasks\n\n- [x] TASK_0001  Task A\n- [ ] Task B\n'
+        await writeTaskFile(dir, fm('TASK_AUTO_0001', 'in_progress'), body)
+        expect(await insertTaskAfter(dir, 'TASK_AUTO_0001', 0, 'repair a/b.ts: bug')).toBe(true)
+        const entries = parseTaskList((await readTaskFile(dir, 'TASK_AUTO_0001')).body)
+        expect(entries.map(e => e.key)).toEqual([undefined, 'P03', undefined])
     })
 })
 

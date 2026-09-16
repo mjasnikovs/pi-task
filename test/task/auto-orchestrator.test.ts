@@ -13,10 +13,11 @@ import {
     readableMentions,
     attachSpecRefs,
     buildScopeFence,
+    buildStepFence,
     type AutoDeps
 } from '../../src/task/auto-orchestrator.js'
 import {readTaskFile, writeTaskFile} from '../../src/task/task-io.js'
-import {parseTaskList, buildAutoBody} from '../../src/task/auto-io.js'
+import {parseTaskList, buildAutoBody, type TaskEntry} from '../../src/task/auto-io.js'
 import {ACCEPT_LABEL, AUTOFIX_LABEL} from '../../src/task/verify-resolution.js'
 import {readAcceptDebts, type AcceptDebt} from '../../src/task/accept-debt.js'
 import {readOwnedRequirements} from '../../src/task/requirements.js'
@@ -1148,7 +1149,14 @@ test('runAutoLoop: stamps the inner task id at start so an interruption is resum
         // The entry is left undone but now carries the inner id, so a later
         // /task-auto-resume can continue one task rather than start over.
         const entries = parseTaskList((await readTaskFile(dir, 'TASK_AUTO_0001')).body)
-        expect(entries[0]).toEqual({index: 0, title: 'A', done: false, producedId: 'TASK_0009'})
+        expect(entries[0]).toEqual({
+            index: 0,
+            key: 'P01',
+            title: 'A',
+            done: false,
+            producedId: 'TASK_0009',
+            attempts: 1
+        })
     })
 })
 
@@ -1197,8 +1205,10 @@ test('runAutoLoop: interrupt then resume continues the same inner task, never st
         const {frontMatter, body} = await readTaskFile(dir, 'TASK_AUTO_0001')
         expect(frontMatter.state).toBe('completed')
         expect(parseTaskList(body)).toEqual([
-            {index: 0, title: 'A', done: true, producedId: 'TASK_0006'},
-            {index: 1, title: 'B', done: true, producedId: 'TASK_0007'}
+            {index: 0, key: 'P01', title: 'A', done: true, producedId: 'TASK_0006', attempts: 1},
+            // B's fake runner never calls onStart, so nothing ever stamped an
+            // attempt onto it — the check-off invents none.
+            {index: 1, key: 'P02', title: 'B', done: true, producedId: 'TASK_0007'}
         ])
     })
 })
@@ -1309,31 +1319,57 @@ test('readableMentions: returns only @refs that resolve to a real file, deduped'
     })
 })
 
+/** Plan entries as the loop reads them, all still unchecked. */
+const planEntries = (titles: string[], doneCount = 0): TaskEntry[] =>
+    titles.map((title, index) => ({index, title, done: index < doneCount}))
+
 test('buildScopeFence: marks the current step and lists every sibling by number', () => {
     const titles = ['Scaffold project', 'Build database schema', 'Build auth routes']
-    const fence = buildScopeFence(titles, 0)
+    const fence = buildScopeFence(planEntries(titles), 0)
     expect(fence).toContain('STEP 1 of 3')
-    expect(fence).toContain('[1] (THIS STEP) Scaffold project')
-    expect(fence).toContain('[2] Build database schema')
-    expect(fence).toContain('[3] Build auth routes')
+    expect(fence).toContain('[1] [this] Scaffold project')
+    expect(fence).toContain('[2] [later] Build database schema')
+    expect(fence).toContain('[3] [later] Build auth routes')
     // Only the current step is tagged.
-    expect(fence.match(/\(THIS STEP\)/g)).toHaveLength(1)
-    expect(fence).toContain('do NOT implement them here')
+    expect(fence.match(/\[this\]/g)).toHaveLength(1)
+    expect(fence).toContain('do NOT implement the [later] ones here')
 })
 
 test('buildScopeFence: tags a middle step and keeps the count right', () => {
-    const fence = buildScopeFence(['a', 'b', 'c', 'd'], 2)
+    const fence = buildScopeFence(planEntries(['a', 'b', 'c', 'd']), 2)
     expect(fence).toContain('STEP 3 of 4')
-    expect(fence).toContain('[3] (THIS STEP) c')
+    expect(fence).toContain('[3] [this] c')
+})
+
+// The whole point of WS6's fence change: a step past the first has siblings that
+// are ALREADY BUILT, and telling refine they run "later" is how a step
+// re-scaffolds what is in the tree.
+test('buildScopeFence: renders done / this / later from the entries themselves', () => {
+    const fence = buildScopeFence(planEntries(['a', 'b', 'c', 'd'], 2), 2)
+    expect(fence).toContain('[1] [done] a')
+    expect(fence).toContain('[2] [done] b')
+    expect(fence).toContain('[3] [this] c')
+    expect(fence).toContain('[4] [later] d')
+    expect(fence).toContain('ALREADY BUILT')
 })
 
 test('buildScopeFence: strips the threaded "| decisions | spec" tail from the plan listing', () => {
     const threaded = attachSpecRefs(['Scaffold project'], ['DESIGN/spec.md'])
-    const fence = buildScopeFence([...threaded, 'Build auth routes'], 0)
+    const fence = buildScopeFence(planEntries([...threaded, 'Build auth routes']), 0)
     // The listing shows the clean head, not the authoritative-spec suffix.
-    expect(fence).toContain('[1] (THIS STEP) Scaffold project')
+    expect(fence).toContain('[1] [this] Scaffold project')
     expect(fence).not.toContain('| spec:')
     expect(fence).not.toContain('authoritative')
+})
+
+test('buildStepFence: a spliced repair step also gets the pinned-file repair fence', () => {
+    const entries = planEntries(['Build auth routes', 'repair src/db.ts: TRUNCATE leaks'], 1)
+    const fence = buildStepFence(entries, 1)
+    expect(fence).toContain('[1] [done] Build auth routes')
+    expect(fence).toContain('[2] [this] repair src/db.ts: TRUNCATE leaks')
+    expect(fence).toContain('src/db.ts')
+    // A non-repair step gets the scope fence alone.
+    expect(buildStepFence(entries, 0)).toBe(buildScopeFence(entries, 0))
 })
 
 test('attachSpecRefs: appends an authoritative spec suffix to every title', () => {

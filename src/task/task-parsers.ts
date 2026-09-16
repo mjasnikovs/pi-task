@@ -15,8 +15,12 @@ const FRONT_MATTER_KEYS: (keyof TaskFrontMatter)[] = [
     'updated_at',
     'title',
     'label',
+    'plan_key',
     'reason'
 ]
+
+/** Front-matter keys omitted entirely when empty rather than emitted blank. */
+const OPTIONAL_KEYS = new Set<keyof TaskFrontMatter>(['label', 'plan_key', 'reason'])
 
 // ─── Front matter ────────────────────────────────────────────────────────────
 
@@ -24,11 +28,7 @@ export function emitFrontMatter(fm: TaskFrontMatter): string {
     const lines = ['---']
     for (const k of FRONT_MATTER_KEYS) {
         const v = fm[k]
-        if (v === undefined || v === '') {
-            // Optional fields are omitted entirely when empty rather than emitted
-            // as a blank `key:` line.
-            if (k === 'reason' || k === 'label') continue
-        }
+        if ((v === undefined || v === '') && OPTIONAL_KEYS.has(k)) continue
         lines.push(`${k}: ${typeof v === 'string' ? v : String(v)}`)
     }
     lines.push('---')
@@ -60,6 +60,7 @@ export function parseFrontMatter(content: string): TaskFrontMatter | null {
         updated_at: obj.updated_at ?? obj.created_at,
         title: obj.title ?? '',
         label: obj.label || undefined,
+        plan_key: obj.plan_key || undefined,
         reason: obj.reason || undefined
     }
 }
