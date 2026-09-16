@@ -418,8 +418,10 @@ export type VerifyRerunOutcome =
     | {outcome: 'fail'; status: number; tail: string}
     | {outcome: 'gap'; detail: string}
 
-/** The command word of a shell line, past any leading `VAR=value` assignments. */
-function leadingBin(line: string): string | null {
+/** The command word of a shell line, past any leading `VAR=value` assignments.
+ *  Exported for gate-evidence, which spawns the same shape of line and must
+ *  resolve the same runner against the same stripped PATH. */
+export function leadingBin(line: string): string | null {
     for (const tok of line.trim().split(/\s+/)) {
         if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(tok)) continue
         return tok

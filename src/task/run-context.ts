@@ -30,6 +30,7 @@ import {makeGit} from '../shared/git-runner.js'
 import {declaredDepNames, detectEcosystems, type EcosystemId} from '../workers/docs-ecosystems.js'
 import {newRunToken} from '../workers/research-cache.js'
 import {getFileInventory} from './file-inventory.js'
+import type {GateEvidence} from './gate-evidence.js'
 import {buildOrientation, type OrientationResult} from './orientation.js'
 import {HEALTH_MANIFEST_FILES} from './repo-health-check.js'
 import {worktreeTreeHash} from './tree-hash.js'
@@ -91,6 +92,17 @@ export async function manifestHash(cwd: string): Promise<string> {
     return h.digest('hex')
 }
 
+/** The classes the gate-evidence runner may execute. `serve` is absent by
+ *  definition: it never returns, and the parent has nothing to kill it with. */
+const EVIDENCE_CLASSES: ReadonlySet<ToolingClass> = new Set<ToolingClass>(['check', 'build'])
+
+/** Produce one tree's gate evidence, given the commands that may be run against it
+ *  and the hash of the tree they are being run against (see gate-evidence.ts). */
+export type EvidenceRunner = (
+    commands: readonly VerifiedCommand[],
+    treeHash: string | null
+) => Promise<GateEvidence>
+
 /** A verify-tooling verdict as the child reported it, before it is dated and stored. */
 export interface ToolingVerdict {
     cmd: string
@@ -128,6 +140,8 @@ export class RunContext {
     /** Commands verify-tooling has already refused under `_toolingHash`. */
     private _rejectedTooling = new Set<string>()
     private _toolingHash: string | undefined
+    private _evidence: {hash: string; value: GateEvidence} | undefined
+    private _evidenceQueue: Promise<unknown> = Promise.resolve()
 
     constructor(opts: RunContextOptions) {
         this.cwd = opts.cwd
@@ -228,6 +242,40 @@ export class RunContext {
         }
         const wanted = new Set(commands)
         return this._verifiedTooling.filter(v => wanted.has(v.cmd))
+    }
+
+    /**
+     * This gate session's evidence: the run's verified check and build commands,
+     * run against the CURRENT tree, at most once per tree (see gate-evidence.ts).
+     *
+     * The TREE HASH is the key, so a lint-fix or an autofix that changes the tree
+     * costs exactly one re-run and a second gate child on the same tree costs none.
+     * A tree git cannot hash is never cached: "unchanged" is not something we could
+     * claim about it.
+     */
+    gateEvidenceFor(produce: EvidenceRunner): Promise<GateEvidence> {
+        // Serialised rather than merely memoised: two gate children asking at once
+        // is exactly the duplicate suite run this cache exists to kill.
+        const next = this._evidenceQueue.then(() => this.freshEvidence(produce))
+        this._evidenceQueue = next.catch(() => {})
+        return next
+    }
+
+    private async freshEvidence(produce: EvidenceRunner): Promise<GateEvidence> {
+        const hash = await treeHash(this.cwd, this._signal ? {signal: this._signal} : {})
+        if (hash !== null && this._evidence?.hash === hash) return this._evidence.value
+        const value = await produce(
+            this._verifiedTooling.filter(v => EVIDENCE_CLASSES.has(v.class)),
+            hash
+        )
+        // {@link NOT_RUN} stands until something runs the command. This is that
+        // something, so the verdicts stop claiming nobody has.
+        for (const c of value.commands) {
+            const verified = this._verifiedTooling.find(v => v.cmd === c.cmd)
+            if (verified) verified.exitCode = c.exitCode
+        }
+        if (hash !== null) this._evidence = {hash, value}
+        return value
     }
 }
 

@@ -245,6 +245,7 @@ export function extractSpecForVerification(taskBody: string): string | null {
  * 'VerifyProbes'").
  */
 export interface ProbeRaw {
+    evidence: string[]
     substitution: string[]
     prohibition: string[]
     crossTaskDeletion: CrossTaskDeletion[]
@@ -389,6 +390,32 @@ const asLines = (raw: string[]): string[] => raw
 /** The table. ROW ORDER IS THE NOTICE-BLOCK ORDER IN THE PROMPT: `buildVerifyPrompt`
  *  flatMaps this array to build the notices, so reordering rows reorders the prompt. */
 const PROBE_ADAPTERS: readonly ProbeAdapter[] = [
+    /**
+     * The project's own check and build commands, ALREADY RUN by the parent against
+     * this exact tree (see gate-evidence.ts). The one row that supplies a RESULT
+     * rather than a warning, and the one row rule 1 switches on: a child handed the
+     * output spends its turn judging it instead of reproducing a suite the previous
+     * child already ran.
+     */
+    probeAdapter({
+        key: 'evidence',
+        stage: 'project checks',
+        empty: [],
+        findings: asLines,
+        ruleId: '1',
+        block: findings => [
+            'EVIDENCE (deterministic, run by the orchestrator against THIS tree, just now):',
+            "the project's own check and build commands have ALREADY BEEN RUN for you. Each",
+            'line is the command, how it ended, and the file holding its complete output:',
+            ...findings.map(f => `- ${f}`),
+            'Read those files with your `read` tool. A command listed here does not need',
+            'running again (rule 1) — re-run only a targeted subset: a single test file, or',
+            'one command whose reported result you have a concrete reason to doubt. SKIPPED',
+            'means the command could not run on this machine at all, so it is evidence of',
+            'nothing in either direction — rules 5 and 5c decide what its absence means.',
+            ''
+        ]
+    }),
     /**
      * PRE-EXISTING repo health (see health-baseline.ts): static checks that were
      * ALREADY failing, the same way, before this task started. They used to be an
@@ -753,6 +780,36 @@ export const BOUND_PROBE_KEYS: readonly BoundProbeKey[] = PROBE_ADAPTERS.filter(
 )
 
 /**
+ * Rule 1 in its two states, picked by whether the evidence row supplied anything.
+ *
+ * A child told "run the project's own commands" directly under a block listing
+ * those commands' results runs them again — the instruction and the notice
+ * contradict each other, and the instruction is the numbered one. So the rule
+ * moves with the evidence rather than sitting beside it. Without evidence (no
+ * verified tooling, or a caller that binds no probes) the original obligation is
+ * the only correct one.
+ */
+const RULE_1_RUN_THEM = [
+    "1. Run the project's OWN commands — the verbatim scripts / targets / binaries it",
+    '   ships (package.json scripts, Makefile targets, the command the spec names) —',
+    '   exactly as written, in the workspace as you found it. Judge the artifact or',
+    "   output they actually PRODUCE. The project's own command and its real output are",
+    "   the bar; also run the spec's VERIFY block, but it does not override that bar."
+]
+
+const RULE_1_ALREADY_RUN = [
+    "1. The project's OWN check and build commands have ALREADY BEEN RUN against this",
+    '   exact tree, and the EVIDENCE block above names each one, its real exit code and',
+    '   the file holding its complete output. READ THOSE FILES — that output is the bar,',
+    '   and a command reported there does not need running again. Re-run only a TARGETED',
+    '   SUBSET: a single test file, or one command whose reported result you have a',
+    '   concrete reason to doubt (its output contradicts itself, or it never ran).',
+    "   Judge the artifact or output the commands actually PRODUCED. Also run the spec's",
+    '   VERIFY block, and any command the evidence does not cover, but neither overrides',
+    '   that bar.'
+]
+
+/**
  * Build the verification child's prompt. Kept pure so the wording is unit-tested
  * without spawning pi. The contract: run the spec's own verification in the real
  * workspace, judge against ACCEPTANCE, and end on exactly one verdict line.
@@ -809,11 +866,7 @@ export function buildVerifyPrompt(
         'How to verify — verify the REAL, shipped deliverable exactly as an unaided fresh',
         'checkout (or CI run) would experience it:',
         '',
-        "1. Run the project's OWN commands — the verbatim scripts / targets / binaries it",
-        '   ships (package.json scripts, Makefile targets, the command the spec names) —',
-        '   exactly as written, in the workspace as you found it. Judge the artifact or',
-        "   output they actually PRODUCE. The project's own command and its real output are",
-        "   the bar; also run the spec's VERIFY block, but it does not override that bar.",
+        ...((findings.evidence?.length ?? 0) > 0 ? RULE_1_ALREADY_RUN : RULE_1_RUN_THEM),
         '',
         '2. Do NOT prepare, repair, reconfigure, or stand in for the run to make a check',
         '   pass. Concretely, to reach a green result you must NOT: set or export an',
