@@ -62,6 +62,18 @@ export interface QuestionRule {
     repair?: (q: ClarifyQuestion) => ClarifyQuestion
 }
 
+/**
+ * A decision the caller may SETTLE outside the dialog. The generator is
+ * stateless, so being told "already answered" in the transcript does not stop it
+ * re-drawing the same fork reworded; `match` is how the source recognises the
+ * re-draw and drops it.
+ */
+export interface QuestionTopic {
+    id: string
+    /** Matched against the plain-text question. */
+    match: (plain: string) => boolean
+}
+
 export interface QuestionSourceDeps {
     /**
      * Ask the model for the next question. `hint` is the corrective re-prompt to
@@ -74,6 +86,8 @@ export interface QuestionSourceDeps {
     /** Ordered quality rules. At most ONE fires per question: they share a single
      *  corrective re-prompt, spent by the first rule that detects a defect. */
     rules?: ReadonlyArray<QuestionRule>
+    /** Topics `settle` can close. A topic the caller never settles costs nothing. */
+    topics?: ReadonlyArray<QuestionTopic>
     cap?: number
     log?: (msg: string) => void
 }
@@ -87,16 +101,19 @@ export type NextQuestion =
  *
  * The interface is one method. Behind it: the cap, the duplicate backstop and its
  * strike budget, the NONE-vs-unparseable distinction, `pickQuestion`, the one-shot
- * budget shared by every quality rule, and the hint precedence between a format
- * re-prompt and a duplicate re-prompt.
+ * budget shared by every quality rule, the hint precedence between a format
+ * re-prompt and a duplicate re-prompt, and the settled-topic filter.
  */
 export function makeQuestionSource(deps: QuestionSourceDeps): {
     next: () => Promise<NextQuestion>
     asked: () => ReadonlyArray<string>
     reopen: () => void
+    settle: (topic: string) => void
 } {
     const cap = deps.cap ?? MAX_DIALOG_QUESTIONS
     const rules = deps.rules ?? []
+    const topics = deps.topics ?? []
+    const settled = new Set<string>()
     const asked: string[] = []
     let dupStrikes = 0
     let dupHint: string | null = null
@@ -137,12 +154,20 @@ export function makeQuestionSource(deps: QuestionSourceDeps): {
             }
             let picked = pickQuestion(parsed)!
             const plain = stripInlineMarkdown(picked.question)
-            // The duplicate backstop runs BEFORE any quality re-prompt: a question
-            // about to be discarded as a re-ask must not first buy itself an extra
-            // child call to be polished.
-            if (isDuplicateQuestion(asked, plain)) {
+            // A SETTLED topic is filtered here, ahead of both the dedupe backstop
+            // and any quality re-prompt: the caller has already recorded an answer,
+            // so this draw must not be shown, polished, or charged to the cap. It
+            // does spend a duplicate strike, because it IS one — a re-ask of a
+            // decision already in the transcript — and that budget is what stops a
+            // generator that can only redraw this fork from looping forever.
+            const settledTopic = topics.find(t => settled.has(t.id) && t.match(plain))
+            if (settledTopic || isDuplicateQuestion(asked, plain)) {
                 dupStrikes++
-                deps.log?.(`duplicate question, strike ${dupStrikes}/${MAX_DUP_STRIKES}`)
+                deps.log?.(
+                    settledTopic ?
+                        `settled topic "${settledTopic.id}" re-asked, strike ${dupStrikes}/${MAX_DUP_STRIKES}`
+                    :   `duplicate question, strike ${dupStrikes}/${MAX_DUP_STRIKES}`
+                )
                 hint = null
                 if (dupStrikes >= MAX_DUP_STRIKES) return {kind: 'exhausted', why: 'dups'}
                 dupHint = DUP_REPROMPT_HINT
@@ -185,5 +210,11 @@ export function makeQuestionSource(deps: QuestionSourceDeps): {
         dupHint = null
     }
 
-    return {next, asked: () => asked, reopen}
+    /** Close a topic the caller answered itself. Idempotent; an unknown id is a
+     *  no-op, so a caller may settle a topic it declared nothing for. */
+    function settle(topic: string): void {
+        settled.add(topic)
+    }
+
+    return {next, asked: () => asked, reopen, settle}
 }

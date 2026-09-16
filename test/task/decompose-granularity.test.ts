@@ -83,6 +83,22 @@ describe('isPlanShapeQuestion', () => {
         ).toBe(true)
     })
 
+    // The plural used to fall through, so the SAME fork redrawn as "the
+    // milestones" escaped the host's answer and was asked a second time.
+    test('fires on the plural redraw of the same fork', () => {
+        expect(
+            isPlanShapeQuestion(
+                'Should we follow the 12 milestones in §12 as-is, or split them more granularly?'
+            )
+        ).toBe(true)
+        expect(
+            isPlanShapeQuestion('Should the build phases each get their own task, or be split up?')
+        ).toBe(true)
+        expect(
+            isPlanShapeQuestion('Should the spec sections be decomposed into per-route tasks?')
+        ).toBe(true)
+    })
+
     test('stays off ordinary scope questions the user should still decide', () => {
         expect(isPlanShapeQuestion('Where should uploaded files be stored?')).toBe(false)
         expect(

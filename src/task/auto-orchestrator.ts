@@ -29,10 +29,12 @@ import {
     UNNAMED_COVERAGE_GAP,
     type CoverageVerdict,
     parseTaskList,
+    planKeyAt,
     checkOffTask,
     stampTaskInProgress,
     insertTaskAfter,
-    findResumableAutoDetailed
+    findResumableAutoDetailed,
+    type TaskEntry
 } from './auto-io.js'
 import {decideResume, UNATTENDED_STATES} from './resume-gap.js'
 import {
@@ -91,7 +93,8 @@ import {
     isPlanShapeQuestion,
     isTooCoarse,
     planShapeIsHostsToAnswer,
-    PLAN_SHAPE_ANSWER
+    PLAN_SHAPE_ANSWER,
+    PLAN_SHAPE_TOPIC
 } from './decompose-granularity.js'
 import {mandatesTestsInSameChange, rewriteBatchTestPlan} from './batch-test-task.js'
 import {
@@ -479,30 +482,39 @@ export function attachSpecRefs(titles: string[], refs: string[]): string[] {
  *
  * The plan listing strips the threaded "| decisions … | spec …" tail from each
  * title and keeps the human-readable head, so the model reads clean step names,
- * and it marks the current one "(THIS STEP)" — both confirmed by building a fence
+ * and it marks the current one `[this]` — both confirmed by building a fence
  * over threaded titles. The authoritative spec ref still rides on THIS step's own
  * title via attachSpecRefs.
+ *
+ * Every sibling used to read as unbuilt, which is a lie about the first half of
+ * any plan past step one: a step told its predecessors are "done in later runs"
+ * re-scaffolds what is already in the tree. The entries carry their own done
+ * state, so the listing states it.
  */
-export function buildScopeFence(titles: string[], currentIndex: number): string {
-    const n = titles.length
-    const listing = titles
-        .map((t, i) => {
-            const head = t.split(' | ')[0].trim()
-            const tag = i === currentIndex ? ' (THIS STEP)' : ''
-            return `[${i + 1}]${tag} ${head}`
+export function buildScopeFence(entries: readonly TaskEntry[], currentIndex: number): string {
+    const n = entries.length
+    const listing = entries
+        .map((e, i) => {
+            const head = e.title.split(' | ')[0].trim()
+            const marker =
+                i === currentIndex ? 'this'
+                : e.done ? 'done'
+                : 'later'
+            return `[${i + 1}] [${marker}] ${head}`
         })
         .join('\n')
     return (
         `PLAN CONTEXT — this task is STEP ${currentIndex + 1} of ${n} in an already-decomposed plan. `
-        + `Each step below is implemented by its OWN separate run; the others are NOT your job and `
-        + `are done in later runs. Implement ONLY the slice named in "Task" below.\n\n`
+        + `Each step below is implemented by its OWN separate run: a [done] step is ALREADY BUILT and `
+        + `in the tree (build on it — never rebuild, duplicate or re-scaffold it), a [later] step is `
+        + `not built yet and is NOT your job. Implement ONLY the slice named in "Task" below.\n\n`
         + `The design/spec document the task references describes the WHOLE system across all ${n} `
         + `steps. Read it to get exact names, types, and signatures for YOUR step and to understand `
         + `how your step fits — but DO NOT design, scaffold, schema, route, page, query, component, or `
         + `test anything that belongs to another step listed below. Your GOAL / CONSTRAINTS / `
         + `KNOWN-UNKNOWNS must cover only THIS step's slice. Do not pull in tables, endpoints, pages, `
         + `components, or flows owned by a later step.\n\n`
-        + `The full plan (these run separately — do NOT implement them here):\n${listing}`
+        + `The full plan (these run separately — do NOT implement the [later] ones here):\n${listing}`
     )
 }
 
@@ -517,11 +529,12 @@ export function buildScopeFence(titles: string[], currentIndex: number): string 
  * `bun run test` yields it while a plain-prose defect yields undefined and only the
  * file pin applies.
  */
-function buildStepFence(titles: string[], currentIndex: number): string {
-    const base = buildScopeFence(titles, currentIndex)
-    const repairFile = parseRepairTitleFile(titles[currentIndex] ?? '')
+export function buildStepFence(entries: readonly TaskEntry[], currentIndex: number): string {
+    const base = buildScopeFence(entries, currentIndex)
+    const title = entries[currentIndex]?.title ?? ''
+    const repairFile = parseRepairTitleFile(title)
     if (!repairFile) return base
-    return `${base}\n\n${buildRepairScopeFence(repairFile, extractFailingCommand(titles[currentIndex] ?? ''))}`
+    return `${base}\n\n${buildRepairScopeFence(repairFile, extractFailingCommand(title))}`
 }
 
 /**
@@ -772,6 +785,7 @@ export async function elicitClarifications(
             ),
         formatHint: PLAN_FORMAT_HINT,
         rules: CLARIFY_QUALITY_RULES,
+        topics: [{id: PLAN_SHAPE_TOPIC, match: isPlanShapeQuestion}],
         cap: MAX_CLARIFY_QUESTIONS,
         log: msg => logPlanDebug(cwd, `clarify: ${msg}`)
     })
@@ -797,6 +811,10 @@ export async function elicitClarifications(
                 `plan-shape question answered host-side (not the triage): ${plainQ.replace(/\s+/g, ' ').slice(0, 120)}`
             )
             transcript.add('host-set', plainQ, PLAN_SHAPE_ANSWER)
+            // The transcript entry alone never stopped the re-draw: the generator
+            // is stateless and reworded the same fork (often into the plural),
+            // which then reached the user or the triage as if it were open.
+            source.settle(PLAN_SHAPE_TOPIC)
             continue
         }
         // Answer-side triage (grill parity): if the inlined spec already settles
@@ -1402,10 +1420,12 @@ export async function planAuto(
         append: appendDeclaredScripts
     })
 
-    // Persist the TASK-MAPPED requirements keyed by the (spec-ref-attached) title
-    // each task will carry. With only cross-cutting entries travelling, the
-    // mapped ones shape the title list and then vanish, and a task can narrow a
-    // requirement out of its own spec with nothing to stop it.
+    // Persist the TASK-MAPPED requirements under the plan key of the entry each
+    // was mapped to — the same key `buildAutoBody` is about to write onto the
+    // checkbox line, so the two sides of the join are minted from one index. With
+    // only cross-cutting entries travelling, the mapped ones shape the title list
+    // and then vanish, and a task can narrow a requirement out of its own spec
+    // with nothing to stop it.
     // Inert until the owned-requirements injection is wired into the phase
     // prompts; recorded regardless so the plan's mapping is auditable per run.
     if (best.accounting && best.accounting.mapped.length > 0) {
@@ -1413,7 +1433,12 @@ export async function planAuto(
             cwd,
             best.accounting.mapped
                 .filter(m => m.task >= 1 && m.task <= titles.length)
-                .map(m => ({quote: m.req.quote, anchor: m.req.anchor, title: titles[m.task - 1]}))
+                .map(m => ({
+                    quote: m.req.quote,
+                    anchor: m.req.anchor,
+                    key: planKeyAt(m.task - 1),
+                    title: titles[m.task - 1]
+                }))
         )
     }
 
@@ -1792,10 +1817,8 @@ export async function runAutoLoop(
                     // matters when refine runs fresh (a resumed task past refine ignores
                     // it), but always supplied so a resume that restarts at refine is
                     // fenced too.
-                    planContext: buildStepFence(
-                        entries.map(e => e.title),
-                        next.index
-                    ),
+                    planContext: buildStepFence(entries, next.index),
+                    ...(next.key !== undefined && {planKey: next.key}),
                     onStart:
                         resumeId ? undefined : (
                             innerId => stampTaskInProgress(cwd, id, next.index, innerId, next.title)
@@ -1851,10 +1874,7 @@ export async function runAutoLoop(
                     title: next.title,
                     tag: id,
                     // Fence an AUTOFIX re-run against re-expanding the whole spec.
-                    planContext: buildStepFence(
-                        entries.map(e => e.title),
-                        next.index
-                    ),
+                    planContext: buildStepFence(entries, next.index),
                     // res.ok === true means runner.run() completed, so res.taskId is the
                     // allocated TASK_NNNN id (never empty here). The parent task-list
                     // check-off runs after verify passes/accepts and before the commit,

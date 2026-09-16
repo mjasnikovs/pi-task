@@ -83,6 +83,9 @@ export function planShapeIsHostsToAnswer(ownable: number): boolean {
     return ownable >= MIN_REQUIREMENTS_FOR_PLAN_SHAPE
 }
 
+/** The clarify dialog's name for this fork — see `QuestionSource.settle`. */
+export const PLAN_SHAPE_TOPIC = 'plan-shape'
+
 /**
  * Does this clarify question decide how finely the feature is CUT into tasks?
  *
@@ -91,13 +94,11 @@ export function planShapeIsHostsToAnswer(ownable: number): boolean {
  * over-eager classifier would replace a real user decision with the host's.
  * Matched against the plain-text question.
  *
- * BOTH halves must hold — a breakdown phrase AND a plan-unit noun — and the unit
- * list is SINGULAR except for tasks. Measured across the units it names:
- *   milestone / section / step / phase / task / tasks   fire
- *   milestones / sections / steps / phases              do NOT
- * So "one task per milestone, or split smaller?" fires, while the same fork
- * phrased "follow the milestones as-is, or split more granularly?" does not —
- * the breakdown half matches, the plural unit does not.
+ * BOTH halves must hold — a breakdown phrase AND a plan-unit noun, singular or
+ * plural. The plural used to be excluded, which left "follow the milestones
+ * as-is, or split more granularly?" unmatched: the same fork, redrawn in the
+ * plural, went to the user (or the triage) after the host had already settled it.
+ * Number is not a signal about what the question decides.
  */
 export function isPlanShapeQuestion(question: string): boolean {
     const q = question.toLowerCase()
@@ -108,7 +109,7 @@ export function isPlanShapeQuestion(question: string): boolean {
         )
     if (!aboutBreakdown) return false
     // …and offer a coarse/fine choice over the plan's own units.
-    return /\b(milestone|section|step|phase|task|tasks)\b/.test(q)
+    return /\b(milestones?|sections?|steps?|phases?|tasks?)\b/.test(q)
 }
 
 /**

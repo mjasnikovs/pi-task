@@ -4,9 +4,11 @@ import {
     pickQuestion,
     isNoneReply,
     MAX_DIALOG_QUESTIONS,
-    type QuestionRule
+    type QuestionRule,
+    type QuestionTopic
 } from '../../src/task/question-source.js'
 import {MAX_DUP_STRIKES} from '../../src/task/question-dedup.js'
+import {isPlanShapeQuestion, PLAN_SHAPE_TOPIC} from '../../src/task/decompose-granularity.js'
 
 /**
  * The whole state machine, driven as strings. `makeQuestionSource` takes its
@@ -167,6 +169,85 @@ describe('makeQuestionSource', () => {
 
     test('the default cap is the one both dialogs used', () => {
         expect(MAX_DIALOG_QUESTIONS).toBe(8)
+    })
+
+    describe('settle', () => {
+        const shape: QuestionTopic = {
+            id: 'plan-shape',
+            match: p => /granular|split/i.test(p)
+        }
+
+        // The host answers this fork itself; the generator is stateless and
+        // redraws it reworded, which is how it reached the user a second time.
+        test('a settled topic is dropped before dedupe and never charged to the cap', async () => {
+            const s = scripted([
+                Q('How granular should the task breakdown be across milestones?'),
+                Q('Should the milestones be split into smaller per-route tasks?'),
+                Q('Which database engine should back the session cache?')
+            ])
+            const src = makeQuestionSource({
+                generate: s.generate,
+                formatHint: FORMAT_HINT,
+                topics: [shape]
+            })
+            const first = await src.next()
+            expect(first.kind).toBe('question')
+            src.settle('plan-shape')
+            const second = await src.next()
+            expect(second.kind).toBe('question')
+            if (second.kind === 'question') {
+                expect(second.plain).toContain('database engine')
+                // The filtered redraw did not consume a slot: this is question 2.
+                expect(second.index).toBe(2)
+            }
+            expect(src.asked()).toHaveLength(2)
+        })
+
+        test('an unsettled topic is asked as usual', async () => {
+            const s = scripted([Q('How granular should the task breakdown be across milestones?')])
+            const src = makeQuestionSource({
+                generate: s.generate,
+                formatHint: FORMAT_HINT,
+                topics: [shape]
+            })
+            expect((await src.next()).kind).toBe('question')
+        })
+
+        // The real pair, as /task-auto wires it: the host answers the fork once,
+        // and the generator's plural redraw — which used to slip past both
+        // `isPlanShapeQuestion` and the transcript — never reaches the user.
+        test('the plan-shape fork is asked once, plural redraw included', async () => {
+            const s = scripted([
+                Q('Should each of the 12 milestones become one task, or be split further?'),
+                Q('Should the milestones in §12 be decomposed into per-route tasks?'),
+                Q('Which database engine should back the session cache?')
+            ])
+            const src = makeQuestionSource({
+                generate: s.generate,
+                formatHint: FORMAT_HINT,
+                topics: [{id: PLAN_SHAPE_TOPIC, match: isPlanShapeQuestion}]
+            })
+            const first = await src.next()
+            expect(first.kind).toBe('question')
+            src.settle(PLAN_SHAPE_TOPIC)
+            const second = await src.next()
+            expect(second.kind).toBe('question')
+            if (second.kind === 'question') expect(second.plain).toContain('database engine')
+            expect(src.asked().filter(q => isPlanShapeQuestion(q))).toHaveLength(1)
+        })
+
+        // A generator that can only redraw the settled fork must still terminate.
+        test('a generator stuck on a settled topic strikes out rather than looping', async () => {
+            const s = scripted([Q('How granular should the task breakdown be across milestones?')])
+            const src = makeQuestionSource({
+                generate: s.generate,
+                formatHint: FORMAT_HINT,
+                topics: [shape]
+            })
+            src.settle('plan-shape')
+            expect(await src.next()).toEqual({kind: 'exhausted', why: 'dups'})
+            expect(s.hints).toHaveLength(MAX_DUP_STRIKES)
+        })
     })
 
     describe('quality rules', () => {

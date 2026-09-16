@@ -80,6 +80,7 @@ export interface GateDeps {
             resumeId?: string
             onStart?: (taskId: string) => void | Promise<void>
             planContext?: string
+            planKey?: string
             fixInstruction?: string
         }
     ) => Promise<RunSingleTaskResult>
