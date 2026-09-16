@@ -47,6 +47,12 @@ import {
 import {buildContractsVerifyBlock} from './contracts.js'
 import {findSkipEscapes, skipEscapeVerifyFindings} from './skip-escape.js'
 import {crossTaskDeletionVerifyFindings, type CrossTaskDeletion} from './task-provenance.js'
+import {
+    classifyHealthDelta,
+    inheritedHealthFindings,
+    type HealthBaseline,
+    type HealthSignal
+} from './health-baseline.js'
 
 /**
  * The verification child gets exactly two tools: `read` and `bash`.
@@ -80,6 +86,7 @@ export interface VerifyPass {
     failClass?: undefined
     unobserved?: undefined
     crossTaskDeletions?: undefined
+    inheritedHealth?: string
 }
 
 /**
@@ -107,8 +114,16 @@ export interface VerifyFail {
      *  can record each as a durable debt if the user ACCEPTs anyway — the deletion
      *  then ships in the next commit and the final gate must re-check it. */
     crossTaskDeletions?: CrossTaskDeletion[]
+    inheritedHealth?: string
 }
 
+/**
+ * `inheritedHealth` is declared on BOTH halves: the repo's own static checks that
+ * were already failing the same way before this task ran (health-baseline.ts).
+ * A task can verify perfectly in a repo that arrived red, so a PASS carries it
+ * too — dropping it on the pass path is where a sibling's defect disappears until
+ * the run-end gate rediscovers it with nobody's name on it.
+ */
 export type VerifyOutcome = VerifyPass | VerifyFail
 
 /**
@@ -239,17 +254,20 @@ export interface ProbeRaw {
     scriptEscape: string[]
     runnerGlob: string[]
     testAssembly: string[]
+    repoHealth: string[]
 }
 
 /** Stable identity of one probe channel: table row ↔ findings-bag key. */
 export type ProbeKey = keyof ProbeRaw
 
 /**
- * The channels a CALLER binds — every key but `skipEscape`, which is pure text
- * analysis of `deps.spec` and is sourced inside its own table row, so it is never
- * absent and never bound from outside.
+ * The channels a CALLER binds. Two keys are not among them: `skipEscape`, which is
+ * pure text analysis of `deps.spec` and is sourced inside its own table row, and
+ * `repoHealth`, whose findings are the classified DELTA of a check
+ * `runWorkVerification` has already run — only that function holds both the
+ * baseline and the result, so only it can source the row.
  */
-export type BoundProbeKey = Exclude<ProbeKey, 'skipEscape'>
+export type BoundProbeKey = Exclude<ProbeKey, 'skipEscape' | 'repoHealth'>
 
 /**
  * The bound probes: one optional thunk per channel, typed to that channel's raw
@@ -261,6 +279,16 @@ export type VerifyProbes = {[K in BoundProbeKey]?: () => Promise<ProbeRaw[K]>}
 
 /** The finding lines each probe channel contributed. Absent/empty ⇒ no block. */
 export type ProbeFindings = Partial<Record<ProbeKey, string[]>>
+
+/**
+ * Findings `runWorkVerification` computed ITSELF, for the rows no caller can bind.
+ * The repo-health delta needs both the baseline and this run's result, and only
+ * that function holds both — so the row is sourced from here rather than from
+ * `deps.probes`, where a caller could supply a delta it cannot know.
+ */
+interface PrecomputedProbes {
+    repoHealth: string[]
+}
 
 /** What one row's probe produced: the raw dep value plus its finding lines. */
 interface ProbeResult {
@@ -286,7 +314,11 @@ interface ProbeAdapter {
     stage?: string
     /** Run this row against the deps: skipped when its dep field is absent,
      *  degraded to the row's empty value when the probe throws. Never throws. */
-    run: (deps: VerificationDeps, onStage: (label: string) => void) => Promise<ProbeResult>
+    run: (
+        deps: VerificationDeps,
+        onStage: (label: string) => void,
+        pre: PrecomputedProbes
+    ) => Promise<ProbeResult>
     /** The notice block these findings produce. Called only when non-empty. */
     block: (findings: string[]) => string[]
     /** The numbered rule this row's notice cites. */
@@ -305,9 +337,12 @@ function probeAdapter<K extends ProbeKey>(row: {
     key: K
     stage?: string
     /** Where this row's probe comes from. Default: `deps.probes[key]`, the thunk
-     *  the caller bound. Only the skip-escape row overrides it (it reads the spec
-     *  the deps already carry, so nothing needs binding). Absent ⇒ skipped. */
-    source?: (deps: VerificationDeps) => (() => Promise<ProbeRaw[K]>) | undefined
+     *  the caller bound. The skip-escape row overrides it (it reads the spec the
+     *  deps already carry) and so does the repo-health row (`pre`). Absent ⇒ skipped. */
+    source?: (
+        deps: VerificationDeps,
+        pre: PrecomputedProbes
+    ) => (() => Promise<ProbeRaw[K]>) | undefined
     /** Value used when the probe is absent OR throws. */
     empty: ProbeRaw[K]
     /** Raw probe value → prompt finding lines. */
@@ -330,8 +365,8 @@ function probeAdapter<K extends ProbeKey>(row: {
         block,
         ruleId,
         rule,
-        run: async (deps, onStage) => {
-            const probe = source(deps)
+        run: async (deps, onStage, pre) => {
+            const probe = source(deps, pre)
             // Probes are INDEPENDENTLY OPTIONAL: an absent probe is "skipped", and a
             // probe that throws degrades to its own empty value — it is a sharpener,
             // never a blocker, so a fault in one can neither block the gate nor
@@ -354,6 +389,42 @@ const asLines = (raw: string[]): string[] => raw
 /** The table. ROW ORDER IS THE NOTICE-BLOCK ORDER IN THE PROMPT: `buildVerifyPrompt`
  *  flatMaps this array to build the notices, so reordering rows reorders the prompt. */
 const PROBE_ADAPTERS: readonly ProbeAdapter[] = [
+    /**
+     * PRE-EXISTING repo health (see health-baseline.ts): static checks that were
+     * ALREADY failing, the same way, before this task started. They used to be an
+     * absolute FAIL that short-circuited the whole pass, so the task answered for
+     * a sibling's defect and its own probe findings were never computed. As a row
+     * they are stated to the child instead: judge this task's work, and do not
+     * read a check that was red on arrival as evidence about it either way.
+     */
+    probeAdapter({
+        key: 'repoHealth',
+        source: (_deps, pre) => () => Promise.resolve(pre.repoHealth),
+        empty: [],
+        findings: asLines,
+        ruleId: '4h',
+        block: findings => [
+            'INHERITED REPO-HEALTH NOTICE (deterministic, computed by the orchestrator by',
+            "re-running the project's own static checks and comparing them against the",
+            'baseline taken before this task started): these checks were ALREADY failing,',
+            'with the same exit code, before any of this work existed:',
+            ...findings.map(f => `- ${f}`),
+            "They are NOT this task's defect and must not decide this verdict — rule 4h.",
+            'Equally, a red check that was red before proves nothing about this work: do',
+            'not read its output as evidence that the shipped behavior is correct.',
+            ''
+        ],
+        rule: [
+            "4h. AN INHERITED RED CHECK IS NOT THIS TASK'S FAIL, AND NOT ITS PROOF — when the",
+            '   INHERITED REPO-HEALTH NOTICE above names a check, that check failed identically',
+            '   before this task ran. Do NOT fail this work for it: the defect belongs to',
+            '   whatever put it there, it is recorded as durable debt, and the run-end gate',
+            '   re-checks it. Do NOT lean on it either — a command that was already exiting',
+            "   non-zero tells you nothing about this task's behavior, so verify that behavior",
+            '   another way. A check that is failing DIFFERENTLY, or one absent from the notice,',
+            "   is this task's to answer for in the ordinary way."
+        ]
+    }),
     /**
      * Deterministic self-verification probe (see substitution-probe.ts): test
      * files this task itself authored or changed, with their added-line counts.
@@ -965,7 +1036,15 @@ export interface VerificationDeps {
      * FAIL (the existing verify-FAIL outcome → the AUTOFIX/ACCEPT/dismiss picker).
      * Injected so tests fake it; ABSENT → skipped (a pass), keeping the pass path a
      * pure no-op for callers/tests that do not wire it. */
-    repoHealth?: () => Promise<{ok: boolean; reason: string}>
+    repoHealth?: () => Promise<{ok: boolean; reason: string} & HealthSignal>
+    /**
+     * What those same checks said BEFORE this task ran (see health-baseline.ts).
+     * Consulted only when `repoHealth` comes back red, and it is what decides
+     * whose defect that is: a check failing the same way before is `pre-existing`
+     * and becomes a probe row, not a FAIL. ABSENT, or null, → every red check is
+     * this task's, which is the behavior that shipped before the baseline existed.
+     */
+    healthBaseline?: () => Promise<HealthBaseline | null>
     /**
      * Progress hook for the DETERMINISTIC stage — the repo-health run plus the
      * `probes` below, all of which run BEFORE the child (and therefore before the
@@ -1037,15 +1116,28 @@ export async function runWorkVerification(deps: VerificationDeps): Promise<Verif
             // progress reporting must never break the gate
         }
     }
+    // DIFFERENTIAL, not absolute. A red check is this task's FAIL only when the
+    // baseline says it was not already red the same way; otherwise it is stated to
+    // the child as a probe row and recorded as inherited debt, and the pass
+    // continues — the short-circuit is what used to throw away every deterministic
+    // finding about the task's OWN work.
+    const pre: PrecomputedProbes = {repoHealth: []}
+    let inheritedHealth: string | undefined
     if (deps.repoHealth) {
         stage('repo health')
         const h = await deps.repoHealth()
         if (!h.ok) {
-            return {ok: false, failClass: 'repo-health', reason: `repo health: ${h.reason}`}
+            const baseline = deps.healthBaseline ? await deps.healthBaseline() : null
+            if (classifyHealthDelta(baseline?.outcome ?? null, h) === 'regressed') {
+                return {ok: false, failClass: 'repo-health', reason: `repo health: ${h.reason}`}
+            }
+            pre.repoHealth = inheritedHealthFindings(h)
+            inheritedHealth = `repo health: ${h.reason} — already failing before this task`
         }
     }
+    const inherited = inheritedHealth === undefined ? {} : {inheritedHealth}
     if (!deps.spec || deps.spec.trim().length === 0) {
-        return {ok: true, reason: 'no spec to verify'}
+        return {ok: true, reason: 'no spec to verify', ...inherited}
     }
     // Every deterministic probe, one table row each (see PROBE_ADAPTERS): the row
     // knows which dep it reads, what it degrades to, and which notice block its
@@ -1054,7 +1146,7 @@ export async function runWorkVerification(deps: VerificationDeps): Promise<Verif
     const findings: ProbeFindings = {}
     const rawResults = new Map<ProbeKey, unknown>()
     for (const adapter of PROBE_ADAPTERS) {
-        const result = await adapter.run(deps, stage)
+        const result = await adapter.run(deps, stage, pre)
         findings[adapter.key] = result.findings
         rawResults.set(adapter.key, result.raw)
     }
@@ -1106,7 +1198,8 @@ export async function runWorkVerification(deps: VerificationDeps): Promise<Verif
             return {
                 ok: false,
                 failClass: 'harness-fault',
-                reason: `${VERIFY_FAIL_PREFIX['harness-fault']} ${msg}`
+                reason: `${VERIFY_FAIL_PREFIX['harness-fault']} ${msg}`,
+                ...inherited
             }
         }
         // Capture the environment facts the child shared — regardless of verdict
@@ -1132,11 +1225,12 @@ export async function runWorkVerification(deps: VerificationDeps): Promise<Verif
                 failClass: 'harness-fault',
                 reason:
                     'verify child mutated repo state and its verdict was discarded '
-                    + `(state restored: ${mutation.detail.slice(0, 200)})`
+                    + `(state restored: ${mutation.detail.slice(0, 200)})`,
+                ...inherited
             }
         }
         const verdict = parseVerifyVerdict(text)
-        if (verdict.pass) return {ok: true}
+        if (verdict.pass) return {ok: true, ...inherited}
         if (verdict.detail === 'no verdict emitted' && attempt === 1) continue
         // Structured cross-task deletion findings ride on every FAIL outcome: if the
         // human ACCEPTs the failing artifact, the deletions ship in the next commit
@@ -1151,7 +1245,8 @@ export async function runWorkVerification(deps: VerificationDeps): Promise<Verif
                 unobserved: true,
                 failClass: 'unobserved',
                 reason: `work unobserved: ${verdict.detail}`,
-                ...deletions
+                ...deletions,
+                ...inherited
             }
         }
         return {
@@ -1160,7 +1255,8 @@ export async function runWorkVerification(deps: VerificationDeps): Promise<Verif
             reason: `work did not verify: ${verdict.detail}${
                 verdict.detail === 'no verdict emitted' ? ' (after verify retry)' : ''
             }`,
-            ...deletions
+            ...deletions,
+            ...inherited
         }
     }
 }

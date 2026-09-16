@@ -7,6 +7,8 @@
  * `## coverage`. The checkbox list under `## tasks` is the resume cursor, and the
  * loop finds its next step with `entries.find(e => !e.done)` rather than a
  * remembered position.
+ *
+ * A checkbox line reads `- [ ] P01 TASK_0006 a2  title` — see {@link ENTRY_RE}.
  */
 import * as fsp from 'node:fs/promises'
 import * as path from 'node:path'
@@ -20,10 +22,20 @@ import type {AutoResumeCandidate} from './resume-gap.js'
 const AUTO_FILE_RE = /^(TASK_AUTO_\d{4,})\.md$/
 
 export interface TaskEntry {
+    /** Position in the list — shifts when a repair step is spliced in. */
     index: number
+    /**
+     * The entry's stable identity, allocated at plan time and never reused.
+     * `index` moves and `title` is prose a later pass may rewrite; this is what
+     * the owned-requirements ledger joins on. Absent on an AUTO file written
+     * before the key existed, where the title join is still the only one there is.
+     */
+    key?: string
     title: string
     done: boolean
     producedId?: string
+    /** How many implementation attempts this entry has had. */
+    attempts?: number
 }
 
 export async function allocateAutoId(cwd: string): Promise<string> {
@@ -103,29 +115,76 @@ export function parseCoverageVerdict(raw: string): CoverageVerdict | null {
 }
 
 const CHECKBOX_RE = /^- \[([ xX])\]\s+(.+?)\s*$/
-const PRODUCED_ID_RE = /^(TASK_\d{4,})\s{2,}(.+)$/
+
+/**
+ * The checkbox line grammar: `- [ ] P01 TASK_0006 a2  title`.
+ *
+ * Every field is optional and each is followed by ONE space; the title is set off
+ * by an EXTRA space. That two-space delimiter is what keeps the grammar
+ * unambiguous against prose: a title of its own may begin `TASK_0006 is broken`
+ * or `(auto) …` and is read whole, because a single space never separates a field
+ * from a title. Both legacy forms — `TASK_0006  title` and a bare `title` — are
+ * the same grammar with fields missing, so no migration pass is needed on read.
+ */
+const ENTRY_RE = /^(?:(?:(P\d{2,}) )?(?:(TASK_\d{4,}) )?(?:a(\d+) )? )?(.+)$/
+
+function parseEntryLine(line: string, index: number): TaskEntry | null {
+    const m = CHECKBOX_RE.exec(line.trim())
+    if (!m) return null
+    const f = ENTRY_RE.exec(m[2].trim())
+    if (!f) return null
+    const [, key, producedId, attempts, title] = f
+    // Attempts are only ever written alongside an id (they are minted when the
+    // inner task starts), so a bare `a7  …` is a title, not a field.
+    const keyed = key !== undefined || producedId !== undefined
+    return {
+        index,
+        done: m[1].toLowerCase() === 'x',
+        // A line carries a stamped TASK_NNNN id both when done (the completed
+        // inner task) and when merely started — an unchecked, stamped line is an
+        // in-progress entry whose inner task can be resumed.
+        ...(key !== undefined && {key}),
+        ...(producedId !== undefined && {producedId}),
+        ...(keyed && attempts !== undefined && {attempts: parseInt(attempts, 10)}),
+        title: keyed || attempts === undefined ? title.trim() : m[2].trim()
+    }
+}
+
+/** Render one entry back into the line grammar. */
+function renderEntryLine(e: Omit<TaskEntry, 'index'>): string {
+    const fields = [e.key, e.producedId, e.attempts === undefined ? undefined : `a${e.attempts}`]
+        .filter((f): f is string => f !== undefined && f.length > 0)
+        .join(' ')
+    return `- [${e.done ? 'x' : ' '}] ${fields.length > 0 ? `${fields}  ` : ''}${e.title}`
+}
+
+/** The plan key for the `index`th entry of a freshly planned list. */
+export function planKeyAt(index: number): string {
+    return `P${String(index + 1).padStart(2, '0')}`
+}
+
+/**
+ * The lowest key number no entry in `entries` holds. Keys are allocated 1:1 with
+ * plan entries, so an unkeyed legacy list has implicitly spent its first N
+ * numbers — counting it in keeps a spliced repair step from minting a key an
+ * eventual migration would hand to an existing entry.
+ */
+export function nextPlanKey(entries: readonly TaskEntry[]): string {
+    const highest = entries.reduce(
+        (max, e) => Math.max(max, e.key ? parseInt(e.key.slice(1), 10) : 0),
+        entries.length
+    )
+    return planKeyAt(highest)
+}
 
 /** Parse the "## tasks" checkbox list. */
 export function parseTaskList(body: string): TaskEntry[] {
     const section = extractSection(body, 'tasks')
     if (section === null) return []
     const entries: TaskEntry[] = []
-    let index = 0
     for (const line of section.split('\n')) {
-        const m = CHECKBOX_RE.exec(line.trim())
-        if (!m) continue
-        const done = m[1].toLowerCase() === 'x'
-        const rest = m[2].trim()
-        // A line carries a stamped TASK_NNNN id both when done (the completed
-        // inner task) and when merely started — an unchecked, stamped line is an
-        // in-progress entry whose inner task can be resumed.
-        const idm = PRODUCED_ID_RE.exec(rest)
-        if (idm) {
-            entries.push({index, title: idm[2].trim(), done, producedId: idm[1]})
-        } else {
-            entries.push({index, title: rest, done})
-        }
-        index++
+        const entry = parseEntryLine(line, entries.length)
+        if (entry) entries.push(entry)
     }
     return entries
 }
@@ -140,7 +199,9 @@ export function buildAutoBody(
     titles: string[],
     coverage = ''
 ): string {
-    const tasks = titles.map(t => `- [ ] ${t}`).join('\n')
+    const tasks = titles
+        .map((t, i) => renderEntryLine({key: planKeyAt(i), title: t, done: false}))
+        .join('\n')
     return (
         `\n## feature prompt\n\n${feature.trim() || '(none)'}\n\n`
         + `## clarifications\n\n${clarifications.trim() || '(none)'}\n\n`
@@ -149,12 +210,16 @@ export function buildAutoBody(
     )
 }
 
-/** Rewrite the Nth checkbox line of the "## tasks" section in place. */
+/**
+ * Rewrite the Nth checkbox line of the "## tasks" section in place. `render`
+ * receives the line as parsed, so a rewrite that only changes one field carries
+ * the others — a check-off must not drop the key the ownership join reads.
+ */
 async function rewriteTaskLine(
     cwd: string,
     id: string,
     index: number,
-    render: () => string,
+    render: (entry: TaskEntry) => string,
     label: string
 ): Promise<void> {
     const {body} = await readTaskFile(cwd, id)
@@ -162,10 +227,11 @@ async function rewriteTaskLine(
     const lines = section.split('\n')
     let seen = -1
     for (let i = 0; i < lines.length; i++) {
-        if (!CHECKBOX_RE.test(lines[i].trim())) continue
+        const entry = parseEntryLine(lines[i], seen + 1)
+        if (!entry) continue
         seen++
         if (seen === index) {
-            lines[i] = render()
+            lines[i] = render(entry)
             break
         }
     }
@@ -189,7 +255,7 @@ export async function checkOffTask(
         cwd,
         id,
         index,
-        () => (producedId ? `- [x] ${producedId}  ${title}` : `- [x] ${title}`),
+        e => renderEntryLine({...e, done: true, title, producedId: producedId || undefined}),
         'checkOffTask'
     )
 }
@@ -199,6 +265,9 @@ export async function checkOffTask(
  * the inner task is allocated. This links the AUTO entry to its in-progress
  * inner task so /task-auto-resume can continue it from its saved phase instead
  * of starting a brand-new task — matching how /task-resume behaves.
+ *
+ * The first stamp is also where the attempt counter is minted: an entry under way
+ * has had one attempt.
  */
 export async function stampTaskInProgress(
     cwd: string,
@@ -211,18 +280,14 @@ export async function stampTaskInProgress(
         cwd,
         id,
         index,
-        () => `- [ ] ${producedId}  ${title}`,
+        e => renderEntryLine({...e, done: false, title, producedId, attempts: e.attempts ?? 1}),
         'stampTaskInProgress'
     )
 }
 
-/** The bare title of a checkbox line (id stamp stripped), or null if not one. */
+/** The bare title of a checkbox line (fields stripped), or null if not one. */
 function entryTitle(line: string): string | null {
-    const m = CHECKBOX_RE.exec(line.trim())
-    if (!m) return null
-    const rest = m[2].trim()
-    const idm = PRODUCED_ID_RE.exec(rest)
-    return idm ? idm[2].trim() : rest
+    return parseEntryLine(line, 0)?.title ?? null
 }
 
 /**
@@ -261,13 +326,13 @@ export async function insertTaskAfter(
     // title (checked or not) means the plan already carries this step, wherever it
     // sits relative to afterIndex — never add a second one.
     if (lines.some(l => entryTitle(l) === clean)) return false
-    let seen = -1
+    const entries: TaskEntry[] = []
     let insertAt = -1
     for (let i = 0; i < lines.length; i++) {
-        if (!CHECKBOX_RE.test(lines[i].trim())) continue
-        seen++
-        insertAt = i + 1
-        if (seen === afterIndex) break
+        const entry = parseEntryLine(lines[i], entries.length)
+        if (!entry) continue
+        entries.push(entry)
+        if (entries.length - 1 <= afterIndex) insertAt = i + 1
     }
     // An out-of-range afterIndex is not an error: the loop above leaves `insertAt`
     // just past the LAST checkbox, so the entry is appended rather than lost — a
@@ -277,7 +342,11 @@ export async function insertTaskAfter(
     // The guard below is the different case: a `## tasks` section with NO checkbox
     // lines at all, where there is no position to splice into.
     if (insertAt === -1) return false
-    lines.splice(insertAt, 0, `- [ ] ${clean}`)
+    lines.splice(
+        insertAt,
+        0,
+        renderEntryLine({key: nextPlanKey(entries), title: clean, done: false})
+    )
     await setTaskSection(cwd, id, 'tasks', lines.join('\n'))
     return true
 }

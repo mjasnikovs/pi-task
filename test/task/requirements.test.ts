@@ -26,6 +26,7 @@ import {
     writeOwnedRequirements,
     readOwnedRequirements,
     ownedForTitle,
+    ownedForTask,
     buildOwnedRequirementsBlock,
     appendOwnedConstraints,
     type RequirementEntry
@@ -375,6 +376,42 @@ describe('obligation-passage recall floor', () => {
         expect(block).toContain('serves `/api` + static `dist/`')
         expect(block).toContain('the quote wins')
         expect(buildOwnedRequirementsBlock([])).toBe('')
+    })
+
+    // THE WS6 DEFECT. The join was normalised title equality, so any pass that
+    // rewrote a title — refine's own wording, a threaded spec ref, a repair
+    // splice's re-render — silently unowned every obligation mapped to that task.
+    // The key is allocated at plan time and nothing downstream rewrites it.
+    test('owned requirements: the key join survives a title rewrite; title is the legacy fallback', async () => {
+        const cwd = makeCwd()
+        const planned = 'Implement the Hono app entry | spec: @DESIGN/PROJECT.md'
+        await writeOwnedRequirements(cwd, [
+            {
+                quote: 'serves `/api` + static `dist/`',
+                anchor: '9. Build & run',
+                key: 'P03',
+                title: planned
+            },
+            {
+                quote: 'photos stored as bytea',
+                anchor: '1. Decisions',
+                key: 'P07',
+                title: 'Some other task'
+            }
+        ])
+        const owned = await readOwnedRequirements(cwd)
+        expect(owned[0].key).toBe('P03')
+        const rewritten = 'Implement the Hono app entry — SPA fallback for non-/api routes'
+        expect(ownedForTask(owned, {key: 'P03', title: rewritten}).map(o => o.quote)).toEqual([
+            'serves `/api` + static `dist/`'
+        ])
+        // The old join would have returned nothing for the rewritten title.
+        expect(ownedForTitle(owned, rewritten)).toEqual([])
+        // A spliced repair step carries a key of its own and owns nothing.
+        expect(ownedForTask(owned, {key: 'P09', title: 'repair src/db.ts: …'})).toEqual([])
+        // A ledger with no keys at all is a legacy one: the title still joins it.
+        const legacy = [{quote: 'q', anchor: '', title: planned}]
+        expect(ownedForTask(legacy, {key: 'P03', title: planned}).map(o => o.quote)).toEqual(['q'])
     })
 
     test('appendOwnedConstraints (braces): omitted quote appended under CONSTRAINTS, present quote skipped', () => {

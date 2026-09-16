@@ -6,6 +6,7 @@ import {
     phaseResearch,
     phaseAutoAnswer,
     phaseGrill,
+    phaseCarriedBlocks,
     phaseCompose,
     phaseCritique,
     critiqueWithFallback,
@@ -133,6 +134,54 @@ describe('refineExistingFilesBlock', () => {
     test('returns empty string for a non-git / empty project so refine is unchanged', async () => {
         await withTmpTaskDir(async cwd => {
             expect(await refineExistingFilesBlock(deps(cwd))).toBe('')
+        })
+    })
+})
+
+describe('phaseCarriedBlocks owned-requirement join', () => {
+    const deps = (cwd: string) => ({cwd, taskId: 'TASK_0042', signal: new AbortController().signal})
+
+    /** A plan whose ledger entry is keyed P02, and an inner task whose stored
+     *  `raw prompt` no longer matches the plan title it was cut from. */
+    async function fixture(cwd: string, frontMatter: string[]): Promise<void> {
+        nodeFs.mkdirSync(nodePath.join(cwd, '.pi-tasks'), {recursive: true})
+        nodeFs.writeFileSync(
+            nodePath.join(cwd, '.pi-tasks', 'requirements-owned.md'),
+            'OWNED: "photos stored as bytea" [anchor: 1. Decisions] [key: P02] '
+                + '[title: Build the photo upload route]\n'
+        )
+        nodeFs.writeFileSync(
+            nodePath.join(cwd, '.pi-tasks', 'TASK_0042.md'),
+            [
+                '---',
+                'id: TASK_0042',
+                'state: in_progress',
+                'phase: compose',
+                'created_at: 2026-09-16T00:00:00.000Z',
+                'updated_at: 2026-09-16T00:00:00.000Z',
+                'title: Photo upload',
+                ...frontMatter,
+                '---',
+                '',
+                '## raw prompt',
+                '',
+                'Build the photo upload route — multipart, bytea column',
+                ''
+            ].join('\n')
+        )
+    }
+
+    test('the plan key in front matter carries the obligation into a retitled task', async () => {
+        await withTmpTaskDir(async cwd => {
+            await fixture(cwd, ['plan_key: P02'])
+            expect(await phaseCarriedBlocks(deps(cwd))).toContain('photos stored as bytea')
+        })
+    })
+
+    test('no plan key and no matching title ⇒ nothing carried', async () => {
+        await withTmpTaskDir(async cwd => {
+            await fixture(cwd, [])
+            expect(await phaseCarriedBlocks(deps(cwd))).toBe('')
         })
     })
 })

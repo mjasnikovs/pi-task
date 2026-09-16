@@ -26,6 +26,13 @@ export interface TaskFrontMatter {
      * of `title` (`titleForDisplay`, parsers.ts). See title-label.ts.
      */
     label?: string
+    /**
+     * The /task-auto plan entry this task implements (`TaskEntry.key`). It is
+     * what the owned-requirements ledger joins on, and it lives here rather than
+     * in memory because a resumed run reconstructs the task from this file alone.
+     * Absent on a bare /task and on any task planned before keys existed.
+     */
+    plan_key?: string
     reason?: string
 }
 

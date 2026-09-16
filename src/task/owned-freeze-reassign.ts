@@ -15,7 +15,7 @@
  *           `appendOwnedConstraints` stamps the bullet, which is the first moment
  *           the pair exists): the entry is marked `pending: [frozen paths]` in the
  *           ledger and its stamped bullet is dropped from this spec. It is now
- *           owned by nobody; `ownedForTitle` skips it; the quote is still there,
+ *           owned by nobody; `ownedForTask` skips it; the quote is still there,
  *           byte for byte.
  *   CLAIM   at every LATER task's compose, before the belt block is built: if that
  *           task's REFINED PROMPT shows a write intent on one of the pending
@@ -50,7 +50,7 @@ import {
     type OwnedFreezeConflict,
     type OwnedFreezeOptions
 } from './owned-freeze-conflict.js'
-import {ownedForTitle, type OwnedRequirement} from './requirements.js'
+import {ownedForTask, type OwnedRequirement} from './requirements.js'
 import {PROHIBITION_RE} from './prohibition-probe.js'
 
 export type ReassignAction =
@@ -127,12 +127,14 @@ function dropLine(spec: string, line: string): string {
  */
 export function detachUnsatisfiableRequirements(args: {
     spec: string
-    /** The executing task's plan title — the ledger's join key. */
+    /** The executing task's plan key — the ledger's join. */
+    key?: string
+    /** The executing task's plan title — display, and the legacy join. */
     title: string
     ledger: OwnedRequirement[]
     isSource?: OwnedFreezeOptions['isSource']
 }): DetachResult {
-    const mine = ownedForTitle(args.ledger, args.title)
+    const mine = ownedForTask(args.ledger, args)
     const conflicts: OwnedFreezeConflict[] = findOwnedFreezeConflicts(args.spec, {
         owned: mine,
         isSource: args.isSource
@@ -142,12 +144,15 @@ export function detachUnsatisfiableRequirements(args: {
         spec: args.spec,
         actions: []
     }
+    // `mine` holds the pre-copy entries, so the copy is re-found by quote — the
+    // ledger's own key.
+    const ownedQuotes = new Set(mine.map(o => o.quote))
     for (const c of conflicts) {
         const entry = out.ledger.find(
             o =>
                 !(o.pending && o.pending.length > 0)
                 && c.requirement.includes(o.quote)
-                && normalise(o.title) === normalise(args.title)
+                && ownedQuotes.has(o.quote)
         )
         if (!entry) {
             // The conflicting line is not one of THIS task's ledger quotes (a
@@ -197,7 +202,9 @@ export interface ClaimResult {
 export function claimPendingRequirements(args: {
     /** The claiming task's refined prompt — the text that says what it will write. */
     intent: string
-    /** The claiming task's plan title (the ledger's join key). */
+    /** The claiming task's plan key — what the ledger joins on afterwards. */
+    key?: string
+    /** The claiming task's plan title. */
     title: string
     ledger: OwnedRequirement[]
 }): ClaimResult {
@@ -209,6 +216,10 @@ export function claimPendingRequirements(args: {
         const claimed = paths.filter(p => writeIntent(args.intent, p))
         if (claimed.length === 0) continue
         delete entry.pending
+        // Both halves of the join move together — a claim that retitled without
+        // rekeying would leave the entry owned by the task that gave it up.
+        if (args.key === undefined) delete entry.key
+        else entry.key = args.key
         entry.title = args.title
         out.actions.push({kind: 'claim', quote: entry.quote, by: args.title, paths: claimed})
     }
@@ -221,8 +232,6 @@ export function claimPendingRequirements(args: {
 export function unclaimedPendingRequirements(ledger: OwnedRequirement[]): OwnedRequirement[] {
     return ledger.filter(o => (o.pending ?? []).length > 0)
 }
-
-const normalise = (s: string): string => s.trim().toLowerCase().replace(/\s+/g, ' ')
 
 /** One line per action, for the run's debug log. */
 export function formatReassignActions(actions: ReassignAction[]): string {
