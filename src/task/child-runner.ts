@@ -461,12 +461,13 @@ export function prependHint(hint: string | null, prompt: string): string {
 /**
  * Append one line per loop kill to the task file's `loop events` section.
  *
- * Best-effort by contract: it runs for EVERY phase child, and not every caller
+ * Best-effort by contract: it runs for every phase child AND every research
+ * worker, and not every caller
  * owns a task file on disk (a scripted harness, a bare unit deps bag). A trail
  * that cannot be written must cost the phase nothing — the loop kill itself is
  * already reported through the debug log and the thrown error.
  */
-async function appendLoopEvents(
+export async function appendLoopEvents(
     cwd: string,
     taskId: string,
     phase: string,

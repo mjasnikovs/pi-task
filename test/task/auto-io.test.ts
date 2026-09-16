@@ -9,6 +9,8 @@ import {
     buildAutoBody,
     checkOffTask,
     stampTaskInProgress,
+    beginTaskAttempt,
+    recordTaskEnd,
     insertTaskAfter
 } from '../../src/task/auto-io.js'
 import {writeTaskFile, readTaskFile} from '../../src/task/task-io.js'
@@ -112,10 +114,77 @@ test('parseTaskList: a title that opens like a field is read whole', () => {
     ])
 })
 
-test('stampTaskInProgress: mints attempt 1 and keeps the plan key', async () => {
+test('parseTaskList: the attempts field carries how the last attempt ended', () => {
+    const body = [
+        '## tasks',
+        '',
+        '- [ ] P01 TASK_0006 a2:failed  Task A',
+        '- [ ] P02 TASK_0007 a1  Task B',
+        // Not a registered ending → not a field, so the whole thing is the title.
+        '- [ ] a2:sideways  Task C',
+        ''
+    ].join('\n')
+    expect(parseTaskList(body)).toEqual([
+        {
+            index: 0,
+            key: 'P01',
+            producedId: 'TASK_0006',
+            attempts: 2,
+            lastEnd: 'failed',
+            title: 'Task A',
+            done: false
+        },
+        {index: 1, key: 'P02', producedId: 'TASK_0007', attempts: 1, title: 'Task B', done: false},
+        {index: 2, title: 'a2:sideways  Task C', done: false}
+    ])
+})
+
+test('recordTaskEnd: the ending round-trips and the next attempt clears it', async () => {
+    await withTmpTaskDir(async dir => {
+        const body = buildAutoBody('feat', '(none)', ['Task A'])
+        await writeTaskFile(dir, fm('TASK_AUTO_0001', 'in_progress'), body)
+        await beginTaskAttempt(dir, 'TASK_AUTO_0001', 0)
+        await recordTaskEnd(dir, 'TASK_AUTO_0001', 0, 'no-session')
+        const read = async (): Promise<ReturnType<typeof parseTaskList>[number]> =>
+            parseTaskList((await readTaskFile(dir, 'TASK_AUTO_0001')).body)[0]
+        expect(await read()).toEqual({
+            index: 0,
+            key: 'P01',
+            title: 'Task A',
+            done: false,
+            attempts: 1,
+            lastEnd: 'no-session'
+        })
+        // The ending describes the attempt that is over, not the one starting.
+        expect(await beginTaskAttempt(dir, 'TASK_AUTO_0001', 0)).toBe(2)
+        expect(await read()).toEqual({
+            index: 0,
+            key: 'P01',
+            title: 'Task A',
+            done: false,
+            attempts: 2
+        })
+    })
+})
+
+test('beginTaskAttempt: a keyless legacy line counts nothing it cannot write down', async () => {
+    await withTmpTaskDir(async dir => {
+        const body = '## feature prompt\n\nfeat\n\n## tasks\n\n- [ ] Task A\n'
+        await writeTaskFile(dir, fm('TASK_AUTO_0001', 'in_progress'), body)
+        await beginTaskAttempt(dir, 'TASK_AUTO_0001', 0)
+        // `a1  Task A` would re-parse as a TITLE, so the count is dropped rather
+        // than written into a line that reads it back as prose.
+        expect(parseTaskList((await readTaskFile(dir, 'TASK_AUTO_0001')).body)).toEqual([
+            {index: 0, title: 'Task A', done: false}
+        ])
+    })
+})
+
+test('stampTaskInProgress: stamps the id and leaves the counter to the loop', async () => {
     await withTmpTaskDir(async dir => {
         const body = buildAutoBody('feat', '(none)', ['Task A', 'Task B'])
         await writeTaskFile(dir, fm('TASK_AUTO_0001', 'in_progress'), body)
+        await beginTaskAttempt(dir, 'TASK_AUTO_0001', 1)
         await stampTaskInProgress(dir, 'TASK_AUTO_0001', 1, 'TASK_0042', 'Task B')
         const entries = parseTaskList((await readTaskFile(dir, 'TASK_AUTO_0001')).body)
         expect(entries[1]).toEqual({
@@ -126,7 +195,7 @@ test('stampTaskInProgress: mints attempt 1 and keeps the plan key', async () => 
             producedId: 'TASK_0042',
             attempts: 1
         })
-        // A second stamp does not re-mint the counter (WS4 owns increments).
+        // The stamp is not an attempt: only the loop's own bump counts one.
         await stampTaskInProgress(dir, 'TASK_AUTO_0001', 1, 'TASK_0042', 'Task B')
         expect(parseTaskList((await readTaskFile(dir, 'TASK_AUTO_0001')).body)[1].attempts).toBe(1)
     })
@@ -170,6 +239,7 @@ test('checkOffTask: a rewritten title leaves the plan key and the attempt count 
     await withTmpTaskDir(async dir => {
         const body = buildAutoBody('feat', '(none)', ['Task A'])
         await writeTaskFile(dir, fm('TASK_AUTO_0001', 'in_progress'), body)
+        await beginTaskAttempt(dir, 'TASK_AUTO_0001', 0)
         await stampTaskInProgress(dir, 'TASK_AUTO_0001', 0, 'TASK_0042', 'Task A')
         await checkOffTask(dir, 'TASK_AUTO_0001', 0, 'TASK_0042', 'Task A — reworded by refine')
         expect(parseTaskList((await readTaskFile(dir, 'TASK_AUTO_0001')).body)[0]).toEqual({

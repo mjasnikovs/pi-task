@@ -18,6 +18,7 @@ import {readTextFile} from '../shared/fs-text.js'
 import {RESUMABLE_STATES} from './task-types.js'
 import type {TaskState} from './task-types.js'
 import type {AutoResumeCandidate} from './resume-gap.js'
+import {RUN_END_POLICY, type RunEndKind} from './run-end.js'
 
 const AUTO_FILE_RE = /^(TASK_AUTO_\d{4,})\.md$/
 
@@ -36,6 +37,12 @@ export interface TaskEntry {
     producedId?: string
     /** How many implementation attempts this entry has had. */
     attempts?: number
+    /**
+     * How the last attempt ENDED, recorded only when it ended abnormally. A
+     * resume otherwise cannot tell an entry the user cancelled from one that
+     * faulted, because both leave the same unchecked, stamped line.
+     */
+    lastEnd?: RunEndKind
 }
 
 export async function allocateAutoId(cwd: string): Promise<string> {
@@ -117,7 +124,8 @@ export function parseCoverageVerdict(raw: string): CoverageVerdict | null {
 const CHECKBOX_RE = /^- \[([ xX])\]\s+(.+?)\s*$/
 
 /**
- * The checkbox line grammar: `- [ ] P01 TASK_0006 a2  title`.
+ * The checkbox line grammar: `- [ ] P01 TASK_0006 a2  title`, where the attempts
+ * field may carry how the last attempt ended — `a2:failed`.
  *
  * Every field is optional and each is followed by ONE space; the title is set off
  * by an EXTRA space. That two-space delimiter is what keeps the grammar
@@ -125,15 +133,22 @@ const CHECKBOX_RE = /^- \[([ xX])\]\s+(.+?)\s*$/
  * or `(auto) …` and is read whole, because a single space never separates a field
  * from a title. Both legacy forms — `TASK_0006  title` and a bare `title` — are
  * the same grammar with fields missing, so no migration pass is needed on read.
+ *
+ * The end suffix spells out the endings RUN_END_POLICY registers rather than
+ * accepting any word, so `a2:whatever ` stays prose and a renamed ending is a
+ * parse miss, never a silently mis-read field.
  */
-const ENTRY_RE = /^(?:(?:(P\d{2,}) )?(?:(TASK_\d{4,}) )?(?:a(\d+) )? )?(.+)$/
+const ENTRY_RE = new RegExp(
+    '^(?:(?:(P\\d{2,}) )?(?:(TASK_\\d{4,}) )?'
+        + `(?:a(\\d+)(?::(${Object.keys(RUN_END_POLICY).join('|')}))? )? )?(.+)$`
+)
 
 function parseEntryLine(line: string, index: number): TaskEntry | null {
     const m = CHECKBOX_RE.exec(line.trim())
     if (!m) return null
     const f = ENTRY_RE.exec(m[2].trim())
     if (!f) return null
-    const [, key, producedId, attempts, title] = f
+    const [, key, producedId, attempts, lastEnd, title] = f
     // Attempts are only ever written alongside an id (they are minted when the
     // inner task starts), so a bare `a7  …` is a title, not a field.
     const keyed = key !== undefined || producedId !== undefined
@@ -146,13 +161,26 @@ function parseEntryLine(line: string, index: number): TaskEntry | null {
         ...(key !== undefined && {key}),
         ...(producedId !== undefined && {producedId}),
         ...(keyed && attempts !== undefined && {attempts: parseInt(attempts, 10)}),
+        ...(keyed && lastEnd !== undefined && {lastEnd: lastEnd as RunEndKind}),
         title: keyed || attempts === undefined ? title.trim() : m[2].trim()
     }
 }
 
-/** Render one entry back into the line grammar. */
+/**
+ * Render one entry back into the line grammar.
+ *
+ * An entry with NEITHER a key nor an id has no field to anchor an attempts count
+ * against, and `a2  title` alone re-parses as a title (see {@link ENTRY_RE}) — so
+ * the count is dropped rather than written into a line that would read it back as
+ * prose. Only pre-key legacy plans are in that state, and they predate the counter.
+ */
 function renderEntryLine(e: Omit<TaskEntry, 'index'>): string {
-    const fields = [e.key, e.producedId, e.attempts === undefined ? undefined : `a${e.attempts}`]
+    const anchored = e.key !== undefined || e.producedId !== undefined
+    const attempts =
+        e.attempts === undefined || !anchored ?
+            undefined
+        :   `a${e.attempts}${e.lastEnd === undefined ? '' : `:${e.lastEnd}`}`
+    const fields = [e.key, e.producedId, attempts]
         .filter((f): f is string => f !== undefined && f.length > 0)
         .join(' ')
     return `- [${e.done ? 'x' : ' '}] ${fields.length > 0 ? `${fields}  ` : ''}${e.title}`
@@ -280,8 +308,49 @@ export async function stampTaskInProgress(
         cwd,
         id,
         index,
-        e => renderEntryLine({...e, done: false, title, producedId, attempts: e.attempts ?? 1}),
+        e => renderEntryLine({...e, done: false, title, producedId}),
         'stampTaskInProgress'
+    )
+}
+
+/**
+ * Count one more attempt on the `index`th entry and return the new total.
+ *
+ * Called for a fresh start AND for a resume, because both spend a run on the
+ * entry: a task that crashes in refine is re-entered from scratch every time, and
+ * a counter that only saw fresh starts would read 1 forever while the loop re-ran
+ * it without end. The previous ending is cleared here — it describes the attempt
+ * that is now over.
+ */
+export async function beginTaskAttempt(cwd: string, id: string, index: number): Promise<number> {
+    let attempts = 1
+    await rewriteTaskLine(
+        cwd,
+        id,
+        index,
+        e => {
+            attempts = (e.attempts ?? 0) + 1
+            const {lastEnd: _ended, ...rest} = e
+            return renderEntryLine({...rest, attempts})
+        },
+        'beginTaskAttempt'
+    )
+    return attempts
+}
+
+/** Record how the `index`th entry's attempt ended. */
+export async function recordTaskEnd(
+    cwd: string,
+    id: string,
+    index: number,
+    lastEnd: RunEndKind
+): Promise<void> {
+    await rewriteTaskLine(
+        cwd,
+        id,
+        index,
+        e => renderEntryLine({...e, attempts: e.attempts ?? 1, lastEnd}),
+        'recordTaskEnd'
     )
 }
 

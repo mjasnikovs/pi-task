@@ -142,6 +142,25 @@ export async function setTaskSection(
 }
 
 /**
+ * Rewrite a section from its own current contents.
+ *
+ * The read-then-write pair a caller would otherwise inline, kept whole here
+ * because the RE-ENTRY case is where it goes wrong: a resumed run that reaches a
+ * section it did not fully regenerate (an autofix re-entry runs zero phases)
+ * calls `setTaskSection` with what THIS pass produced and erases what the first
+ * pass proved. `merge` receives null when the section is absent.
+ */
+export async function mergeTaskSection(
+    cwd: string,
+    id: string,
+    heading: string,
+    merge: (old: string | null) => string
+): Promise<void> {
+    const existing = await readSection(cwd, id, heading)
+    await setTaskSection(cwd, id, heading, merge(existing))
+}
+
+/**
  * Append one timestamped line to the task's `## gates` section — the durable
  * per-task trail of gate outcomes (verify verdicts, enforce mode/verdict, commit
  * results). A verdict that lives only in memory and a terminal notify cannot

@@ -1,5 +1,5 @@
 import {describe, expect, test} from 'bun:test'
-import {formatMs, formatTimings, type TimingEntry} from '../../src/task/timings.js'
+import {formatMs, formatTimings, mergeTimings, type TimingEntry} from '../../src/task/timings.js'
 
 describe('formatMs', () => {
     test('renders sub-second values in ms', () => {
@@ -55,5 +55,46 @@ describe('formatTimings', () => {
 
     test('returns a sentinel when no phases were recorded', () => {
         expect(formatTimings([])).toBe('(no phases recorded)')
+    })
+})
+
+describe('mergeTimings', () => {
+    const phases: TimingEntry[] = [
+        {label: 'refine', ms: 1000, children: []},
+        {label: 'research', ms: 2000, children: []}
+    ]
+
+    test('an empty section becomes attempt 1', () => {
+        const out = mergeTimings(null, phases)
+        expect(out).toMatch(/^attempt 1$/m)
+        expect(out).toContain('refine')
+        expect(out).toContain('research')
+    })
+
+    // The autofix re-entry: resumed at `phase: done`, it runs no phases at all.
+    test("a second attempt APPENDS — the first attempt's phases survive", () => {
+        const first = mergeTimings(null, phases)
+        const out = mergeTimings(first, [])
+        expect(out).toMatch(/^attempt 1$/m)
+        expect(out).toMatch(/^attempt 2$/m)
+        expect(out).toContain('refine')
+        expect(out).toContain('research')
+        expect(out).toContain('(no phases recorded)')
+        expect(out.indexOf('attempt 1')).toBeLessThan(out.indexOf('attempt 2'))
+    })
+
+    test('numbering continues from the last block already there', () => {
+        let out = mergeTimings(null, phases)
+        for (let i = 0; i < 3; i++) out = mergeTimings(out, phases)
+        expect(out).toMatch(/^attempt 4$/m)
+        expect(out).not.toMatch(/^attempt 5$/m)
+    })
+
+    test('an unlabelled legacy body is adopted as attempt 1, not discarded', () => {
+        const out = mergeTimings(formatTimings(phases), [{label: 'grill', ms: 5, children: []}])
+        expect(out).toMatch(/^attempt 1$/m)
+        expect(out).toMatch(/^attempt 2$/m)
+        expect(out).toContain('refine')
+        expect(out).toContain('grill')
     })
 })

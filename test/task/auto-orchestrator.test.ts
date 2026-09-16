@@ -21,6 +21,7 @@ import {runLogPath} from '../../src/task/state-dir.js'
 import {parseTaskList, buildAutoBody, type TaskEntry} from '../../src/task/auto-io.js'
 import {ACCEPT_LABEL, AUTOFIX_LABEL} from '../../src/task/verify-resolution.js'
 import {readAcceptDebts, type AcceptDebt} from '../../src/task/accept-debt.js'
+import {ENTRY_ATTEMPT_BUDGET} from '../../src/task/gate-resolution.js'
 import {readOwnedRequirements} from '../../src/task/requirements.js'
 import type {CommitResult} from '../../src/task/auto-commit.js'
 import * as fsp from 'node:fs/promises'
@@ -1173,7 +1174,8 @@ test('runAutoLoop: stamps the inner task id at start so an interruption is resum
             title: 'A',
             done: false,
             producedId: 'TASK_0009',
-            attempts: 1
+            attempts: 1,
+            lastEnd: 'no-session'
         })
     })
 })
@@ -1223,10 +1225,9 @@ test('runAutoLoop: interrupt then resume continues the same inner task, never st
         const {frontMatter, body} = await readTaskFile(dir, 'TASK_AUTO_0001')
         expect(frontMatter.state).toBe('completed')
         expect(parseTaskList(body)).toEqual([
-            {index: 0, key: 'P01', title: 'A', done: true, producedId: 'TASK_0006', attempts: 1},
-            // B's fake runner never calls onStart, so nothing ever stamped an
-            // attempt onto it — the check-off invents none.
-            {index: 1, key: 'P02', title: 'B', done: true, producedId: 'TASK_0007'}
+            // A was started once and resumed once: the loop counts both.
+            {index: 0, key: 'P01', title: 'A', done: true, producedId: 'TASK_0006', attempts: 2},
+            {index: 1, key: 'P02', title: 'B', done: true, producedId: 'TASK_0007', attempts: 1}
         ])
     })
 })
@@ -1255,8 +1256,69 @@ test('runAutoLoop: a stamped inner task with a missing file restarts fresh, neve
         const {frontMatter, body: out} = await readTaskFile(dir, 'TASK_AUTO_0001')
         expect(frontMatter.state).toBe('completed')
         expect(parseTaskList(out)).toEqual([
-            {index: 0, title: 'A', done: true, producedId: 'TASK_0009'}
+            {index: 0, title: 'A', done: true, producedId: 'TASK_0009', attempts: 1}
         ])
+    })
+})
+
+test('runAutoLoop: an entry past its attempt budget is abandoned and the loop goes on', async () => {
+    await withTmpTaskDir(async dir => {
+        const {ctx, captured} = makeFakeCtx(dir)
+        // A has already spent the budget without ever being checked off — the shape
+        // a task that crashes in refine leaves behind on every resume.
+        const spent = `a${ENTRY_ATTEMPT_BUDGET}:failed`
+        const body =
+            '## feature prompt\n\nfeat\n\n## clarifications\n\n(none)\n\n## tasks\n\n'
+            + `- [ ] P01 TASK_0006 ${spent}  A\n- [ ] P02  B\n`
+        await writeTaskFile(dir, autoFm('TASK_AUTO_0001'), body)
+        const titles: string[] = []
+        await runAutoLoop(ctx, dir, 'TASK_AUTO_0001', {
+            runChild: () => Promise.resolve(''),
+            runTask: (_c, _cwd, title) => {
+                titles.push(title)
+                return Promise.resolve({taskId: 'TASK_0007', end: {kind: 'completed'}})
+            },
+            commit: () => Promise.resolve({committed: true})
+        })
+        // A never ran again; B did, and the run finished.
+        expect(titles).toEqual(['B'])
+        const {frontMatter, body: out} = await readTaskFile(dir, 'TASK_AUTO_0001')
+        expect(frontMatter.state).toBe('completed')
+        expect(parseTaskList(out).map(e => e.done)).toEqual([true, true])
+        const debts = await readAcceptDebts(dir)
+        expect(debts).toHaveLength(1)
+        expect(debts[0].origin).toBe('abandoned')
+        expect(debts[0].taskId).toBe('TASK_0006')
+        expect(debts[0].reason).toContain('abandoned')
+        expect(captured.notifies.some(n => /abandoned "A"/.test(n.msg))).toBe(true)
+    })
+})
+
+test('runAutoLoop: a resume counts an attempt too, so a stuck entry converges on the budget', async () => {
+    await withTmpTaskDir(async dir => {
+        const {ctx} = makeFakeCtx(dir)
+        await writeTaskFile(dir, autoFm('TASK_AUTO_0001'), buildAutoBody('feat', '(none)', ['A']))
+        // Every run dies before the check-off, so each /task-auto-resume re-enters
+        // the same entry — the run the budget exists to stop.
+        const deps: AutoDeps = {
+            runChild: () => Promise.resolve(''),
+            runTask: async (_c, _cwd, _title, opts) => {
+                await opts?.onStart?.('TASK_0006')
+                await writeTaskFile(dir, autoFm('TASK_0006'), '## prompt\n\nA\n')
+                return {taskId: '', end: {kind: 'failed', reason: 'boom'}}
+            },
+            commit: () => Promise.resolve({committed: true})
+        }
+        const attemptsNow = async (): Promise<number | undefined> =>
+            parseTaskList((await readTaskFile(dir, 'TASK_AUTO_0001')).body)[0].attempts
+        for (let i = 1; i <= ENTRY_ATTEMPT_BUDGET; i++) {
+            await runAutoLoop(ctx, dir, 'TASK_AUTO_0001', deps)
+            expect(await attemptsNow()).toBe(i)
+        }
+        // The next pass abandons instead of spending a further run on it.
+        await runAutoLoop(ctx, dir, 'TASK_AUTO_0001', deps)
+        expect(await attemptsNow()).toBe(ENTRY_ATTEMPT_BUDGET)
+        expect((await readAcceptDebts(dir)).map(d => d.origin)).toEqual(['abandoned'])
     })
 })
 
