@@ -7,7 +7,9 @@
  */
 import {describe, expect, test} from 'bun:test'
 import {
+    runResearchStage,
     runResearchWorker,
+    type DriveWorker,
     type ResearchWorkerRun,
     type ResearchWorkerSpec
 } from '../../src/task/research-worker.js'
@@ -288,5 +290,103 @@ describe('research worker guard policy', () => {
         await runResearchWorker(SPEC, h.run)
         expect(h.seenInput.length).toBeGreaterThan(1)
         for (const input of h.seenInput) expect(input.policyInputs?.env).toBe(h.run.leverEnv)
+    })
+})
+
+describe('runResearchStage', () => {
+    /** A spec with only the fields the scheduler reads. */
+    const spec = (section: string, after?: string[]): ResearchWorkerSpec => ({
+        section,
+        label: `worker:${section.toLowerCase()}`,
+        prompt: '',
+        ...(after ? {after} : {})
+    })
+
+    const STAGE = [spec('FILES'), spec('APIS', ['FILES']), spec('CONTEXT'), spec('TOOLING')]
+
+    /**
+     * A driver that records start/finish order and holds each worker open until
+     * released, so "did these two overlap" is a fact about the scheduler rather
+     * than about timing.
+     */
+    function gatedDriver() {
+        const started: string[] = []
+        const priorSeen = new Map<string, string[]>()
+        const release = new Map<string, () => void>()
+        const drive: DriveWorker = async (s, prior) => {
+            started.push(s.section)
+            priorSeen.set(
+                s.section,
+                prior.map(p => p.name)
+            )
+            await new Promise<void>(resolve => release.set(s.section, resolve))
+            return {name: s.section, text: `- ${s.section}`}
+        }
+        const finish = async (section: string): Promise<void> => {
+            release.get(section)!()
+            // Let the scheduler's continuation run before the next assertion.
+            await new Promise(r => setTimeout(r, 0))
+        }
+        return {drive, started, priorSeen, finish}
+    }
+
+    test('the three independent workers start together; the dependent one waits', async () => {
+        const g = gatedDriver()
+        const run = runResearchStage(STAGE, g.drive)
+        await new Promise(r => setTimeout(r, 0))
+        expect([...g.started].sort()).toEqual(['CONTEXT', 'FILES', 'TOOLING'])
+
+        await g.finish('FILES')
+        expect(g.started).toContain('APIS')
+        // The handoff the old all-at-once mode lost.
+        expect(g.priorSeen.get('APIS')).toEqual(['FILES'])
+        expect(g.priorSeen.get('CONTEXT')).toEqual([])
+
+        for (const s of ['APIS', 'CONTEXT', 'TOOLING']) await g.finish(s)
+        expect((await run).map(s => s.name)).toEqual(['FILES', 'APIS', 'CONTEXT', 'TOOLING'])
+    })
+
+    test('serial runs one at a time and hands each worker everything before it', async () => {
+        const g = gatedDriver()
+        const run = runResearchStage(STAGE, g.drive, 'serial')
+        await new Promise(r => setTimeout(r, 0))
+        expect(g.started).toEqual(['FILES'])
+        await g.finish('FILES')
+        await g.finish('APIS')
+        expect(g.priorSeen.get('APIS')).toEqual(['FILES'])
+        expect(g.priorSeen.get('CONTEXT')).toEqual(['FILES', 'APIS'])
+        await g.finish('CONTEXT')
+        await g.finish('TOOLING')
+        expect((await run).map(s => s.name)).toEqual(['FILES', 'APIS', 'CONTEXT', 'TOOLING'])
+    })
+
+    test('a failed dependency stops its dependent, not its independent siblings', async () => {
+        const drive: DriveWorker = async s => {
+            if (s.section === 'FILES') throw new Error('files worker: model error')
+            return {name: s.section, text: `- ${s.section}`}
+        }
+        const seen: string[] = []
+        await expect(
+            runResearchStage(STAGE, async (s, prior) => {
+                seen.push(s.section)
+                return drive(s, prior)
+            })
+        ).rejects.toThrow('files worker: model error')
+        // APIS never ran; the two independents did, so their sections are on disk
+        // for the resume by the time the failure is thrown.
+        expect(seen).not.toContain('APIS')
+        expect([...seen].sort()).toEqual(['CONTEXT', 'FILES', 'TOOLING'])
+    })
+
+    test('an unrunnable graph is rejected before any worker is spawned', async () => {
+        const never: DriveWorker = async () => {
+            throw new Error('spawned')
+        }
+        await expect(runResearchStage([spec('APIS', ['FILES'])], never)).rejects.toThrow(
+            /not a worker/
+        )
+        await expect(runResearchStage([spec('A', ['B']), spec('B', ['A'])], never)).rejects.toThrow(
+            /cycle/
+        )
     })
 })

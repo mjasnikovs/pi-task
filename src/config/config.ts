@@ -442,7 +442,10 @@ export function loadConfig(raw: unknown): PiTaskConfig {
     // The deprecated boolean answers only for a config saved before the setting
     // became an enum — a file carrying both was written by this version, so the
     // enum is the user's live choice and the boolean is the leftover.
-    if (stored.researchConcurrency === undefined && typeof stored[DEPRECATED_PARALLEL_KEY] === 'boolean') {
+    if (
+        stored.researchConcurrency === undefined
+        && typeof stored[DEPRECATED_PARALLEL_KEY] === 'boolean'
+    ) {
         out.researchConcurrency = stored[DEPRECATED_PARALLEL_KEY] ? 'graph' : 'serial'
     }
     return out

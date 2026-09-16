@@ -989,8 +989,8 @@ describe('phaseResearch CONTEXT post-check', () => {
     })
 })
 
-describe('phaseResearch APIS worker gets the FILES map (serial mode)', () => {
-    test("serial: APIS prompt carries FILES' finished section + the no-re-derive rule; parallel: it does not", async () => {
+describe('phaseResearch APIS worker gets the FILES map', () => {
+    test('the FILES map reaches the APIS prompt in BOTH concurrency modes', async () => {
         const run = async (): Promise<string> => {
             let apisPrompt = ''
             await withTmpTaskDir(async cwd => {
@@ -1028,24 +1028,21 @@ describe('phaseResearch APIS worker gets the FILES map (serial mode)', () => {
             return apisPrompt
         }
 
-        // BOTH halves set the flag and the finally restores whatever was there. The
-        // map rides along only in serial mode, so reading the ambient value would make
-        // this test depend on the user's own config file — and restoring a hardcoded
-        // `false` would rewrite their setting.
+        // The handoff the old all-at-once mode LOST: APIS declares `after: ['FILES']`,
+        // so the graph waits for the map exactly as the serial loop did. Restoring the
+        // ambient value rather than a hardcoded one keeps the user's own setting.
         const cfg = getConfig()
-        const prev = cfg.parallelResearchWorkers
+        const prev = cfg.researchConcurrency
         try {
-            cfg.parallelResearchWorkers = false
-            const serialPrompt = await run()
-            expect(serialPrompt).toContain('PROJECT FILE MAP')
-            expect(serialPrompt).toContain('src/server/routes.ts  the route table')
-            expect(serialPrompt).toContain('USE THE MAP')
-
-            cfg.parallelResearchWorkers = true
-            const parallelPrompt = await run()
-            expect(parallelPrompt).not.toContain('PROJECT FILE MAP')
+            for (const mode of ['serial', 'graph'] as const) {
+                cfg.researchConcurrency = mode
+                const prompt = await run()
+                expect(prompt).toContain('PROJECT FILE MAP')
+                expect(prompt).toContain('src/server/routes.ts  the route table')
+                expect(prompt).toContain('USE THE MAP')
+            }
         } finally {
-            cfg.parallelResearchWorkers = prev
+            cfg.researchConcurrency = prev
         }
     })
 })
@@ -1103,7 +1100,7 @@ describe('phaseResearch search-path wiring', () => {
     })
 })
 
-describe('phaseResearch parallel workers (opt-in flag)', () => {
+describe('phaseResearch graph concurrency', () => {
     const MARKERS = {
         files: 'content of a FILES section',
         apis: 'content of an APIS section',
@@ -1119,14 +1116,14 @@ describe('phaseResearch parallel workers (opt-in flag)', () => {
         return 'other'
     }
 
-    async function withParallelFlag(fn: () => Promise<void>): Promise<void> {
+    async function withGraphMode(fn: () => Promise<void>): Promise<void> {
         const cfg = getConfig()
-        const prev = cfg.parallelResearchWorkers
-        cfg.parallelResearchWorkers = true
+        const prev = cfg.researchConcurrency
+        cfg.researchConcurrency = 'graph'
         try {
             await fn()
         } finally {
-            cfg.parallelResearchWorkers = prev
+            cfg.researchConcurrency = prev
         }
     }
 
@@ -1146,7 +1143,7 @@ describe('phaseResearch parallel workers (opt-in flag)', () => {
     }
 
     test('assembly order is the spec order even when completion order inverts', async () => {
-        await withParallelFlag(() =>
+        await withGraphMode(() =>
             withTmpTaskDir(async cwd => {
                 await makeTask(cwd)
                 // FILES (first spec) finishes LAST; TOOLING (last spec) first.
@@ -1178,7 +1175,7 @@ describe('phaseResearch parallel workers (opt-in flag)', () => {
     })
 
     test('one fatal worker does not orphan the others — their sections are cached before the throw', async () => {
-        await withParallelFlag(() =>
+        await withGraphMode(() =>
             withTmpTaskDir(async cwd => {
                 await makeTask(cwd)
                 const spawns: Record<string, number> = {}
@@ -1187,7 +1184,7 @@ describe('phaseResearch parallel workers (opt-in flag)', () => {
                     const which = classify(args)
                     spawns[which] = (spawns[which] ?? 0) + 1
                     // APIS fails fatally while the others finish more slowly, so the
-                    // allSettled must still persist the three that answered.
+                    // stage must still persist the three that answered.
                     if (which === 'apis' && apisShouldFail)
                         return agentErrorResponse('fetch failed')
                     // A healthy APIS worker retrieves, so the zero-retrieval gate leaves it

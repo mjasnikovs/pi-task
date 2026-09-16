@@ -162,9 +162,9 @@ export class LoopDetector {
             const seen = this.visits.get(path)
             this.visits.set(
                 path,
-                seen ? {from: Math.min(seen.from, offset), to: Math.max(seen.to, end)} : (
-                    {from: offset, to: end}
-                )
+                seen ?
+                    {from: Math.min(seen.from, offset), to: Math.max(seen.to, end)}
+                :   {from: offset, to: end}
             )
         }
 
@@ -186,6 +186,17 @@ export class LoopDetector {
     }
 
     /**
+     * The attempt's READ-SET, in first-seen order: every path it opened, with the
+     * line span when the call named one. This is what a restart carries instead of
+     * answer text — see {@link visits}.
+     */
+    visited(): string[] {
+        return [...this.visits].map(([path, span]) =>
+            span.to === Infinity ? path : `${path} (lines ${span.from}-${span.to})`
+        )
+    }
+
+    /**
      * Count same-path calls in the window that are "revisits" — accesses that end
      * no further into the file than the furthest line already covered for that
      * path. The FIRST call on a path is therefore never a revisit: it sets the
@@ -199,17 +210,6 @@ export class LoopDetector {
      * SingleReadGuard made by keying on the path alone, and it is corrected the same
      * way.
      */
-    /**
-     * The attempt's READ-SET, in first-seen order: every path it opened, with the
-     * line span when the call named one. This is what a restart carries instead of
-     * answer text — see {@link visits}.
-     */
-    visited(): string[] {
-        return [...this.visits].map(([path, span]) =>
-            span.to === Infinity ? path : `${path} (lines ${span.from}-${span.to})`
-        )
-    }
-
     private countRevisits(path: string): number {
         let maxEnd = -1
         let revisits = 0

@@ -135,6 +135,31 @@ describe('formatStallHint', () => {
         expect(churn).toContain('context window')
         expect(churn.toLowerCase()).not.toContain('time')
     })
+
+    test('it carries the read-set, which is the only thing a stall kill can hand on', () => {
+        const visited = ['src/index.ts', 'DESIGN/spec.md (lines 1-400)']
+        for (const kind of ['no-new-ground', 'context-churn'] as const) {
+            const hint = formatStallHint(kind, visited)
+            expect(hint).toContain('src/index.ts')
+            expect(hint).toContain('DESIGN/spec.md (lines 1-400)')
+            expect(hint.endsWith('.]')).toBe(true)
+        }
+    })
+})
+
+describe('the no-new-ground hit reports no window', () => {
+    // It counts a CONSECUTIVE streak over the whole run. It used to carry
+    // windowSize 0, which every renderer printed as "in the last 0 calls".
+    test('windowSize is absent, not zero', () => {
+        const d = new StallDetector()
+        let hit = null
+        for (let n = 0; n <= NO_PROGRESS_LIMIT; n++) {
+            d.noteResult('the same bytes')
+            hit = d.record(read('a.md')) ?? hit
+        }
+        expect(hit?.stall).toBe('no-new-ground')
+        expect(hit!.windowSize).toBeUndefined()
+    })
 })
 
 /**

@@ -679,6 +679,15 @@ interface RestartRule {
 }
 
 /**
+ * A stall hit counts a streak or a byte total, not calls in a window, so printing
+ * the loop shape would misname why the attempt died.
+ */
+function loopDetail(hit: LoopHit): string {
+    if (hit.stall) return `${hit.call.name} ${hit.stall} ×${hit.count}`
+    return `${hit.call.name} ×${hit.count}${hit.windowSize === undefined ? '' : `/${hit.windowSize}`}`
+}
+
+/**
  * The restart ladder, in precedence order. FIRST MATCH WINS.
  *
  * Read the `!loopHit` guards as "a loop kill outranks me even when it has no
@@ -692,15 +701,6 @@ interface RestartRule {
  * `runWorker`, so a new failure mode is one row here and cannot be added without
  * becoming visible in `restarts`.
  */
-/**
- * A stall hit counts a streak or a byte total, not calls in a window, so printing
- * the loop shape would misname why the attempt died.
- */
-function loopDetail(hit: LoopHit): string {
-    if (hit.stall) return `${hit.call.name} ${hit.stall} ×${hit.count}`
-    return `${hit.call.name} ×${hit.count}${hit.windowSize === undefined ? '' : `/${hit.windowSize}`}`
-}
-
 export const RESTART_RULES: readonly RestartRule[] = [
     {
         // A loop-kill is restarted with a hint naming the offending call so the

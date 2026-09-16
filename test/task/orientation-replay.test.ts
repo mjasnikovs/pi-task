@@ -29,12 +29,11 @@ function allReads(): string[] {
     return out
 }
 
-// phaseResearch hands the orientation block to FILES and APIS only: those two
-// explore by reading, so a pre-supplied core replaces reads they would make.
-// CONTEXT works from the inventory and grep and TOOLING is scoped to the GOAL
-// prose, so for them the block is prefill with no read to displace. The reads
-// orientation can remove are therefore exactly the FILES+APIS reads.
-const ORIENTED_WORKERS = new Set(['worker:files', 'worker:apis'])
+// phaseResearch hands the orientation block to every worker that explores by
+// reading — FILES, APIS and CONTEXT (which holds `read,grep`) — so a pre-supplied
+// core replaces reads they would make. TOOLING is scoped to the GOAL prose and
+// single-read-guarded, so for it the block is prefill with no read to displace.
+const ORIENTED_WORKERS = new Set(['worker:files', 'worker:apis', 'worker:context'])
 function orientedReads(): string[] {
     const out: string[] = []
     for (const workers of Object.values(traces))
@@ -52,6 +51,11 @@ const inventory = Object.keys(sizes)
 // the budget logic sees true sizes without shipping file bodies in the fixture.
 const sizeReader = async (p: string): Promise<string | null> =>
     p in sizes ? 'x'.repeat(sizes[p]) : null
+
+// The design doc the recorded run was planned from — the file the tasks @-cite,
+// and the one the selector cannot reach by convention. Replaying without it would
+// measure a selector the real run never used.
+const CITED = ['DESIGN/mx5-marketplace-design.md']
 
 describe('the recorded baseline', () => {
     test('workers re-read the same files: a large share of reads are repeats', () => {
@@ -80,7 +84,7 @@ describe('the recorded baseline', () => {
 
 describe('orientation pre-supply effect (replay through shipping buildOrientation)', () => {
     test('removes a meaningful share of the read-heavy workers reads', async () => {
-        const {block, supplied} = await buildOrientation(inventory, sizeReader)
+        const {block, supplied} = await buildOrientation(inventory, sizeReader, {cited: CITED})
         // A ceiling, not a speedup: how many reads the oriented workers issued that
         // land on a pre-supplied file. Whether the model then skips such a read is
         // not decidable from a replay, so this is an upper bound.
@@ -90,19 +94,22 @@ describe('orientation pre-supply effect (replay through shipping buildOrientatio
         const blockKB = (Buffer.byteLength(block, 'utf8') / 1024).toFixed(1)
         console.log(
             `orientation supplies ${supplied.size} files in a ${blockKB}KB block; `
-                + `removable FILES+APIS reads: ${removable}/${reads.length} (${pct}%)`
+                + `removable reading-worker reads: ${removable}/${reads.length} (${pct}%)`
         )
         // Floor, so a selection regression (dropping a hot tier, budget shrink)
         // trips the test. The bound is enforced by buildOrientation itself.
-        expect(removable).toBeGreaterThan(200)
-        expect(pct).toBeGreaterThanOrEqual(25)
+        expect(removable).toBeGreaterThan(350)
+        expect(pct).toBeGreaterThanOrEqual(35)
     })
 
     test('the hot orientation files are captured under the real budget', async () => {
-        const {supplied} = await buildOrientation(inventory, sizeReader)
+        const {supplied} = await buildOrientation(inventory, sizeReader, {cited: CITED})
         // The files the recorded run read most often must survive selection AND
-        // the byte budget — these are exactly the cold re-reads being removed.
+        // the byte budget — these are exactly the cold re-reads being removed. The
+        // 29KB design doc is on the list and does not displace the rest, which is
+        // what the cited purse is for.
         for (const hot of [
+            ...CITED,
             'package.json',
             'src/types/index.ts',
             'src/server/lib/zod-schemas.ts',
@@ -115,7 +122,7 @@ describe('orientation pre-supply effect (replay through shipping buildOrientatio
     })
 
     test('no regression: every supplied path is a file the workers actually read', async () => {
-        const {supplied} = await buildOrientation(inventory, sizeReader)
+        const {supplied} = await buildOrientation(inventory, sizeReader, {cited: CITED})
         const everRead = new Set(allReads())
         for (const p of supplied) expect(everRead.has(p)).toBe(true)
     })

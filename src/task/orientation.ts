@@ -19,9 +19,9 @@
  * it is VENDORED — are fields on the candidate rather than more pattern-matching.
  *
  * Bounded by design — the snapshot can never overflow the prompt regardless of
- * repo size: a hard total byte budget, a per-tier per-file cap (one huge file can't
- * eat the budget, except the cited doc, which is the file the task is about), and a
- * candidate cap. Files that don't fit are simply not pre-supplied; the worker reads
+ * repo size: a hard total byte budget, a per-file cap so one huge file can't eat
+ * it, a candidate cap, and a second budget of the same size that only cited
+ * documents may draw on. Files that don't fit are simply not pre-supplied; the worker reads
  * them as before. Selection is the pure, tested core; reading takes an injectable
  * reader so it can be exercised without a repo.
  */
@@ -35,6 +35,15 @@
 export const ORIENTATION_BYTE_BUDGET = 40 * 1024
 /** A single file larger than this is skipped (read by the worker as before). */
 export const ORIENTATION_PER_FILE_MAX = 12 * 1024
+/**
+ * A SECOND purse, spent only on cited documents.
+ *
+ * A design doc is routinely most of the core budget on its own — the recorded mx5
+ * run's is 29 KB of 40 KB — so charging it to the shared purse buys the one file
+ * the task cites by dropping five files every task needs. Equal to the core
+ * budget, so the block can at most double and the bound stays a stated one.
+ */
+export const ORIENTATION_CITED_BYTE_BUDGET = ORIENTATION_BYTE_BUDGET
 /**
  * Backstop file-count cap — a guard against a pathological repo with hundreds of
  * tiny core files packing the byte budget into noise, NOT a normal-case limit. Set
@@ -234,7 +243,9 @@ export const ORIENTATION_RULES: ReadonlyArray<OrientationRule> = [
         tier: ORIENTATION_TIERS.entrypoint,
         match: c =>
             ['index', 'main', 'app', 'server', 'mod'].includes(
-                basename(c.path).toLowerCase().replace(/\.[^.]+$/, '')
+                basename(c.path)
+                    .toLowerCase()
+                    .replace(/\.[^.]+$/, '')
             )
     },
     {
@@ -248,7 +259,10 @@ export const ORIENTATION_RULES: ReadonlyArray<OrientationRule> = [
     {
         id: 'readme',
         tier: ORIENTATION_TIERS.docs,
-        match: c => basename(c.path).toLowerCase().replace(/\.[^.]+$/, '') === 'readme'
+        match: c =>
+            basename(c.path)
+                .toLowerCase()
+                .replace(/\.[^.]+$/, '') === 'readme'
     }
 ]
 
@@ -367,10 +381,7 @@ export function selectOrientationFiles(
         }))
         .filter((x): x is OrientationPick => x.tier !== null)
         .sort(
-            (a, b) =>
-                a.tier - b.tier
-                || depth(a.path) - depth(b.path)
-                || (a.path < b.path ? -1 : 1)
+            (a, b) => a.tier - b.tier || depth(a.path) - depth(b.path) || (a.path < b.path ? -1 : 1)
         )
 }
 
@@ -383,6 +394,9 @@ export interface OrientationResult {
 
 export interface OrientationBuildOptions extends OrientationSelectOptions {
     byteBudget?: number
+    /** The separate purse cited documents are charged to — see
+     *  {@link ORIENTATION_CITED_BYTE_BUDGET}. */
+    citedByteBudget?: number
     perFileMax?: number
     maxFiles?: number
 }
@@ -401,14 +415,15 @@ export async function buildOrientation(
     opts: OrientationBuildOptions = {}
 ): Promise<OrientationResult> {
     const byteBudget = opts.byteBudget ?? ORIENTATION_BYTE_BUDGET
+    const citedBudget = opts.citedByteBudget ?? ORIENTATION_CITED_BYTE_BUDGET
     const perFileMax = opts.perFileMax ?? ORIENTATION_PER_FILE_MAX
     const maxFiles = opts.maxFiles ?? ORIENTATION_MAX_FILES
     // The cited doc is the file the task is ABOUT, and a design document is
     // routinely larger than the cap that keeps one incidental file from eating
-    // the budget. Skipping it is the failure this tier exists to fix, so its only
-    // bound is the total budget it is first in line for.
-    const perFileMaxFor = (tier: number): number =>
-        tier === ORIENTATION_TIERS.cited ? byteBudget : perFileMax
+    // the budget. Skipping it is the failure this tier exists to fix, so it is
+    // bounded by its own purse instead.
+    const cited = (tier: number): boolean => tier === ORIENTATION_TIERS.cited
+    const perFileMaxFor = (tier: number): number => (cited(tier) ? citedBudget : perFileMax)
 
     const candidates = selectOrientationFiles(inventoryPaths, opts).slice(0, maxFiles * 4)
     const supplied = new Set<string>()
@@ -422,6 +437,7 @@ export async function buildOrientation(
         + `already provided, do not re-read these)\n`
     const TRAILER = '\n\n'
     let used = Buffer.byteLength(HEADER + TRAILER, 'utf8')
+    let usedCited = 0
 
     for (const {path, tier} of candidates) {
         if (supplied.size >= maxFiles) break
@@ -431,8 +447,13 @@ export async function buildOrientation(
         const piece = `--- ${path} ---\n${text.replace(/\n+$/, '')}`
         // Each piece after the first is preceded by the `\n\n` join separator.
         const pieceBytes = Buffer.byteLength(piece, 'utf8') + (parts.length > 0 ? 2 : 0)
-        if (used + pieceBytes > byteBudget) continue
-        used += pieceBytes
+        if (cited(tier)) {
+            if (usedCited + pieceBytes > citedBudget) continue
+            usedCited += pieceBytes
+        } else {
+            if (used + pieceBytes > byteBudget) continue
+            used += pieceBytes
+        }
         supplied.add(path)
         parts.push(piece)
     }

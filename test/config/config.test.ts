@@ -167,7 +167,7 @@ describe('loadConfig', () => {
         const booleans = (Object.keys(DEFAULT_CONFIG) as Array<keyof PiTaskConfig>).filter(
             k => typeof DEFAULT_CONFIG[k] === 'boolean'
         )
-        expect(booleans).toHaveLength(8)
+        expect(booleans).toHaveLength(7)
         for (const key of booleans) {
             for (const bad of ['false', 'off', 'true', 0, 1, null, {}, []]) {
                 expect(loadConfig({[key]: bad})[key]).toBe(DEFAULT_CONFIG[key])
@@ -199,5 +199,44 @@ describe('loadConfig', () => {
         >
         expect(out.remote).toBe(false)
         expect('someRemovedSetting' in out).toBe(false)
+    })
+})
+
+describe('researchConcurrency', () => {
+    test('a config written before the enum keeps the shape its boolean asked for', () => {
+        // `false` was "one at a time" — a user who set it did so for a single local
+        // GPU, and dropping the alias would silently turn concurrency back on.
+        expect(loadConfig({parallelResearchWorkers: false}).researchConcurrency).toBe('serial')
+        expect(loadConfig({parallelResearchWorkers: true}).researchConcurrency).toBe('graph')
+    })
+
+    test('the enum wins when both are present — the boolean is the leftover', () => {
+        expect(
+            loadConfig({parallelResearchWorkers: true, researchConcurrency: 'serial'})
+                .researchConcurrency
+        ).toBe('serial')
+    })
+
+    test('the deprecated key is not carried into the config', () => {
+        const out = loadConfig({parallelResearchWorkers: false}) as unknown as Record<
+            string,
+            unknown
+        >
+        expect('parallelResearchWorkers' in out).toBe(false)
+    })
+
+    test('a hand-edited value falls back to the default, and the default is graph', () => {
+        expect(loadConfig({researchConcurrency: 'parallel'}).researchConcurrency).toBe('graph')
+        expect(loadConfig({}).researchConcurrency).toBe('graph')
+        expect(loadConfig({researchConcurrency: 'serial'}).researchConcurrency).toBe('serial')
+    })
+})
+
+describe('orientationExclude', () => {
+    test('only non-empty string patterns survive a hand-edited list', () => {
+        expect(
+            loadConfig({orientationExclude: ['  fixtures/ ', '', 3, null]}).orientationExclude
+        ).toEqual(['fixtures/'])
+        expect(loadConfig({orientationExclude: 'fixtures/'}).orientationExclude).toEqual([])
     })
 })

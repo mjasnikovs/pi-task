@@ -5,6 +5,8 @@ import {
     parseIgnorePatterns,
     selectOrientationFiles,
     buildOrientation,
+    ORIENTATION_BYTE_BUDGET,
+    ORIENTATION_CITED_BYTE_BUDGET,
     ORIENTATION_PER_FILE_MAX,
     ORIENTATION_TIERS
 } from '../../src/task/orientation.js'
@@ -67,7 +69,9 @@ describe('isVendored', () => {
     })
 
     test('.gitignore patterns and the config list add to it', () => {
-        const patterns = parseIgnorePatterns('# comment\n\ngenerated/\n*.snap\n!kept.snap\n/only-root\n')
+        const patterns = parseIgnorePatterns(
+            '# comment\n\ngenerated/\n*.snap\n!kept.snap\n/only-root\n'
+        )
         expect(patterns).toEqual(['generated/', '*.snap', '/only-root'])
         expect(isVendored('docs/generated/api.md', patterns)).toBe(true)
         expect(isVendored('test/x.snap', patterns)).toBe(true)
@@ -187,13 +191,15 @@ describe('buildOrientation', () => {
         })
         expect(supplied.has('DESIGN/PROJECT.md')).toBe(true)
         expect(supplied.has('package.json')).toBe(true)
-        expect(Buffer.byteLength(block, 'utf8')).toBeLessThanOrEqual(40 * 1024)
+        expect(Buffer.byteLength(block, 'utf8')).toBeLessThanOrEqual(
+            ORIENTATION_BYTE_BUDGET + ORIENTATION_CITED_BYTE_BUDGET
+        )
 
         const uncited = await buildOrientation(Object.keys(files), reader(files))
         expect(uncited.supplied.has('DESIGN/PROJECT.md')).toBe(false)
     })
 
-    test('a cited doc past the whole budget is skipped, not truncated', async () => {
+    test('a cited doc past its own budget is skipped, not truncated', async () => {
         const files = {'DESIGN/PROJECT.md': 'D'.repeat(64 * 1024), 'package.json': '{}'}
         const {supplied} = await buildOrientation(Object.keys(files), reader(files), {
             cited: ['DESIGN/PROJECT.md']
@@ -209,5 +215,26 @@ describe('buildOrientation', () => {
         )
         expect(supplied.size).toBe(0)
         expect(block).toBe('')
+    })
+})
+
+describe('the cited purse does not starve the core', () => {
+    const reader = (files: Record<string, string>) => async (p: string) => files[p] ?? null
+
+    test('a design doc most of the core budget wide still leaves room for the manifest tiers', async () => {
+        // The mx5 doc is 29KB of a 40KB core budget: charged to the shared purse it
+        // bought one cited file by dropping five the workers read on every task.
+        const files: Record<string, string> = {
+            'DESIGN/PROJECT.md': 'D'.repeat(29 * 1024),
+            'package.json': 'P'.repeat(4 * 1024),
+            'tsconfig.json': 'T'.repeat(4 * 1024),
+            'src/types/index.ts': 'Y'.repeat(8 * 1024),
+            'src/index.ts': 'I'.repeat(8 * 1024),
+            'src/client/lib/api.ts': 'A'.repeat(8 * 1024)
+        }
+        const {supplied} = await buildOrientation(Object.keys(files), reader(files), {
+            cited: ['DESIGN/PROJECT.md']
+        })
+        expect([...supplied].sort()).toEqual(Object.keys(files).sort())
     })
 })
