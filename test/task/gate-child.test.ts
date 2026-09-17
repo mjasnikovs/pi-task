@@ -1,4 +1,6 @@
 import {test, expect, describe} from 'bun:test'
+import * as fs from 'node:fs'
+import * as path from 'node:path'
 import {
     makeGateChild,
     GATE_CHILD_KINDS,
@@ -8,6 +10,7 @@ import {
 import type {RunWorkerInput, RunWorkerResult} from '../../src/workers/pi-worker-core.js'
 import type {ReconcileResult, GitStateSnapshot} from '../../src/task/git-state-guard.js'
 import {ChildStatus, type ChildStatusDeps} from '../../src/task/child-status.js'
+import {tmpDir} from '../test-utils/tmp-dir.js'
 
 /**
  * `makeGateChild` takes `runWorker`, the git helpers and the status object as
@@ -416,4 +419,51 @@ test('a looping child that also died on a model error is NOT told "continuing (n
     })
     await expect(makeGateChild(deps)('read', 'x')).rejects.toThrow(/model error/)
     expect(notices.some(n => n.includes('continuing (not blocked)'))).toBe(false)
+})
+
+describe('the task dir survives every gate child', () => {
+    const HOST = '---\nid: TASK_AUTO_0001\n---\n'
+    const taskFile = (cwd: string): string => path.join(cwd, '.pi-tasks', 'TASK_AUTO_0001.md')
+
+    function repo(): string {
+        const cwd = tmpDir('pi-task-gate-custody-')
+        fs.mkdirSync(path.join(cwd, '.pi-tasks'))
+        fs.writeFileSync(taskFile(cwd), HOST)
+        return cwd
+    }
+
+    // The git-state guard skips `.pi-tasks`, so only the custody catches these.
+    test.each(['verify', 'enforce', 'final-fix'] as const)(
+        'a %s child that overwrites a task file leaves it as it was',
+        async kind => {
+            const cwd = repo()
+            const {deps, log, notices} = harness({
+                cwd,
+                kind,
+                runWorker: () => {
+                    fs.writeFileSync(taskFile(cwd), 'report')
+                    return Promise.resolve(workerResult())
+                }
+            })
+            await makeGateChild(deps)('read,edit,bash', 'fix it')
+            expect(fs.readFileSync(taskFile(cwd), 'utf8')).toBe(HOST)
+            expect(log.some(l => l.includes('TASK-DIR') && l.includes('TASK_AUTO_0001.md'))).toBe(
+                true
+            )
+            expect(notices.some(n => n.includes('.pi-tasks/TASK_AUTO_0001.md'))).toBe(true)
+        }
+    )
+
+    test('a child that throws still leaves the task dir as it was', async () => {
+        const cwd = repo()
+        const {deps} = harness({
+            cwd,
+            runWorker: () => {
+                fs.writeFileSync(taskFile(cwd), 'report')
+                return Promise.reject(new Error('spawn exploded'))
+            }
+        })
+        await expect(makeGateChild(deps)('read', 'check it')).rejects.toThrow('spawn exploded')
+        expect(fs.readFileSync(taskFile(cwd), 'utf8')).toBe(HOST)
+    })
 })

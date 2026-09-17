@@ -9,7 +9,8 @@ import {
     CONTINUE_AFTER_COMPACTION,
     MAX_COMPACTION_RESUMES
 } from '../../src/task/implementation-turn.js'
-import {readTaskFile, readSection, writeTaskFile} from '../../src/task/task-io.js'
+import * as fsp from 'node:fs/promises'
+import {readTaskFile, readSection, taskFilePath, writeTaskFile} from '../../src/task/task-io.js'
 import {agentEndResponse, fakeSpawnByPrompt} from '../test-utils/fake-spawn.js'
 import {makeFakeCtx, assistantEntry, compactionEntry} from '../test-utils/fake-ctx.js'
 import {withTmpTaskDir} from '../test-utils/tmp-task-dir.js'
@@ -123,6 +124,27 @@ describe('implementation guard lifetime', () => {
             expect(armedAtDelivery).toBe(true)
             expect(implementationGuardArmed()).toBe(false)
             expect(implWidgetArmed()).toBe(false)
+        })
+    })
+})
+
+describe('task dir across the implementation turn', () => {
+    // MEASURED (mx5): the implementer wrote its report over the task file, and the
+    // run died on the front matter.
+    test('an awaited turn that overwrites the task file leaves it readable', async () => {
+        await withTmpTaskDir(async cwd => {
+            const {ctx} = makeFakeCtx(cwd)
+            const runner = new TaskRunner({
+                ctx,
+                cwd,
+                rawPrompt: 'run lint',
+                implAwaited: true,
+                sendSpec: () => fsp.writeFile(taskFilePath(cwd, 'TASK_0001'), 'report'),
+                seams: happy()
+            })
+            expect((await runner.run()).kind).toBe('completed')
+            const {frontMatter} = await readTaskFile(cwd, 'TASK_0001')
+            expect(frontMatter.state).toBe('completed')
         })
     })
 })

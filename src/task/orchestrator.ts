@@ -52,12 +52,14 @@ import {
 import {startWidget, type WidgetState} from './widget.js'
 import {setupImplWidget} from './impl-widget.js'
 import {enterImplementationTurn} from './implementation-scope.js'
+import {taskDirRestoredNotice} from './task-dir-custody.js'
 import {
     SessionUI,
     publishNotify,
     registerBridgeCommand,
     getBridge,
     notifyBoth,
+    notifyRun,
     isRemoteOrigin
 } from '../remote/bridge.js'
 import {pushNotify} from '../remote/push.js'
@@ -640,7 +642,10 @@ export class TaskRunner {
             label: this._widgetState.label
         }
         if (this._sendSpec) {
-            const leave = enterImplementationTurn(meta, {oneShot: !this._implAwaited})
+            const leave = await enterImplementationTurn(meta, {
+                oneShot: !this._implAwaited,
+                cwd: this._cwd
+            })
             let delivered = false
             try {
                 await this._sendSpec(spec)
@@ -651,14 +656,14 @@ export class TaskRunner {
                 // run: pi's `prompt` rejects on a compaction already in progress, a
                 // missing model, or a failed auth. The next unrelated turn would
                 // inherit it, and this guard can end a turn outright.
-                if (this._implAwaited || !delivered) leave()
+                if (this._implAwaited || !delivered) this._reportRestored(await leave())
             }
             return
         }
         if (!piApi) {
             throw new Error('extension not initialised (no ExtensionAPI captured)')
         }
-        const leave = enterImplementationTurn(meta, {oneShot: true})
+        const leave = await enterImplementationTurn(meta, {oneShot: true, cwd: this._cwd})
         // Same reason as the awaited path's `delivered` flag: this send can throw
         // SYNCHRONOUSLY — the loader gates every ExtensionAPI action behind
         // `assertActive()` — and a guard left armed over a turn that never starts
@@ -671,9 +676,16 @@ export class TaskRunner {
         try {
             piApi.sendUserMessage(spec, {deliverAs: 'followUp'})
         } catch (e) {
-            leave()
+            await leave()
             throw e
         }
+    }
+
+    private _reportRestored(names: string[]): void {
+        if (names.length === 0) return
+        const notice = taskDirRestoredNotice('The implementation turn', names)
+        this._deps.logDebug?.(notice)
+        notifyRun(this._ctx, notice, 'warning')
     }
 
     /**

@@ -32,15 +32,15 @@ function fakePi(): {
     }
 }
 
-/** Calls as pi delivers them — `{toolName, input}`, verified against its types. */
+/** Calls as the hook receives them: pi's validated `edit` and `write` arguments. */
 const bash = (command: string): unknown => ({toolName: 'bash', input: {command}})
-const edit = (file_path: string, oldText: string): unknown => ({
+const edit = (path: string, oldText: string): unknown => ({
     toolName: 'edit',
-    input: {file_path, oldText, newText: `${oldText}!`}
+    input: {path, edits: [{oldText, newText: `${oldText}!`}]}
 })
-const write = (file_path: string, content: string): unknown => ({
+const write = (path: string, content: string): unknown => ({
     toolName: 'write',
-    input: {file_path, content}
+    input: {path, content}
 })
 
 const armed = (oneShot = true): ReturnType<typeof fakePi> => {
@@ -335,34 +335,24 @@ describe('a broken guard costs nothing', () => {
 })
 
 describe('task-dir writes', () => {
-    const at = (toolName: string, path: string): unknown => ({
-        toolName,
-        input: {path, content: 'x'}
-    })
-
-    test('blocks the first edit or write into .pi-tasks, relative or absolute', () => {
+    // The task dir is held by task-dir-custody.ts, which restores it after the
+    // turn. A path rule here only refused a subset of the writers.
+    test('no path is refused on its first call', () => {
         const f = armed()
         for (const call of [
-            at('write', '.pi-tasks/TASK_AUTO_0001.md'),
-            at('edit', '/home/u/repo/.pi-tasks/TASK_0010.md'),
-            at('write', 'C:\\repo\\.pi-tasks\\env-notes.md')
+            write('.pi-tasks/TASK_AUTO_0001.md', 'report'),
+            write('.pi-tasks/../src/a.ts', 'x'),
+            write('test/fixtures/proj/.pi-tasks/TASK_0001.md', 'x'),
+            edit('/other/.pi-tasks/TASK_0010.md', 'x')
         ]) {
-            const r = f.emit('tool_call', call)
-            expect(r?.block).toBe(true)
-            expect(r?.terminate).toBeUndefined()
+            expect(f.emit('tool_call', call)).toBeUndefined()
         }
     })
 
-    test('leaves reads and look-alike paths alone', () => {
+    test('an identical task-dir write repeated past every warning ends the turn', () => {
         const f = armed()
-        expect(f.emit('tool_call', at('read', '.pi-tasks/TASK_0010.md'))).toBeUndefined()
-        expect(f.emit('tool_call', at('write', 'src/pi-tasks/a.ts'))).toBeUndefined()
-        expect(f.emit('tool_call', at('write', '.pi-tasks-old/a.md'))).toBeUndefined()
-    })
-
-    test('is inert until armed', () => {
-        const f = fakePi()
-        registerImplementationGuards(f.pi)
-        expect(f.emit('tool_call', at('write', '.pi-tasks/TASK_0001.md'))).toBeUndefined()
+        const same = write('.pi-tasks/TASK_AUTO_0001.md', 'report')
+        const verdicts = verdictsFor(f, same, LOOP_THRESHOLD * (MAX_LOOP_RESTARTS + 2))
+        expect(verdicts.some(v => v.terminate === true)).toBe(true)
     })
 })

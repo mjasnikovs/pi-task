@@ -1,8 +1,8 @@
 /**
- * The implementation-turn bracket: one entry arms both the status widget and the
- * runaway guard, one `leave` disarms both.
+ * The implementation-turn bracket: one entry arms the status widget and the
+ * runaway guard and takes custody of the task dir, one `leave` ends all three.
  *
- * The two modules keep their own lifecycle handlers, and they draw the turn
+ * Each module keeps its own lifecycle handlers, and the first two draw the turn
  * boundary differently on purpose: the widget hides on `agent_end` (a sub-turn is
  * over, the screen should say so), the guard survives until `agent_settled`
  * (compactions and retries fire `agent_end` INSIDE a turn — see its header). What
@@ -13,26 +13,31 @@
 
 import {armImplWidget, disarmImplWidget, type ImplWidgetMeta} from './impl-widget.js'
 import {armImplementationGuard, disarmImplementationGuard} from './implementation-guards.js'
+import {takeTaskDirCustody} from './task-dir-custody.js'
 
 /**
  * `oneShot` true (fire-and-forget /task) lets each module's own settle handler
- * disarm after the single turn; false (awaited /task-auto) keeps both armed
+ * end it after the single turn; false (awaited /task-auto) keeps all three
  * across resume and steer turns until `leave` is called.
  *
  * `leave` is idempotent: a second call is a no-op, so a caller can put it in a
- * `finally` and a `catch` without disarming a bracket entered since.
+ * `finally` and a `catch` without ending a bracket entered since. It resolves to
+ * the task files it restored.
  */
-export function enterImplementationTurn(
+export async function enterImplementationTurn(
     meta: ImplWidgetMeta,
-    opts: {oneShot: boolean}
-): () => void {
-    armImplWidget(meta, opts)
-    armImplementationGuard(opts)
+    opts: {oneShot: boolean; cwd: string}
+): Promise<() => Promise<string[]>> {
+    const {oneShot} = opts
+    const releaseTaskDir = await takeTaskDirCustody(opts.cwd, {oneShot})
+    armImplWidget(meta, {oneShot})
+    armImplementationGuard({oneShot})
     let left = false
-    return () => {
-        if (left) return
+    return async () => {
+        if (left) return []
         left = true
         disarmImplWidget()
         disarmImplementationGuard()
+        return releaseTaskDir()
     }
 }

@@ -32,6 +32,7 @@ import type {ChildStatus} from './child-status.js'
 import {formatLoopHint} from './loop-detector.js'
 import {classifyEnforceChildFailure} from './enforce-guidelines.js'
 import {notifyRun} from '../remote/bridge.js'
+import {restoreTaskDir, snapshotTaskDir, taskDirRestoredNotice} from './task-dir-custody.js'
 
 /** Which gate child this is. */
 export type GateChildKind = 'verify' | 'recommend' | 'lint-fix' | 'final-fix' | 'enforce'
@@ -166,6 +167,9 @@ export function makeGateChild(
         const log = deps.makeDebugAppender(deps.logPath)
         log(`=== ${deps.kind} start: ${deps.taskTitle} ===`)
         const guardSnapshot = row.guarded ? await deps.captureGitState(deps.cwd, sig) : null
+        // Every kind, whatever its tools: the git-state guard and the discard both
+        // leave `.pi-tasks` alone.
+        const taskDir = await snapshotTaskDir(deps.cwd)
         const frame =
             deps.loader === false ?
                 null
@@ -236,6 +240,16 @@ export function makeGateChild(
             } finally {
                 // Restore whatever the child moved BEFORE any verdict or failure is
                 // acted on — a crashed child must not skip the restore either.
+                const restored = await restoreTaskDir(deps.cwd, taskDir)
+                if (restored.length > 0) {
+                    log(`=== ${deps.kind} TASK-DIR CUSTODY — restored: ${restored.join(', ')} ===`)
+                    notifyRun(
+                        deps.ctx,
+                        `${deps.taskTitle}: `
+                            + taskDirRestoredNotice(`the ${deps.kind} child`, restored),
+                        'warning'
+                    )
+                }
                 if (guardSnapshot) {
                     const rec = await deps.reconcileGitState(deps.cwd, guardSnapshot, sig)
                     deps.onReconcile?.(rec)
