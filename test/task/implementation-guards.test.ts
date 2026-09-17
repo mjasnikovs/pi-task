@@ -333,3 +333,36 @@ describe('a broken guard costs nothing', () => {
         expect(f.emit('tool_call', {toolName: 'bash', input: circular})).toBeUndefined()
     })
 })
+
+describe('task-dir writes', () => {
+    const at = (toolName: string, path: string): unknown => ({
+        toolName,
+        input: {path, content: 'x'}
+    })
+
+    test('blocks the first edit or write into .pi-tasks, relative or absolute', () => {
+        const f = armed()
+        for (const call of [
+            at('write', '.pi-tasks/TASK_AUTO_0001.md'),
+            at('edit', '/home/u/repo/.pi-tasks/TASK_0010.md'),
+            at('write', 'C:\\repo\\.pi-tasks\\env-notes.md')
+        ]) {
+            const r = f.emit('tool_call', call)
+            expect(r?.block).toBe(true)
+            expect(r?.terminate).toBeUndefined()
+        }
+    })
+
+    test('leaves reads and look-alike paths alone', () => {
+        const f = armed()
+        expect(f.emit('tool_call', at('read', '.pi-tasks/TASK_0010.md'))).toBeUndefined()
+        expect(f.emit('tool_call', at('write', 'src/pi-tasks/a.ts'))).toBeUndefined()
+        expect(f.emit('tool_call', at('write', '.pi-tasks-old/a.md'))).toBeUndefined()
+    })
+
+    test('is inert until armed', () => {
+        const f = fakePi()
+        registerImplementationGuards(f.pi)
+        expect(f.emit('tool_call', at('write', '.pi-tasks/TASK_0001.md'))).toBeUndefined()
+    })
+})

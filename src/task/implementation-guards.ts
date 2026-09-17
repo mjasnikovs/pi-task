@@ -6,6 +6,7 @@ import {
     LOOP_WINDOW,
     MAX_LOOP_RESTARTS
 } from './loop-detector.js'
+import {TASKS_DIR_NAME} from './task-types.js'
 
 /**
  * Runaway guard for the IMPLEMENTATION TURN — the one model surface with none.
@@ -113,6 +114,21 @@ export function blockedCallReason(toolName: string, count: number): string {
     )
 }
 
+/** Every file under the task dir is host-written. MEASURED: an mx5 implementer
+ *  wrote its report over TASK_AUTO_0001.md, and the run died on its front matter. */
+export function targetsTaskDir(toolName: string, input: unknown): boolean {
+    if (!MUTATING_TOOLS.has(toolName)) return false
+    const target = (input as {path?: unknown} | null)?.path
+    return typeof target === 'string' && target.split(/[\\/]/).includes(TASKS_DIR_NAME)
+}
+
+export function taskDirWriteReason(): string {
+    return (
+        `Blocked: ${TASKS_DIR_NAME}/ belongs to pi-task and is written only by the host. `
+        + `Put your report in your reply, not in a file, then continue the task.`
+    )
+}
+
 /** The reason on the final block, which also ends the turn. */
 export function terminalCallReason(): string {
     return (
@@ -155,6 +171,9 @@ export function registerImplementationGuards(pi: ExtensionAPI): void {
             // ends. One batch, and it is the only bound this path has.
             if (state.terminating) {
                 return {block: true, terminate: true, reason: terminalCallReason()}
+            }
+            if (targetsTaskDir(event.toolName, event.input)) {
+                return {block: true, reason: taskDirWriteReason()}
             }
             const call = {name: event.toolName, args: event.input}
             const mutating = MUTATING_TOOLS.has(event.toolName)
