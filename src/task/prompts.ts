@@ -248,6 +248,16 @@ ${research}
 Answers so far:
 ${priorQA.trim() || '(none yet)'}`
 
+/**
+ * The first triage check. MEASURED (mx5-n TASK_0004, 2026-09-17): the auto-answer
+ * chose "flag the test breakage as a known issue for the test owner". No task owns
+ * a test, so the suite stayed red through four tasks, and the fifth was specced
+ * as "add three files, change nothing else, make the whole suite pass" — an
+ * unsatisfiable spec whose implementer looped until the runaway guard fired.
+ * Exported on its own so a harness can measure the prompt with and without it.
+ */
+export const GRILL_GREEN_SUITE_CHECK = `1. GREEN-SUITE CHECK — if an option would leave an existing test, lint, or build failing after this task ("known issue", "for the test owner", "whoever revisits it", "a later step will fix it"), that option is NOT available. Nobody downstream owns a breakage: every later task inherits a red suite it is told not to touch, and the run stalls there. A scope rule such as "only create file X" does NOT settle this — a test that asserts on X's output is part of X's change, so updating that test is in scope. If one option keeps the suite green, emit "ANSWER: <that option>, and update <the test file> so the suite stays green". If no offered option does, emit "ANSWER: <the smallest change that keeps the suite green, naming the test file to update>". Never answer with a deferral.`
+
 const GRILL_AUTO_ANSWER_PROMPT = (
     refined: string,
     research: string,
@@ -267,11 +277,13 @@ API-GROUNDING RULE: never name a concrete API (\`Namespace.member\`, an imported
 
 TRIAGE — run these checks IN ORDER first. The REVERSIBILITY TEST below applies ONLY to a question that survives all checks as a genuine preference.
 
-1. ALREADY-DECIDED CHECK — scan the refined task and research for a value, shape, response body, schema, route, or requirement that ALREADY determines the answer. If one does, this is a fact, not a preference. Emit "ANSWER: <value taken from that source>". If your instinct or a "nicer" alternative contradicts that source, the SOURCE WINS — never override a stated contract with a preferred default. (E.g. a stated response shape { items, total, page, pageSize } already answers a pagination question — page/offset — you may NOT answer "cursor".)
+${GRILL_GREEN_SUITE_CHECK}
 
-2. FUNCTIONAL-REQUIREMENT CHECK — if the question is whether to include or defer a package, config file, or setup that something THIS task configures needs in order to FUNCTION (a build plugin's engine or required peer dependency, an entry file the build reads, a runtime module an import resolves to), then a "minimize / keep it minimal / defer to the step that uses it" preference does NOT override that functional requirement. A tool you wire up this step must have its required pieces present this step or the build/step is broken. Emit "ANSWER: <include it now, because configuring X requires it>". Do not defer something the step's own configuration depends on.
+2. ALREADY-DECIDED CHECK — scan the refined task and research for a value, shape, response body, schema, route, or requirement that ALREADY determines the answer. If one does, this is a fact, not a preference. Emit "ANSWER: <value taken from that source>". If your instinct or a "nicer" alternative contradicts that source, the SOURCE WINS — never override a stated contract with a preferred default. (E.g. a stated response shape { items, total, page, pageSize } already answers a pagination question — page/offset — you may NOT answer "cursor".)
 
-3. PREFERENCE — only if neither check fires (a genuine choice the sources do not determine), apply the REVERSIBILITY TEST.
+3. FUNCTIONAL-REQUIREMENT CHECK — if the question is whether to include or defer a package, config file, or setup that something THIS task configures needs in order to FUNCTION (a build plugin's engine or required peer dependency, an entry file the build reads, a runtime module an import resolves to), then a "minimize / keep it minimal / defer to the step that uses it" preference does NOT override that functional requirement. A tool you wire up this step must have its required pieces present this step or the build/step is broken. Emit "ANSWER: <include it now, because configuring X requires it>". Do not defer something the step's own configuration depends on.
+
+4. PREFERENCE — only if no check fires (a genuine choice the sources do not determine), apply the REVERSIBILITY TEST.
 
 REVERSIBILITY TEST:
   ANSWER: cheap to undo (output style, policy, report format, obvious scope, standard convention).

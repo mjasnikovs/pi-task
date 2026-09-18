@@ -109,6 +109,32 @@ describe('classifyHealthDelta', () => {
     })
 })
 
+describe('classifyHealthDelta — the test suite', () => {
+    const suite = (
+        testOutcome: 'pass' | 'fail',
+        exitCode: number | null
+    ): HealthCommandResult[] => [
+        {cmd: 'bun run lint', outcome: 'pass', exitCode: 0},
+        {cmd: 'bun run test', outcome: testOutcome, exitCode}
+    ]
+    test('a suite the baseline saw green and the task turned red is REGRESSED, whatever the spec says', () => {
+        expect(
+            classifyHealthDelta(
+                {ok: true, commands: suite('pass', 0)},
+                {ok: false, commands: suite('fail', 1)}
+            )
+        ).toBe('regressed')
+    })
+    test('a suite that needs a database fails the same way before and after: pre-existing', () => {
+        expect(
+            classifyHealthDelta(
+                {ok: false, commands: suite('fail', 1)},
+                {ok: false, commands: suite('fail', 1)}
+            )
+        ).toBe('pre-existing')
+    })
+})
+
 describe('inheritedHealthFindings', () => {
     test('names each failing command and its exit code', () => {
         expect(inheritedHealthFindings(LINT_RED)).toEqual([

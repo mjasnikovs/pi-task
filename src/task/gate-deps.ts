@@ -656,7 +656,7 @@ export async function healthBaselineFor(
         if (stored) return stored
         const fresh = await lazyHealthBaseline({
             git: makeGit(cwd, signal),
-            runHealthIn: dir => runRepoHealthCheck(dir, {signal})
+            runHealthIn: dir => runRepoHealthCheck(dir, {signal, withTests: true})
         })
         if (fresh) {
             await setTaskSection(
@@ -903,6 +903,7 @@ export function buildGateDeps(params: {
         }))
         return runRepoHealthCheck(cwd2, {
             signal,
+            withTests: true,
             onCommand: c => {
                 running = c
             }
@@ -1115,9 +1116,11 @@ export function buildGateDeps(params: {
                     onStage: label => {
                         stageLine = label
                     },
-                    // Deterministic whole-repo static-analysis gate — runs the project's
-                    // own lint/typecheck and fails on a real non-zero exit, independent of
-                    // the model-authored VERIFY block, which may not lint at all. ASYNC,
+                    // Deterministic whole-repo gate — runs the project's own
+                    // lint/typecheck AND its test suite, independent of the
+                    // model-authored VERIFY block, which may not lint at all. The suite
+                    // is judged only against the baseline below (a task that turned a
+                    // green suite red is this task's FAIL, whatever its spec says). ASYNC,
                     // so the lint does not starve pi-tui's nextTick-scheduled renders.
                     //
                     // ONE call, both arms. A baseline arm that dropped the signal or the
@@ -1127,6 +1130,7 @@ export function buildGateDeps(params: {
                     repoHealth: () =>
                         runRepoHealthCheck(cwd2, {
                             signal,
+                            withTests: true,
                             onCommand: c => {
                                 stageLine = `repo health · ${c}`
                             }

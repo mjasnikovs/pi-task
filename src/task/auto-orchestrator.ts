@@ -20,6 +20,7 @@ import {
     AUTO_DECOMPOSE_PROMPT,
     DECOMPOSE_COVERAGE_PROMPT
 } from './auto-prompts.js'
+import {defersBreakage} from './deferred-breakage.js'
 import {GRILL_AUTO_ANSWER_PROMPT, GRILL_AUTO_FORMAT_HINT} from './prompts.js'
 import {
     allocateAutoId,
@@ -373,6 +374,13 @@ async function triageClarifyQuestion(
             )
         }
         const parsed = parseAutoAnswer(text)
+        if (parsed.kind === 'answered' && defersBreakage(parsed.text)) {
+            logPlanDebug(
+                cwd,
+                `clarify-triage answer defers a breakage to a nonexistent owner — surfacing: ${parsed.text.replace(/\s+/g, ' ').slice(0, 100)}`
+            )
+            return null
+        }
         if (parsed.kind === 'answered') {
             logPlanDebug(
                 cwd,

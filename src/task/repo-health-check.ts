@@ -14,11 +14,18 @@
  * verify gate's `repo-health` FAIL (verify-work.ts), which reaches the
  * AUTOFIX / ACCEPT picker in verify-resolution.ts.
  *
- * Scope is deliberately STATIC ANALYSIS ONLY (lint / typecheck / clippy / vet), never
- * `test`, `build`, `run`, or anything that boots a server or needs a database. Those
- * depend on external services the verify prompt already carves out as an environment
- * gap, so running them here would blame code for a missing database. Static analysis
- * is hermetic: it needs no network, no service and no fixtures.
+ * Scope is STATIC ANALYSIS (lint / typecheck / clippy / vet) by default, never
+ * `build`, `run`, or anything that boots a server. Static analysis is hermetic: it
+ * needs no network, no service and no fixtures, so its absolute exit code decides.
+ *
+ * The TEST suite joins only under `withTests`, and only for the DIFFERENTIAL
+ * (health-baseline.ts). MEASURED (mx5-n TASK_0004, 2026-09-17): a task turned a
+ * green suite red, its spec called that a "known issue for the test owner", the
+ * model gate passed it, and four tasks later the run stalled on an unsatisfiable
+ * spec. A suite that needs a database fails the same way before and after the
+ * task, which the differential reads as pre-existing — so running it here does
+ * not blame code for a missing database, and DOES blame the task that broke a
+ * suite the baseline saw green.
  *
  * Absence is a PASS, two ways: (1) no recognised manifest at all (a pure-docs or
  * config-only repo has nothing that can regress); (2) a manifest with no static-check
@@ -167,6 +174,49 @@ export function discoverHealthCommands(cwd: string): {
     return {ecosystem: null, cmds: []}
 }
 
+/**
+ * The project's OWN test commands, in the order the run-end gate runs them. One
+ * statement for both gates: final-gate.ts appends `build` to this list for the
+ * integration half, and `runRepoHealthCheck` runs it under `withTests` for the
+ * per-task differential, so the two cannot drift apart.
+ *
+ * Every test-shaped script, not just the one literally named `test`: a project's
+ * only browser-executing suite is often `test:ct`, and looking for `test` alone
+ * never runs it. Plain `test` leads, then every `test:`/`test_`/`test-` name in
+ * declaration order (Array#sort is stable).
+ */
+export function discoverTestCommands(cwd: string): {
+    ecosystem: string | null
+    cmds: HealthCommand[]
+} {
+    if (existsSync(path.join(cwd, 'package.json'))) {
+        const s = packageScripts(cwd)
+        const names = Object.keys(s).filter(n => n === 'test' || /^test[:_-]/.test(n))
+        names.sort((a, b) =>
+            a === 'test' ? -1
+            : b === 'test' ? 1
+            : 0
+        )
+        return {ecosystem: 'package.json', cmds: names.map(n => ['bun', ['run', n]])}
+    }
+    if (existsSync(path.join(cwd, 'Makefile'))) {
+        return {
+            ecosystem: 'Makefile',
+            cmds: makeHasTarget(cwd, 'test') ? [['make', ['test']]] : []
+        }
+    }
+    if (existsSync(path.join(cwd, 'Cargo.toml'))) {
+        return {ecosystem: 'Cargo.toml', cmds: [['cargo', ['test', '--quiet']]]}
+    }
+    if (existsSync(path.join(cwd, 'go.mod'))) {
+        return {ecosystem: 'go.mod', cmds: [['go', ['test', './...']]]}
+    }
+    if (existsSync(path.join(cwd, 'pyproject.toml'))) {
+        return {ecosystem: 'pyproject.toml', cmds: [['pytest', ['-q']]]}
+    }
+    return {ecosystem: null, cmds: []}
+}
+
 /** The nothing-to-run outcome, shared by both runners. */
 function noCommandOutcome(ecosystem: string | null): HealthOutcome {
     return {
@@ -211,13 +261,22 @@ export async function runRepoHealthCheck(
         onCommand?: HealthProgress
         /** The spawner. Injected so a verdict is testable without a real shell. */
         run?: CommandRunner
+        /** Also run the project's test commands, after the statics. Only a caller
+         *  that will judge the result DIFFERENTIALLY may set this — see the header. */
+        withTests?: boolean
     } = {}
 ): Promise<HealthOutcome> {
-    const {ecosystem, cmds} = discoverHealthCommands(cwd)
+    const statics = discoverHealthCommands(cwd)
+    const tests = opts.withTests ? discoverTestCommands(cwd) : {ecosystem: null, cmds: []}
+    const ecosystem = statics.ecosystem ?? tests.ecosystem
+    const cmds: Array<{bin: string; args: string[]; test: boolean}> = [
+        ...statics.cmds.map(([bin, args]) => ({bin, args, test: false})),
+        ...tests.cmds.map(([bin, args]) => ({bin, args, test: true}))
+    ]
     if (!ecosystem || cmds.length === 0) return noCommandOutcome(ecosystem)
     const run = opts.run ?? spawnCommand
     const commands: HealthCommandResult[] = []
-    for (const [bin, args] of cmds) {
+    for (const {bin, args, test} of cmds) {
         const cmd = `${bin} ${args.join(' ')}`
         opts.onCommand?.(cmd)
         // Runner resolution: a PATH-stripped environment must not
@@ -237,12 +296,11 @@ export async function runRepoHealthCheck(
         // ladder's `tail` keeps 400 characters, and that difference is real — a
         // truncated lint report is unactionable. So the run is classified, not
         // consumed: the verdict decides, the raw streams are what we show.
-        // `runtimeGap: false` — this ladder is NARROWER than the gate's. The
-        // browser/runtime row was written for the gate's TEST commands; here the
-        // commands are lint and typecheck, and its pattern matches ordinary
-        // English, so a genuine report quoting "browsers are not installed" would
-        // skip the static check and certify the repo healthy.
-        const verdict = classifyCommandRun(r, [], {runtimeGap: false})
+        // `runtimeGap` only for a TEST command. The browser/runtime row was
+        // written for the gate's test commands and its pattern matches ordinary
+        // English, so on lint and typecheck a genuine report quoting "browsers are
+        // not installed" would skip the static check and certify the repo healthy.
+        const verdict = classifyCommandRun(r, [], {runtimeGap: test})
         if (verdict.outcome !== 'fail') {
             const passed = verdict.outcome === 'pass'
             commands.push({cmd, outcome: passed ? 'pass' : 'skip', exitCode: passed ? 0 : null})
@@ -259,7 +317,7 @@ export async function runRepoHealthCheck(
     }
     return {
         ok: true,
-        reason: `${ecosystem}: static checks passed`,
+        reason: `${ecosystem}: static checks${tests.cmds.length > 0 ? ' and tests' : ''} passed`,
         ecosystem,
         commands,
         output: ''

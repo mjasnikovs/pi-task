@@ -33,6 +33,7 @@ import {getConfig} from '../config/config.js'
 import {buildExternalContext, gatherExternalContext} from './external-context.js'
 import {currentRunContext, type RunContext} from './run-context.js'
 import {readableMentions} from './mentions.js'
+import {defersBreakage, deferredBreakageReaskHint} from './deferred-breakage.js'
 import {
     REFINE_PROMPT,
     RESEARCH_FILES_PROMPT,
@@ -1023,6 +1024,41 @@ export async function phaseAutoAnswer(
                     }
                 } else {
                     parsed = reasked
+                }
+            }
+        }
+
+        // Deterministic backstop behind the prompt's GREEN-SUITE CHECK: an answer
+        // that defers a breakage to "the test owner" gets ONE re-ask, and a second
+        // deferral is surfaced as an unsafe unknown — yolo.ts skips it, a human
+        // sees it. Promoting it is how mx5-n TASK_0004 turned the suite red for
+        // the rest of the run.
+        if (parsed.kind === 'answered' && defersBreakage(parsed.text)) {
+            deps.logDebug?.(
+                'grill-auto: answer defers a breakage to a nonexistent owner — re-asking once'
+            )
+            let reasked: AutoAnswer | null = null
+            try {
+                const text2 = await runPhaseChild(
+                    deps,
+                    'grill-auto',
+                    'read',
+                    prependHint(deferredBreakageReaskHint(parsed.text), basePrompt)
+                )
+                if (autoAnswerHasTag(text2)) reasked = parseAutoAnswer(text2)
+            } catch (e) {
+                if (isFatalChildCause(e)) throw e
+                reasked = null
+            }
+            if (reasked !== null && reasked.kind === 'answered' && !defersBreakage(reasked.text)) {
+                parsed = reasked
+            } else {
+                deps.logDebug?.('grill-auto: answer still defers the breakage — surfacing to user')
+                parsed = {
+                    kind: 'unknown',
+                    suggested: reasked?.kind === 'answered' ? reasked.text : parsed.text,
+                    raw: (reasked ?? parsed).raw,
+                    reason: 'deferred-breakage'
                 }
             }
         }

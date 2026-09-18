@@ -85,11 +85,12 @@ export function yoloPickAnswer(
 
 /**
  * The same policy expressed over an {@link AutoAnswer}, for the grill site. Of the
- * four `reason` tags an unknown can carry — `api-synthesis`, `integration`,
- * `threw`, `model-unknown` — only ANTI-SYNTHESIS is unsafe. The other three carry
- * an ordinary best-effort recommendation, which is precisely what a human would be
- * shown as the green card. The variants are told apart by that tag, never by
- * pattern-matching the answer text.
+ * five `reason` tags an unknown can carry — `api-synthesis`, `deferred-breakage`,
+ * `integration`, `threw`, `model-unknown` — the first two are unsafe: one names an
+ * API nobody verified, the other hands a red suite to an owner nobody is. The other
+ * three carry an ordinary best-effort recommendation, which is precisely what a
+ * human would be shown as the green card. The variants are told apart by that tag,
+ * never by pattern-matching the answer text.
  */
 export function yoloPickAutoAnswer(enabled: boolean, auto: AutoAnswer): YoloPick {
     if (!enabled) return null
@@ -99,6 +100,9 @@ export function yoloPickAutoAnswer(enabled: boolean, auto: AutoAnswer): YoloPick
         ...(auto.alt !== undefined && {alt: auto.alt}),
         ...(auto.reason === 'api-synthesis' && {
             unsafe: 'the suggested answer names an unverified API identifier — needs a human'
+        }),
+        ...(auto.reason === 'deferred-breakage' && {
+            unsafe: 'the suggested answer leaves a test or build failing for an owner that does not exist — needs a human'
         })
     })
 }

@@ -49,6 +49,7 @@ import * as path from 'node:path'
 import {
     runRepoHealthCheck,
     discoverHealthCommands,
+    discoverTestCommands,
     type HealthCommand
 } from './repo-health-check.js'
 import {deriveOpenDebts, rerunDebtVerifyCommand, type AcceptDebt} from './accept-debt.js'
@@ -193,57 +194,19 @@ export function discoverIntegrationCommands(cwd: string): {
     ecosystem: string | null
     cmds: HealthCommand[]
 } {
-    if (existsSync(path.join(cwd, 'package.json'))) {
-        const s = packageScripts(cwd)
-        const cmds: HealthCommand[] = []
-        // Every test-shaped script, not just the one literally named `test`: a
-        // project's only browser-executing suite is often `test:ct` or similar, and
-        // looking for `test` alone never runs it. Plain `test` leads, then every
-        // `test:`/`test_`/`test-` prefixed name in declaration order (Array#sort is
-        // stable), then `build`. Measured on a manifest declaring test:ct, build,
-        // test_unit, test-e2e, test, testing and pretest, the result is exactly
-        // test, test:ct, test_unit, test-e2e, build — `testing` and `pretest` do
-        // not match. Env-gap SKIP still applies per command: a suite whose browser
-        // or runtime is absent skips rather than fails (see runGateCommand).
-        const testNames = Object.keys(s).filter(n => n === 'test' || /^test[:_-]/.test(n))
-        testNames.sort((a, b) =>
-            a === 'test' ? -1
-            : b === 'test' ? 1
-            : 0
-        )
-        for (const name of testNames) cmds.push(['bun', ['run', name]])
-        if (s.build) cmds.push(['bun', ['run', 'build']])
-        return {ecosystem: 'package.json', cmds}
-    }
-    if (existsSync(path.join(cwd, 'Makefile'))) {
-        const cmds: HealthCommand[] = []
-        for (const target of ['test', 'build']) {
-            if (makeHasTarget(cwd, target)) cmds.push(['make', [target]])
+    const tests = discoverTestCommands(cwd)
+    const build = ((): HealthCommand | null => {
+        if (existsSync(path.join(cwd, 'package.json'))) {
+            return packageScripts(cwd).build ? ['bun', ['run', 'build']] : null
         }
-        return {ecosystem: 'Makefile', cmds}
-    }
-    if (existsSync(path.join(cwd, 'Cargo.toml'))) {
-        return {
-            ecosystem: 'Cargo.toml',
-            cmds: [
-                ['cargo', ['test', '--quiet']],
-                ['cargo', ['build', '--quiet']]
-            ]
+        if (existsSync(path.join(cwd, 'Makefile'))) {
+            return makeHasTarget(cwd, 'build') ? ['make', ['build']] : null
         }
-    }
-    if (existsSync(path.join(cwd, 'go.mod'))) {
-        return {
-            ecosystem: 'go.mod',
-            cmds: [
-                ['go', ['test', './...']],
-                ['go', ['build', './...']]
-            ]
-        }
-    }
-    if (existsSync(path.join(cwd, 'pyproject.toml'))) {
-        return {ecosystem: 'pyproject.toml', cmds: [['pytest', ['-q']]]}
-    }
-    return {ecosystem: null, cmds: []}
+        if (existsSync(path.join(cwd, 'Cargo.toml'))) return ['cargo', ['build', '--quiet']]
+        if (existsSync(path.join(cwd, 'go.mod'))) return ['go', ['build', './...']]
+        return null
+    })()
+    return {ecosystem: tests.ecosystem, cmds: build ? [...tests.cmds, build] : tests.cmds}
 }
 
 /**

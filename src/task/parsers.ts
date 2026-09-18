@@ -27,7 +27,8 @@ import type {ToolingClass} from './run-context.js'
  *     a recommendation instead of being taken silently.
  *   - 'threw' — the child failed; there is no recommendation at all.
  */
-export type AutoAnswerUnknownReason = 'model-unknown' | 'api-synthesis' | 'integration' | 'threw'
+export type AutoAnswerUnknownReason =
+    'model-unknown' | 'api-synthesis' | 'integration' | 'threw' | 'deferred-breakage'
 
 export type AutoAnswer =
     | {kind: 'answered'; text: string; raw: string}
