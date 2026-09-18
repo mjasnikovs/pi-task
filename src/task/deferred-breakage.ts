@@ -10,35 +10,111 @@
  * model that ignores the rule still cannot promote a deferral into a decision.
  * The phrases are the ones a model reaches for when it wants to defer, not the
  * word "test" — "add a test later" is a plan, not a deferral.
+ *
+ * SCOPE IS GRAMMATICAL, never a character count. A negation or a conditional
+ * cancels a phrase only inside the phrase's own clause: "rather than flag it as a
+ * known issue" rejects the phrase, and "without touching the test file, accepting
+ * that it fails" does not. "Known issue", "follow-up" and "a later step" also name
+ * legitimate plans — an upstream bug, a scope cut — so they count only in a clause
+ * about a check.
  */
-const DEFERRAL_PHRASES: readonly RegExp[] = [
-    /\bknown[- ]issue\b/i,
-    /\b(?:test|suite|file|module)[- ]owner\b/i,
-    /\bwhoever\s+(?:owns|revisits|maintains|touches)\b/i,
-    /\bowned by\s+(?:whoever|the\s+\w+\s+owner|a\s+later\s+(?:step|task))/i,
-    /\b(?:a|the)\s+later\s+(?:step|task)\s+(?:will|should|can|to)\s+(?:fix|revisit|update|repair|address)/i,
-    /\bleave\s+(?:the\s+)?(?:test|tests|suite|failure|breakage)\s+(?:failing|red|broken|as[- ]is)\b/i,
-    /\baccept(?:ing)?\s+(?:that\s+)?.{0,60}?\b(?:test|tests|suite|assertions?|lint|build)\b.{0,80}?\b(?:fail|failing|red|broken)\b/i,
-    /\bflag(?:ged|ging)?\s+(?:it\s+|this\s+|the\s+\S+\s+)?(?:as\s+)?(?:a\s+)?(?:known|for\s+(?:the|a|whoever))/i,
-    /\b(?:owned|as the owned|as a)\s+follow-?up\b/i,
-    /\bleft\s+for\s+(?:whoever|the\s+\w+\s+owner)\b/i,
-    /\bownership\s+belongs\s+to\b/i
+
+/** A test, or a static check that the same clause calls broken. */
+const TEST_NOUN = /\b(?:tests?|suites?|assertions?)\b/i
+const BUILD_NOUN = /\b(?:lint|linter|typecheck|build|ci)\b/i
+const FAILURE = /\b(?:fail\w*|red|broken|breaks?|breakage|errors?)\b/i
+
+/** Before a phrase in its clause: the phrase is rejected, or it is what an option
+ *  WOULD do — "IF NOT EXISTS would still leave the test failing" weighs an option. */
+const NOT_A_DECISION =
+    /\b(?:not|never|no|don't|do not|doesn't|does not|rather than|instead of|isn't|is not|without|avoid|avoiding|would|could|might)\b/i
+
+/** Where one clause ends and the next begins. */
+const CLAUSE_BOUNDARY =
+    /[,:()]|\s[—–-]\s|\b(?:and|but|so|then|while|whereas|although|though|because|since|however)\b/gi
+
+const SENTENCE_BOUNDARY = /[.!?](?=\s|$)|;|\n/
+
+interface DeferralPhrase {
+    re: RegExp
+    /** alone — the phrase is a deferral by itself; check — only in a clause about a
+     *  check; breakage — only in a sentence that says a check fails. */
+    needs: 'alone' | 'check' | 'breakage'
+}
+
+const PHRASES: readonly DeferralPhrase[] = [
+    {re: /\b(?:test|suite)[- ]owners?\b/i, needs: 'alone'},
+    {
+        re: /\bflag(?:s|ged|ging)?\b.*?\b(?:as\s+(?:an?\s+|the\s+)?(?:known|owned)\b|for\s+(?:whoever|later|a\s+later)\b)/i,
+        needs: 'alone'
+    },
+    {
+        re: /\bleav(?:e|es|ing)\b.*?\b(?:tests?|suites?|assertions?|lint|build|checks?|ci)\b.*?\b(?:failing|red|broken|as[- ]is)\b/i,
+        needs: 'alone'
+    },
+    {
+        re: /\bskip(?:s|ping)?\s+(?:updating|fixing|adjusting|changing|touching)\b.*?\b(?:tests?|suites?|assertions?)\b/i,
+        needs: 'alone'
+    },
+    {re: /\baccept(?:s|ed|ing)?\b.*?\b(?:fail\w*|red|broken)\b/i, needs: 'check'},
+    {re: /\bwhoever\b/i, needs: 'check'},
+    {re: /\bowned\s+(?:by|follow[- ]?up)\b/i, needs: 'check'},
+    {re: /\bownership\s+(?:belongs|lies|rests)\s+(?:to|with)\b/i, needs: 'check'},
+    {re: /\bleft\s+for\b/i, needs: 'check'},
+    {re: /\bknown[- ]issues?\b/i, needs: 'check'},
+    {re: /\bfollow[- ]?ups?\b/i, needs: 'check'},
+    {
+        re: /\b(?:a|the|another|some)\s+(?:later|future|subsequent|separate)\s+(?:step|task|change|pr)\b/i,
+        needs: 'check'
+    },
+    {re: /\bdefer(?:s|red|ring)?\b/i, needs: 'check'},
+    {re: /\bout\s+of\s+scope\b/i, needs: 'check'},
+    {
+        re: /\b(?:that|this|which|it|they|those)\s+(?:is|are|remains?)\s+out\s+of\s+scope\b/i,
+        needs: 'breakage'
+    }
 ]
 
-/** "do NOT defer", "not a deferral to a test owner", "rather than flag it" — the
- *  phrase is named to reject it. MEASURED: a treatment answer did exactly that. */
-const NEGATION_BEFORE =
-    /\b(?:not|never|no|don't|do not|rather than|instead of|isn't|is not|without)\b[^.;]{0,40}$/i
+function aboutACheck(text: string): boolean {
+    return TEST_NOUN.test(text) || (BUILD_NOUN.test(text) && FAILURE.test(text))
+}
+
+/**
+ * Parenthetical asides go, and a code span keeps its words but loses the
+ * punctuation that would split a clause in two: `toEqual([{filename: X}])` is
+ * one token of the sentence around it, not three clauses.
+ */
+function prose(answer: string): string {
+    let text = answer.replace(/`([^`]*)`/g, (_m, code: string) =>
+        code.replace(/[,;:()[\]{}]/g, ' ')
+    )
+    let before: string
+    do {
+        before = text
+        text = text.replace(/\([^()]*\)/g, ' ')
+    } while (text !== before)
+    return text
+}
+
+function clauses(sentence: string): string[] {
+    return sentence.split(CLAUSE_BOUNDARY).filter(c => c.trim().length > 0)
+}
 
 export function defersBreakage(answer: string): boolean {
-    return DEFERRAL_PHRASES.some(re => {
-        const m = new RegExp(re.source, re.flags + (re.flags.includes('g') ? '' : 'g'))
-        for (const hit of answer.matchAll(m)) {
-            const before = answer.slice(Math.max(0, hit.index - 60), hit.index)
-            if (!NEGATION_BEFORE.test(before)) return true
+    for (const sentence of prose(answer).split(SENTENCE_BOUNDARY)) {
+        const sentenceBreaks = aboutACheck(sentence) && FAILURE.test(sentence)
+        for (const clause of clauses(sentence)) {
+            for (const {re, needs} of PHRASES) {
+                const hit = re.exec(clause)
+                if (!hit) continue
+                if (NOT_A_DECISION.test(clause.slice(0, hit.index))) continue
+                if (needs === 'check' && !aboutACheck(clause)) continue
+                if (needs === 'breakage' && !sentenceBreaks) continue
+                return true
+            }
         }
-        return false
-    })
+    }
+    return false
 }
 
 /** The one re-ask a deferring answer gets before it is surfaced instead of promoted. */

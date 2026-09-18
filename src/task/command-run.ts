@@ -290,9 +290,22 @@ export const ENV_GAP_OUTPUT_RE =
 export const INFRA_GAP_OUTPUT_RE =
     /ECONNREFUSED|connection refused|ENOTFOUND|EAI_AGAIN|is the server running|could not connect|cannot connect to the docker daemon|connect: connection|no such host/i
 
+/**
+ * A test runner that found no tests to run: bun, jest, vitest, mocha and pytest
+ * each exit non-zero on it. A suite that ran nothing observed nothing, which is the
+ * contract's definition of a gap. Test commands only (see `emptySuite`).
+ */
+export const EMPTY_SUITE_OUTPUT_RE =
+    /\b0 test files matching\b|\bNo tests found\b|\bNo test files found\b|\bno tests ran\b|\bcollected 0 items\b/i
+
 /** Which way a command failed to tell us anything. */
 export type CommandGapId =
-    'spawn-failed' | 'killed' | 'command-not-found' | 'missing-runtime' | 'infrastructure'
+    | 'spawn-failed'
+    | 'killed'
+    | 'command-not-found'
+    | 'missing-runtime'
+    | 'infrastructure'
+    | 'empty-suite'
 
 export type CommandVerdict =
     /** Nothing was observed. Never fails a gate, never closes a debt. */
@@ -340,6 +353,11 @@ const GAP_RULES: ReadonlyArray<{
         id: 'infrastructure',
         detail: () => 'external infrastructure unreachable',
         applies: (_run, output, gapPatterns) => gapPatterns.some(re => re.test(output))
+    },
+    {
+        id: 'empty-suite',
+        detail: () => 'no tests found',
+        applies: (_run, output) => EMPTY_SUITE_OUTPUT_RE.test(output)
     }
 ]
 
@@ -370,6 +388,11 @@ export interface ClassifyOptions {
      * and tell the gate the repo is healthy.
      */
     runtimeGap?: boolean
+    /**
+     * May this command's output claim it found NO TESTS? False by default: the
+     * wording is only a gap when a test runner printed it.
+     */
+    emptySuite?: boolean
 }
 
 /**
@@ -392,6 +415,7 @@ export function classifyCommandRun(
     const runtimeGap = opts.runtimeGap ?? true
     for (const rule of GAP_RULES) {
         if (rule.id === 'missing-runtime' && !runtimeGap) continue
+        if (rule.id === 'empty-suite' && opts.emptySuite !== true) continue
         if (rule.applies(run, output, gapPatterns)) {
             return {outcome: 'gap', gap: rule.id, detail: rule.detail(run)}
         }

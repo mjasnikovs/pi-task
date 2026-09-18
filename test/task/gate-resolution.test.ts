@@ -21,6 +21,7 @@ import fixture from './__fixtures__/auto-0002-gate-sequences.json'
 const FAIL_CLASSES: VerifyFailClass[] = [
     'repo-health',
     'static-checks',
+    'test-suite',
     'model-verdict',
     'unobserved',
     'harness-fault'
@@ -68,7 +69,7 @@ function everyCell(): ResolutionInput[] {
 describe('the table is total and its rows are disjoint in effect', () => {
     test('every input cell resolves, and an accept ALWAYS carries a debt origin', () => {
         const cells = everyCell()
-        expect(cells).toHaveLength(5 * 2 * 2 * 2 * 4 * 2)
+        expect(cells).toHaveLength(FAIL_CLASSES.length * 2 * 2 * 2 * 4 * 2)
         for (const cell of cells) {
             const d = resolveDisposition(cell)
             expect(['autofix', 'accept', 'ask']).toContain(d.action)
@@ -102,7 +103,12 @@ describe('AUTOFIX_BUDGET', () => {
         expect(Object.keys(AUTOFIX_BUDGET).sort()).toEqual([...FAIL_CLASSES].sort())
         expect(AUTOFIX_BUDGET.unobserved).toBe(0)
         expect(AUTOFIX_BUDGET['harness-fault']).toBe(0)
-        for (const cls of ['repo-health', 'static-checks', 'model-verdict'] as const) {
+        for (const cls of [
+            'repo-health',
+            'static-checks',
+            'test-suite',
+            'model-verdict'
+        ] as const) {
             expect(AUTOFIX_BUDGET[cls]).toBeGreaterThan(0)
         }
     })

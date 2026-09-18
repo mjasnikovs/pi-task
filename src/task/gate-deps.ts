@@ -45,7 +45,7 @@ import type {CommandRunner} from './command-run.js'
 import {readContracts} from './contracts.js'
 import {closeHealthDebts, recordDebt} from './accept-debt.js'
 import {recordRepairCandidate} from './root-cause-repair.js'
-import {runRepoHealthCheck, type HealthOutcome} from './repo-health-check.js'
+import {runRepoHealthCheck, type HealthOutcome, type HealthProgress} from './repo-health-check.js'
 import {
     runFinalIntegrationGate,
     discoverGateCommandLabels,
@@ -656,7 +656,10 @@ export async function healthBaselineFor(
         if (stored) return stored
         const fresh = await lazyHealthBaseline({
             git: makeGit(cwd, signal),
-            runHealthIn: dir => runRepoHealthCheck(dir, {signal, withTests: true})
+            // Statics only. The worktree has none of the tree's ignored files (the
+            // installed dependencies, a `.env`), so its suite fails for that, and a
+            // red recorded here would excuse the real regression it matches.
+            runHealthIn: dir => runRepoHealthCheck(dir, {signal})
         })
         if (fresh) {
             await setTaskSection(
@@ -880,7 +883,37 @@ export function buildGateDeps(params: {
         await git(cwd2, ['clean', '-fd', '-e', '.pi-tasks'], signal)
     }
 
-    // The project's own statics, under a live loader naming the running command.
+    const untrackedFiles = async (cwd2: string): Promise<Set<string> | null> => {
+        const r = await git(
+            cwd2,
+            ['ls-files', '--others', '--exclude-standard', '-z', '--', '.', EXCLUDE_TASKS_DIR],
+            signal
+        )
+        return r.exitCode === 0 ? new Set(r.stdout.split('\u0000').filter(f => f.length > 0)) : null
+    }
+
+    // The project's own checks, suite included, once per tree for the run. A suite
+    // writes coverage, reports and databases into the tree; left there, they ride
+    // into the task's commit and read as enforce edits, so what the check created
+    // is removed before the tree is hashed again.
+    const gateHealth = (cwd2: string, onCommand: HealthProgress): Promise<HealthOutcome> =>
+        currentRunContext(cwd2).healthFor(async () => {
+            const before = await untrackedFiles(cwd2)
+            try {
+                return await runRepoHealthCheck(cwd2, {signal, withTests: true, onCommand})
+            } finally {
+                const after = before ? await untrackedFiles(cwd2) : null
+                for (const rel of after ?? []) {
+                    if (!before?.has(rel)) {
+                        await fsp
+                            .rm(path.join(cwd2, rel), {recursive: true, force: true})
+                            .catch(() => {})
+                    }
+                }
+            }
+        })
+
+    // The project's own checks, under a live loader naming the running command.
     // Each run is as long as that command, and a gate step that long with no widget
     // is indistinguishable from a hang. Shared by the enforce pre-commit gate (a
     // baseline before the edit pass, a differential after it) and by the
@@ -901,12 +934,8 @@ export function buildGateDeps(params: {
             startedAt,
             lastLine: running ? `repo health · ${running}` : 'repo health'
         }))
-        return runRepoHealthCheck(cwd2, {
-            signal,
-            withTests: true,
-            onCommand: c => {
-                running = c
-            }
+        return gateHealth(cwd2, c => {
+            running = c
         }).finally(stop)
     }
 
@@ -1128,12 +1157,8 @@ export function buildGateDeps(params: {
                     // unrelated to the thing under test. The arm's only difference is
                     // the LOADER, above.
                     repoHealth: () =>
-                        runRepoHealthCheck(cwd2, {
-                            signal,
-                            withTests: true,
-                            onCommand: c => {
-                                stageLine = `repo health · ${c}`
-                            }
+                        gateHealth(cwd2, c => {
+                            stageLine = `repo health · ${c}`
                         }),
                     // What those checks said before the task started, so a red one
                     // is attributed rather than absolutely failed. Read only when

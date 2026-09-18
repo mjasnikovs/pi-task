@@ -14,7 +14,8 @@
  *
  * Order: one discarded warm-up, then ABBA blocks, so each arm holds early and late
  * slots. Ledger is append-only JSONL holding the OUTPUT TEXT, keyed by
- * (fingerprint, arm, reps, index), so a scorer change is a rescore, not a re-run.
+ * (fingerprint, prompt hash, arm, reps, index), so a scorer change is a rescore,
+ * not a re-run.
  *
  * Verdict: ABSTAIN (exit 2) when arm A never deferred — the lever was not
  * exercised. PASS (exit 0) when B's deferral count is a strict reduction with
@@ -52,8 +53,9 @@ const MODEL = process.env.AB_MODEL ?? 'local/Qwen3.8-27B-UD-Q4_K_XL.gguf'
 const PROPS_URL = process.env.AB_PROPS_URL ?? 'http://127.0.0.1:8080/props'
 const CHILD_TIMEOUT_MS = 15 * 60_000
 
-function section(md: string, name: string): string {
-    const re = new RegExp(`^## ${name}\\n([\\s\\S]*?)(?=^## |\\Z)`, 'm')
+export function section(md: string, name: string): string {
+    // The appended heading is the terminator: JavaScript has no `\Z`.
+    const re = new RegExp(`^## ${name}\\n([\\s\\S]*?)(?=^## )`, 'm')
     const m = re.exec(md + '\n## end\n')
     if (!m) throw new Error(`section not found: ${name}`)
     return m[1].trim()
@@ -177,13 +179,15 @@ function fisherOneSided(aHit: number, aN: number, bHit: number, bN: number): num
     return Math.min(1, p)
 }
 
-function loadLedger(path: string, fp: string, reps: number): Row[] {
+/** The trials that measured THESE prompts at this rep count: a ledger row from an
+ *  edited prompt is a different experiment. */
+export function loadLedger(path: string, reps: number, promptHash: Record<Arm, string>): Row[] {
     if (!existsSync(path)) return []
     return readFileSync(path, 'utf8')
         .split('\n')
         .filter(l => l.trim().length > 0)
         .map(l => JSON.parse(l) as Row)
-        .filter(r => r.fingerprint === fp && r.reps === reps)
+        .filter(r => r.reps === reps && r.promptHash === promptHash[r.arm])
 }
 
 function report(rows: Row[], reps: number): number {
@@ -248,18 +252,18 @@ async function main(): Promise<void> {
         `prompt A ${hash(prompts.A)} (${prompts.A.length} chars)  prompt B ${hash(prompts.B)} (${prompts.B.length} chars)`
     )
 
-    const fp = rescore ? (loadLedger(ledger, '', reps)[0]?.fingerprint ?? '') : await fingerprint()
-    const rows =
-        rescore ?
-            readFileSync(ledger, 'utf8')
-                .split('\n')
-                .filter(l => l.trim())
-                .map(l => JSON.parse(l) as Row)
-                .filter(r => r.reps === reps)
-        :   loadLedger(ledger, fp, reps)
+    const promptHash: Record<Arm, string> = {A: hash(prompts.A), B: hash(prompts.B)}
+    const recorded = loadLedger(ledger, reps, promptHash)
     if (rescore) {
-        process.exit(report(rows, reps))
+        const models = new Set(recorded.map(r => r.fingerprint))
+        if (models.size > 1) {
+            console.log(`ABSTAIN — the ledger mixes ${models.size} models: ${[...models].join(', ')}`)
+            process.exit(2)
+        }
+        process.exit(report(recorded, reps))
     }
+    const fp = await fingerprint()
+    const rows = recorded.filter(r => r.fingerprint === fp)
     console.log(`model fingerprint: ${fp}`)
     console.log(`resuming with ${rows.length} recorded trials`)
 
@@ -295,7 +299,7 @@ async function main(): Promise<void> {
             reps,
             index: s.index,
             slot: s.slot,
-            promptHash: hash(prompts[s.arm]),
+            promptHash: promptHash[s.arm],
             kind: sc.kind,
             decision: sc.decision,
             output,
@@ -311,4 +315,4 @@ async function main(): Promise<void> {
     process.exit(report(rows, reps))
 }
 
-await main()
+if (import.meta.main) await main()

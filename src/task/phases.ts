@@ -71,7 +71,8 @@ import {
     autoAnswerHasTag,
     parseVerifyToolingOutput,
     deriveTitle,
-    type AutoAnswer
+    type AutoAnswer,
+    type AutoAnswerUnknownReason
 } from './parsers.js'
 import {compressTitle} from './title-label.js'
 import {
@@ -906,6 +907,61 @@ export async function phaseResearch(
     return sections.map(({name, text}) => `${name}\n${text}`).join('\n\n')
 }
 
+/** A deterministic check on an auto-answer: the re-ask prompt when it trips, else null. */
+interface AnswerGuard {
+    reason: AutoAnswerUnknownReason
+    reask: (answer: string) => string | null
+}
+
+/**
+ * Hold an answer to every guard. Each guard re-asks ONCE, and the answer that
+ * comes back faces every guard again: one that fixed a deferral by inventing an
+ * API is still caught. An answer that trips a guard it was already re-asked for,
+ * or a re-ask that produced no tagged answer, is surfaced as an unknown carrying
+ * that guard's reason. yolo.ts skips those, and a human sees them.
+ */
+async function guardAutoAnswer(
+    deps: PhaseDeps,
+    first: AutoAnswer,
+    guards: readonly AnswerGuard[]
+): Promise<AutoAnswer> {
+    const reasked = new Set<AutoAnswerUnknownReason>()
+    let parsed = first
+    while (parsed.kind === 'answered') {
+        const answer = parsed.text
+        let tripped: {reason: AutoAnswerUnknownReason; prompt: string} | undefined
+        for (const g of guards) {
+            const prompt = g.reask(answer)
+            if (prompt !== null) {
+                tripped = {reason: g.reason, prompt}
+                break
+            }
+        }
+        if (!tripped) return parsed
+        const surfaced: AutoAnswer = {
+            kind: 'unknown',
+            suggested: answer,
+            raw: parsed.raw,
+            reason: tripped.reason
+        }
+        if (reasked.has(tripped.reason)) {
+            deps.logDebug?.(`grill-auto: ${tripped.reason} survived its re-ask — surfacing to user`)
+            return surfaced
+        }
+        reasked.add(tripped.reason)
+        let again: AutoAnswer | null = null
+        try {
+            const text = await runPhaseChild(deps, 'grill-auto', 'read', tripped.prompt)
+            if (autoAnswerHasTag(text)) again = parseAutoAnswer(text)
+        } catch (e) {
+            if (isFatalChildCause(e)) throw e
+        }
+        if (again === null) return surfaced
+        parsed = again
+    }
+    return parsed
+}
+
 export async function phaseAutoAnswer(
     deps: PhaseDeps,
     refined: string,
@@ -972,96 +1028,35 @@ export async function phaseAutoAnswer(
                 prependHint(GRILL_AUTO_FORMAT_HINT, basePrompt)
             )
         }
-        let parsed = parseAutoAnswer(text)
-
-        // Anti-synthesis guard: the auto-answer invented
-        // `Bun.mkdirSync` while research's APIS section carried the correct list,
-        // and the invention was promoted into requirements + VERIFY. Deterministic
-        // verbatim-substring check: an API-shaped identifier in the answer that is
-        // absent from the research AND the question, in a namespace the research
-        // claims to cover, triggers ONE re-ask with the verified research lines
-        // injected. Still synthesizing after the re-ask ⇒ surface to the user as a
-        // recommendation instead of silently promoting it (costs time, never work).
-        if (parsed.kind === 'answered') {
-            const synth = findSynthesizedApis(parsed.text, question, research)
-            if (synth.length > 0) {
-                deps.logDebug?.(
-                    'grill-auto: unverified API identifier(s) in answer — '
-                        + synth.map(f => f.identifier).join(', ')
-                        + ' — re-asking with the research API list injected'
-                )
-                let reasked: AutoAnswer | null = null
-                try {
-                    const text2 = await runPhaseChild(
-                        deps,
-                        'grill-auto',
-                        'read',
-                        prependHint(synthesizedApiReaskHint(synth, research), basePrompt)
-                    )
-                    if (autoAnswerHasTag(text2)) reasked = parseAutoAnswer(text2)
-                } catch (e) {
-                    if (isFatalChildCause(e)) throw e
-                    reasked = null
-                }
-                if (
-                    reasked === null
-                    || (reasked.kind === 'answered'
-                        && findSynthesizedApis(reasked.text, question, research).length > 0)
-                ) {
-                    const still = reasked ?? parsed
-                    const suggested = still.kind === 'answered' ? still.text : parsed.text
+        const parsed = await guardAutoAnswer(deps, parseAutoAnswer(text), [
+            // Anti-synthesis: the auto-answer invented `Bun.mkdirSync` while
+            // research's APIS section carried the correct list, and the invention
+            // was promoted into requirements + VERIFY. An API-shaped identifier
+            // absent from the research AND the question, in a namespace the
+            // research claims to cover, is re-asked with the verified lines injected.
+            {
+                reason: 'api-synthesis',
+                reask: answer => {
+                    const synth = findSynthesizedApis(answer, question, research)
+                    if (synth.length === 0) return null
                     deps.logDebug?.(
-                        'grill-auto: answer still carries an unverified API — surfacing to user'
+                        'grill-auto: unverified API identifier(s) in answer — '
+                            + synth.map(f => f.identifier).join(', ')
                     )
-                    parsed = {
-                        kind: 'unknown',
-                        suggested,
-                        raw: still.raw,
-                        // Tagged so a call site can tell this producer from the other
-                        // two: the suggestion is PROVEN to name an unverified API, so
-                        // it may only be judged by a human (yolo.ts must not take it).
-                        reason: 'api-synthesis'
-                    }
-                } else {
-                    parsed = reasked
+                    return prependHint(synthesizedApiReaskHint(synth, research), basePrompt)
+                }
+            },
+            // Behind the prompt's GREEN-SUITE CHECK: promoting "flag it for the test
+            // owner" is how mx5-n TASK_0004 turned the suite red for the rest of the run.
+            {
+                reason: 'deferred-breakage',
+                reask: answer => {
+                    if (!defersBreakage(answer)) return null
+                    deps.logDebug?.('grill-auto: answer defers a breakage to a nonexistent owner')
+                    return prependHint(deferredBreakageReaskHint(answer), basePrompt)
                 }
             }
-        }
-
-        // Deterministic backstop behind the prompt's GREEN-SUITE CHECK: an answer
-        // that defers a breakage to "the test owner" gets ONE re-ask, and a second
-        // deferral is surfaced as an unsafe unknown — yolo.ts skips it, a human
-        // sees it. Promoting it is how mx5-n TASK_0004 turned the suite red for
-        // the rest of the run.
-        if (parsed.kind === 'answered' && defersBreakage(parsed.text)) {
-            deps.logDebug?.(
-                'grill-auto: answer defers a breakage to a nonexistent owner — re-asking once'
-            )
-            let reasked: AutoAnswer | null = null
-            try {
-                const text2 = await runPhaseChild(
-                    deps,
-                    'grill-auto',
-                    'read',
-                    prependHint(deferredBreakageReaskHint(parsed.text), basePrompt)
-                )
-                if (autoAnswerHasTag(text2)) reasked = parseAutoAnswer(text2)
-            } catch (e) {
-                if (isFatalChildCause(e)) throw e
-                reasked = null
-            }
-            if (reasked !== null && reasked.kind === 'answered' && !defersBreakage(reasked.text)) {
-                parsed = reasked
-            } else {
-                deps.logDebug?.('grill-auto: answer still defers the breakage — surfacing to user')
-                parsed = {
-                    kind: 'unknown',
-                    suggested: reasked?.kind === 'answered' ? reasked.text : parsed.text,
-                    raw: (reasked ?? parsed).raw,
-                    reason: 'deferred-breakage'
-                }
-            }
-        }
+        ])
 
         // Surviving-unknown routing: an integration / build-wiring unknown whose
         // wrong guess is a structural landmine must NOT be silently auto-answered.

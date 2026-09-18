@@ -27,6 +27,7 @@ import {
     type AcceptDebt
 } from '../../src/task/accept-debt.js'
 import {classifyHealthDelta} from '../../src/task/health-baseline.js'
+import {getConfig} from '../../src/config/config.js'
 import type {HealthOutcome} from '../../src/task/repo-health-check.js'
 import {ENTRY_ATTEMPT_BUDGET} from '../../src/task/gate-resolution.js'
 import {readOwnedRequirements} from '../../src/task/requirements.js'
@@ -340,6 +341,42 @@ test('planAuto: clarify-triage surfaces a genuine open fork (UNKNOWN)', async ()
         const {body} = await readTaskFile(dir, id!)
         expect(body).toContain('A1: local disk')
         expect(body).not.toContain('auto-resolved')
+    })
+})
+
+// Triage refusing a deferral only surfaces the question. Unattended, the
+// generator's SUGGESTED is usually the same deferral, and yolo used to take it.
+test('planAuto: unattended, a refused deferral is skipped, not taken from SUGGESTED', async () => {
+    await withTmpTaskDir(async dir => {
+        const {ctx, captured} = makeFakeCtx(dir)
+        const deferral =
+            'write plain CREATE TABLE and flag the test/migrate.test.ts breakage as a known issue for the test owner'
+        let clarifyCall = 0
+        const d: AutoDeps = {
+            runChild: name => {
+                if (name === 'auto-clarify') {
+                    const responses = [`1. One-shot DDL or IF NOT EXISTS?\nSUGGESTED: ${deferral}`]
+                    return Promise.resolve(responses[clarifyCall++] ?? 'NONE')
+                }
+                if (name === 'clarify-triage') return Promise.resolve(`ANSWER: ${deferral}`)
+                return Promise.resolve('- [ ] Task A')
+            },
+            runTask: () => Promise.resolve({taskId: 'TASK_0001', end: {kind: 'completed'}}),
+            commit: () => Promise.resolve({committed: true})
+        }
+        const cfg = getConfig()
+        const prev = cfg.yoloMode
+        cfg.yoloMode = true
+        let id: string | null
+        try {
+            id = await planAuto(ctx, dir, 'add the schema migration', d)
+        } finally {
+            cfg.yoloMode = prev
+        }
+        expect(captured.selects.length).toBe(0)
+        const {body} = await readTaskFile(dir, id!)
+        expect(body).toMatch(/A1: \(skipped — .*owner that does not exist/)
+        expect(body).not.toContain(`A1: ${deferral}`)
     })
 })
 
@@ -3886,6 +3923,123 @@ test('runAutoLoop: red at run start (a swept leftover) → the repair runs befor
             `repair ${API}: \`${LINT}\` exits 1 (no task in this run owns it)`,
             'A'
         ])
+    })
+})
+
+// A red SUITE at the checkpoint may be a database that is not up here, or a
+// placeholder `exit 1` script. No repair task can fix either, so a suite is
+// repaired only when a task's regression of it is on the debt ledger.
+
+const SUITE = 'bun run test'
+
+function suiteHealth(red: boolean): HealthOutcome {
+    return red ?
+            {
+                ok: false,
+                reason: `\`${SUITE}\` exited 1`,
+                ecosystem: 'package.json',
+                commands: [{cmd: SUITE, outcome: 'fail', exitCode: 1, kind: 'test'}],
+                output: 'error: connect ECONNREFUSED 127.0.0.1:5432'
+            }
+        :   {
+                ok: true,
+                reason: 'package.json: static checks and tests passed',
+                ecosystem: 'package.json',
+                commands: [{cmd: SUITE, outcome: 'pass', exitCode: 0, kind: 'test'}],
+                output: ''
+            }
+}
+
+function suiteRun(
+    red: (title: string) => boolean | undefined,
+    treeRed: boolean
+): {
+    deps: AutoDeps
+    ran: string[]
+} {
+    const baselines = new Map<string, HealthOutcome>()
+    const ran: string[] = []
+    let current = ''
+    let n = 6
+    const deps: AutoDeps = {
+        runChild: () => Promise.resolve(''),
+        runTask: (_c, _cwd, title) => {
+            ran.push(title)
+            current = title
+            const next = red(title)
+            if (next !== undefined) treeRed = next
+            return Promise.resolve({
+                taskId: `TASK_${String(n++).padStart(4, '0')}`,
+                end: {kind: 'completed'}
+            })
+        },
+        commit: () => Promise.resolve({committed: true}),
+        captureHealthBaseline: (_c, _cwd, label) => {
+            baselines.set(label, suiteHealth(treeRed))
+            return Promise.resolve({at: 'T', treeHash: null, outcome: suiteHealth(treeRed)})
+        },
+        verify: () => {
+            const after = suiteHealth(treeRed)
+            if (after.ok) return Promise.resolve({ok: true})
+            if (classifyHealthDelta(baselines.get(current) ?? null, after) === 'regressed') {
+                return Promise.resolve({
+                    ok: false,
+                    failClass: 'test-suite',
+                    reason: `test suite: ${after.reason}`,
+                    health: after
+                })
+            }
+            return Promise.resolve({
+                ok: true,
+                inheritedHealth: `test suite: ${after.reason} — already failing before this task`
+            })
+        },
+        recommend: () => Promise.resolve({recommend: 'accept', rationale: 'suite red'}),
+        repoFiles: () => Promise.resolve([]),
+        introducedBy: () => Promise.resolve(null),
+        recordDebt,
+        closeHealthDebts
+    }
+    return {deps, ran}
+}
+
+test('runAutoLoop: a suite red at run start is inherited, not repaired — nothing recorded a regression', async () => {
+    await withTmpTaskDir(async dir => {
+        const {ctx} = makeFakeCtx(dir)
+        await writeTaskFile(
+            dir,
+            autoFm('TASK_AUTO_0001'),
+            buildAutoBody('feat', '(none)', ['A', 'B'])
+        )
+        const {deps, ran} = suiteRun(() => undefined, true)
+        await runAutoLoop(ctx, dir, 'TASK_AUTO_0001', deps)
+        expect(ran).toEqual(['A', 'B'])
+        const debts = await readAcceptDebts(dir)
+        expect(debts.map(d => d.origin)).toEqual(['inherited-health', 'inherited-health'])
+    })
+})
+
+test('runAutoLoop: A breaks the suite and is ACCEPTED → a repair runs before B', async () => {
+    await withTmpTaskDir(async dir => {
+        const handle = makeFakeCtx(dir)
+        await writeTaskFile(
+            dir,
+            autoFm('TASK_AUTO_0001'),
+            buildAutoBody('feat', '(none)', ['A', 'B'])
+        )
+        const {deps, ran} = suiteRun(
+            title =>
+                title === 'A' ? true
+                : title.startsWith('repair ') ? false
+                : undefined,
+            false
+        )
+        handle.queueSelect(`${ACCEPT_LABEL}; queues a repair for \`${SUITE}\``)
+        await runAutoLoop(handle.ctx, dir, 'TASK_AUTO_0001', deps)
+        const repair = `repair \`${SUITE}\`: exits 1 (no task in this run owns it)`
+        expect(ran).toEqual(['A', repair, 'B'])
+        const debts = await readAcceptDebts(dir)
+        expect(debts.map(d => [d.taskId, d.resolvedBy])).toEqual([['TASK_0006', 'TASK_0007']])
     })
 })
 

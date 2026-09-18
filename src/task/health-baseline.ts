@@ -85,14 +85,32 @@ export function classifyHealthDelta(
     // (a legacy record, or an injected signal); the overall verdict is all there is.
     const detailed = now.length > 0 && (baseline.ok || before.length > 0)
     if (!detailed) return baseline.ok ? 'regressed' : 'pre-existing'
-    const key = (c: HealthCommandResult): string => JSON.stringify([c.cmd, c.exitCode])
-    const wasFailing = new Set(before.map(key))
-    return now.every(c => wasFailing.has(key(c))) ? 'pre-existing' : 'regressed'
+    return regressedCommands(baseline, after).length > 0 ? 'regressed' : 'pre-existing'
 }
 
-/** The failing commands, as prompt/trail lines naming the exit code. */
+const failureKey = (c: HealthCommandResult): string => JSON.stringify([c.cmd, c.exitCode])
+
+/** The failing commands the baseline did not have failing the same way — what a
+ *  `regressed` verdict is about. Every failing command when there is no baseline. */
+export function regressedCommands(
+    baseline: HealthSignal | null,
+    after: HealthSignal
+): HealthCommandResult[] {
+    const wasFailing = new Set(baseline ? failures(baseline).map(failureKey) : [])
+    return failures(after).filter(c => !wasFailing.has(failureKey(c)))
+}
+
+/**
+ * The failing commands, as prompt/trail lines naming the exit code. A test
+ * runner exits 1 for one failing test or for fifty, so for a suite the line
+ * claims only the exit code: which tests fail was not compared.
+ */
 export function inheritedHealthFindings(after: HealthSignal): string[] {
-    return failures(after).map(c => `\`${c.cmd}\` exits ${c.exitCode} (and did before this task)`)
+    return failures(after).map(c =>
+        c.kind === 'test' ?
+            `\`${c.cmd}\` exits ${c.exitCode}, as it did before this task — the same exit code, not proof the same tests fail`
+        :   `\`${c.cmd}\` exits ${c.exitCode} (and did before this task)`
+    )
 }
 
 // ─── The task-file section ───────────────────────────────────────────────────
@@ -104,12 +122,13 @@ export const HEALTH_BASELINE_SECTION = 'health baseline'
  * grammar: this round-trips through a committed file that a later run parses, and
  * a second grammar is a second thing to drift.
  *
- * The captured `output` is dropped — up to 40 lines of a linter's report, in a
- * file committed with every task, for a field the differential never reads. The
- * live run's own trail already carries it.
+ * The captured output is dropped, the outcome's and each command's — up to 40
+ * lines of a linter's report, in a file committed with every task, for a field the
+ * differential never reads. The live run's own trail already carries it.
  */
 export function formatHealthBaseline(b: HealthBaseline): string {
-    const {output: _output, ...outcome} = b.outcome
+    const {output: _output, commands, ...rest} = b.outcome
+    const outcome = {...rest, commands: commands.map(({output: _o, ...c}) => c)}
     return ['```json', JSON.stringify({...b, outcome}, null, 2), '```'].join('\n')
 }
 

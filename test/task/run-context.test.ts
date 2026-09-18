@@ -213,6 +213,61 @@ describe('treeHash', () => {
     })
 })
 
+// The suite ran at the checkpoint, at verify, before and after the enforce edits
+// and at re-verify: five runs a task, most on a tree already measured.
+describe('healthFor — the suite runs once per tree', () => {
+    const git = (cwd: string, ...args: string[]): string =>
+        spawnSync('git', args, {cwd, encoding: 'utf8'}).stdout
+    const outcome = (n: number) => ({
+        ok: true,
+        reason: `run ${n}`,
+        ecosystem: null,
+        commands: [],
+        output: ''
+    })
+
+    test('an unchanged tree is answered from the last run; a changed one runs again', async () => {
+        await withTmpTaskDir(async cwd => {
+            git(cwd, 'init', '-q')
+            fs.writeFileSync(nodePath.join(cwd, 'a.ts'), 'export const a = 1\n')
+            const rc = new RunContext({cwd})
+            let runs = 0
+            const produce = () => Promise.resolve(outcome(++runs))
+            expect((await rc.healthFor(produce)).reason).toBe('run 1')
+            expect((await rc.healthFor(produce)).reason).toBe('run 1')
+            fs.writeFileSync(nodePath.join(cwd, 'a.ts'), 'export const a = 2\n')
+            expect((await rc.healthFor(produce)).reason).toBe('run 2')
+            expect(runs).toBe(2)
+        })
+    })
+
+    // A `--fix` lint moves the tree; the result describes the tree it left.
+    test('the result is stored under the tree the check left', async () => {
+        await withTmpTaskDir(async cwd => {
+            git(cwd, 'init', '-q')
+            fs.writeFileSync(nodePath.join(cwd, 'a.ts'), 'export const a = 1\n')
+            const rc = new RunContext({cwd})
+            let runs = 0
+            await rc.healthFor(() => {
+                fs.writeFileSync(nodePath.join(cwd, 'a.ts'), 'export const a = 1 // fixed\n')
+                return Promise.resolve(outcome(++runs))
+            })
+            await rc.healthFor(() => Promise.resolve(outcome(++runs)))
+            expect(runs).toBe(1)
+        })
+    })
+
+    test('outside a repo nothing is cached', async () => {
+        await withTmpTaskDir(async cwd => {
+            const rc = new RunContext({cwd})
+            let runs = 0
+            await rc.healthFor(() => Promise.resolve(outcome(++runs)))
+            await rc.healthFor(() => Promise.resolve(outcome(++runs)))
+            expect(runs).toBe(2)
+        })
+    })
+})
+
 describe('the open run', () => {
     test('one context for the run, a fresh one outside it', () => {
         const opened = openRunContext('/x')

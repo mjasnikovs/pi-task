@@ -55,6 +55,35 @@ describe('yoloPickAnswer — take the RECOMMENDED option, else step aside', () =
             yoloPickAnswer(true, {suggested: 'call Bun.mkdirSync', unsafe: 'hallucinated'})
         ).toEqual({kind: 'skip', note: 'hallucinated'})
     })
+
+    // The clarify generator's SUGGESTED, the plan review and an UNKNOWN's own
+    // suggestion reach this with no guard in front of them. A machine taking a
+    // deferral there is the mx5-n promotion the guard exists to stop.
+    const DEFERRAL = 'flag the test/migrate.test.ts breakage as a known issue for the test owner'
+
+    test('a recommendation that defers a breakage is passed over for a green ALT', () => {
+        expect(
+            yoloPickAnswer(true, {suggested: DEFERRAL, alt: 'update test/migrate.test.ts too'})
+        ).toEqual({kind: 'answer', answer: 'update test/migrate.test.ts too'})
+    })
+
+    test('when every option defers, the question is skipped for a human', () => {
+        const pick = yoloPickAnswer(true, {suggested: DEFERRAL})
+        expect(pick?.kind).toBe('skip')
+        expect((pick as {note: string}).note).toMatch(/owner that does not exist/)
+    })
+})
+
+describe('yoloPickAutoAnswer — a model UNKNOWN is held to the deferral rule too', () => {
+    test('an UNKNOWN whose suggestion defers the breakage is skipped, whatever its tag', () => {
+        const pick = yoloPickAutoAnswer(true, {
+            kind: 'unknown',
+            suggested: 'flag the test/migrate.test.ts breakage as a known issue for the test owner',
+            raw: '',
+            reason: 'model-unknown'
+        })
+        expect(pick?.kind).toBe('skip')
+    })
 })
 
 describe('yoloPickAutoAnswer — the anti-synthesis unknown is never auto-accepted', () => {

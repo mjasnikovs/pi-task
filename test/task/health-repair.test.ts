@@ -4,7 +4,8 @@ import {
     buildHealthRepairTitle,
     healthRedSubject,
     parseHealthRepairTitle,
-    planCoversHealthRed
+    planCoversHealthRed,
+    suiteRegressionOwed
 } from '../../src/task/health-repair.js'
 import type {HealthOutcome} from '../../src/task/repo-health-check.js'
 
@@ -73,6 +74,63 @@ describe('healthRedSubject', () => {
     test('a result with no failing command is no subject', () => {
         expect(healthRedSubject({ok: false, commands: []}, CWD, TRACKED)).toBeNull()
         expect(healthRedSubject({ok: false}, CWD, TRACKED)).toBeNull()
+    })
+
+    // Every command runs now, so two can be red at once. The subject's files come
+    // from ITS output: a lint subject read from the suite's stack trace would pin
+    // the repair to a test file the lint never named.
+    test('the subject is the first red the caller may repair, read from its own output', () => {
+        const health: HealthOutcome = {
+            ok: false,
+            reason: '',
+            ecosystem: 'node',
+            commands: [
+                {
+                    cmd: 'bun run test',
+                    outcome: 'fail',
+                    exitCode: 1,
+                    kind: 'test',
+                    output: `${CWD}/test/api.test.ts`
+                },
+                {
+                    cmd: 'bun run lint',
+                    outcome: 'fail',
+                    exitCode: 1,
+                    kind: 'static',
+                    output: `${CWD}/src/client/api.ts`
+                }
+            ],
+            output: `${CWD}/test/api.test.ts`
+        }
+        expect(healthRedSubject(health, CWD, TRACKED, c => c.kind !== 'test')).toEqual({
+            command: 'bun run lint',
+            exitCode: 1,
+            files: ['src/client/api.ts']
+        })
+        expect(healthRedSubject(health, CWD, TRACKED, () => false)).toBeNull()
+    })
+})
+
+describe('suiteRegressionOwed', () => {
+    test('an accepted suite regression naming the command is owed', () => {
+        expect(
+            suiteRegressionOwed('bun run test', [
+                {reason: 'test suite: `bun run test` exited 1', origin: 'yolo-accepted'}
+            ])
+        ).toBe(true)
+    })
+
+    test('an inherited red, a static debt, or another command is not', () => {
+        expect(
+            suiteRegressionOwed('bun run test', [
+                {
+                    reason: 'test suite: `bun run test` exited 1 — already failing before this task',
+                    origin: 'inherited-health'
+                },
+                {reason: 'repo health: `bun run lint` exited 1', origin: 'accepted'},
+                {reason: 'test suite: `bun run test:e2e` exited 1', origin: 'accepted'}
+            ])
+        ).toBe(false)
     })
 })
 

@@ -1085,6 +1085,31 @@ test('lint-fix: NOT attempted for a non-health verify FAIL', async () => {
     })
 })
 
+// A lint-fix child's convergence check runs the statics, which pass while the
+// suite is still red: it would "converge" on a fault it cannot observe.
+test('lint-fix: NOT attempted for a test-suite FAIL', async () => {
+    await withTmpTaskDir(async dir => {
+        const {ctx} = makeFakeCtx(dir)
+        let fixCalls = 0
+        const deps = makeDeps({
+            verify: () =>
+                Promise.resolve({
+                    ok: false,
+                    failClass: 'test-suite',
+                    reason: 'test suite: `bun run test` exited 1'
+                }),
+            lintFix: () => {
+                fixCalls++
+                return Promise.resolve({ok: true, class: 'converged' as const})
+            },
+            recommend: () => Promise.resolve({recommend: 'autofix', rationale: 'suite red'})
+        })
+        const r = await runGatesForTask(ctx, deps, baseParams({cwd: dir}))
+        expect(r.kind).toBe('paused')
+        expect(fixCalls).toBe(0)
+    })
+})
+
 // ─── Enforce pre-commit repo-health gate ─────────────────────────────────────
 
 test('enforce edits that REGRESS repo health (clean before → fail after) are discarded BEFORE commit', async () => {

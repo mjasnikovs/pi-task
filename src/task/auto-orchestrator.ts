@@ -42,7 +42,7 @@ import {
 } from './auto-io.js'
 import {decideResume, UNATTENDED_STATES} from './resume-gap.js'
 import {ENTRY_ATTEMPT_BUDGET} from './gate-resolution.js'
-import {recordDebt} from './accept-debt.js'
+import {readOpenAcceptDebts, recordDebt} from './accept-debt.js'
 import {
     drainRepairQueue,
     mergeRepairCandidates,
@@ -86,6 +86,7 @@ import {
     buildHealthRepairFence,
     buildHealthRepairTitle,
     healthRedSubject,
+    suiteRegressionOwed,
     parseHealthRepairTitle,
     planCoversHealthRed
 } from './health-repair.js'
@@ -574,7 +575,13 @@ async function spliceHealthRepair(
     deps: AutoDeps
 ): Promise<boolean> {
     try {
-        const red = healthRedSubject(health, cwd, (await deps.repoFiles?.(cwd)) ?? null)
+        const debts = await readOpenAcceptDebts(cwd)
+        const red = healthRedSubject(
+            health,
+            cwd,
+            (await deps.repoFiles?.(cwd)) ?? null,
+            c => c.kind !== 'test' || suiteRegressionOwed(c.cmd, debts)
+        )
         if (!red) return false
         if (
             planCoversHealthRed(
@@ -869,8 +876,9 @@ export async function elicitClarifications(
         }
         // YOLO: take the recommended option (index 0 / the green card) without ever
         // building the prompt. Clarify has no anti-synthesis channel — it runs before
-        // any research — so the only step-aside here is a question that carries no
-        // recommendation to take; that one is skipped rather than guessed.
+        // any research — so the step-asides here are a question with no
+        // recommendation to take, and one whose every option defers a breakage the
+        // triage just refused; each is skipped rather than guessed.
         const outcome = await settleQuestion({
             ui,
             transcript,
@@ -1852,7 +1860,7 @@ export async function runAutoLoop(
                 )
             }
             // REPO-HEALTH BASELINE, taken here because the checkpoint above just made
-            // the tree clean: what the project's own statics say now is what this task
+            // the tree clean: what the project's own checks say now is what this task
             // INHERITED, and the verify gate attributes a red check against it instead
             // of failing the task for a sibling's defect (health-baseline.ts). The
             // inner task file does not exist yet, so the result is handed to the

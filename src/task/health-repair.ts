@@ -16,9 +16,15 @@
  * the dedup ledger — a title covering the same command, or any of the same files,
  * means no second entry, checked-off ones included, which is what stops a repair
  * that failed from being re-spawned.
+ *
+ * A red TEST command is repaired only when a task's regression of it is on the
+ * debt ledger. A suite can also be red because a database is not up here, or
+ * because its script is a placeholder `exit 1`, and no repair task can fix either.
  */
 import type {HealthSignal} from './health-baseline.js'
+import type {HealthCommandResult} from './repo-health-check.js'
 import {parseRepairTitleFile} from './root-cause-repair.js'
+import {failClassOfReason} from './verify-work.js'
 
 /** A path-like token: at least one directory separator, ending in a file name. */
 const PATH_TOKEN_RE = /(?:[\w.@-]+[\\/])+[\w.@-]+\.\w+/g
@@ -58,25 +64,44 @@ function resolveTracked(token: string, cwd: string, tracked: readonly string[]):
 }
 
 /**
- * What a red health result is about. Null when the result records no failing
- * command (a legacy baseline, or a signal with no per-command detail) — there is
- * nothing a repair could be pinned to.
+ * What a red health result is about: its first failing command that `mayRepair`
+ * admits. Null when there is none — a legacy baseline, a signal with no
+ * per-command detail, or only reds no repair can fix — so nothing to pin to.
  */
 export function healthRedSubject(
     health: HealthSignal & {output?: string},
     cwd: string,
-    tracked: readonly string[] | null
+    tracked: readonly string[] | null,
+    mayRepair: (c: HealthCommandResult) => boolean = () => true
 ): HealthRed | null {
-    const failing = (health.commands ?? []).find(c => c.outcome === 'fail')
+    const failing = (health.commands ?? []).find(c => c.outcome === 'fail' && mayRepair(c))
     if (!failing) return null
     const files: string[] = []
     if (tracked) {
-        for (const m of (health.output ?? '').matchAll(PATH_TOKEN_RE)) {
+        for (const m of (failing.output ?? health.output ?? '').matchAll(PATH_TOKEN_RE)) {
             const rel = resolveTracked(m[0], cwd, tracked)
             if (rel !== null && !files.includes(rel)) files.push(rel)
         }
     }
     return {command: failing.cmd, exitCode: failing.exitCode, files}
+}
+
+/**
+ * Is a red TEST command owed? True when an open debt records a task's regression
+ * of it — an accepted `test suite:` FAIL naming the command. An inherited-health
+ * debt does not count: every task in a run whose suite needs a missing database
+ * records one.
+ */
+export function suiteRegressionOwed(
+    cmd: string,
+    openDebts: readonly {reason: string; origin?: string}[]
+): boolean {
+    return openDebts.some(
+        d =>
+            d.origin !== 'inherited-health'
+            && failClassOfReason(d.reason) === 'test-suite'
+            && d.reason.includes(`\`${cmd}\``)
+    )
 }
 
 // ─── Plan entry ──────────────────────────────────────────────────────────────

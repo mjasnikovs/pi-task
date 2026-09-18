@@ -97,6 +97,24 @@ test('gap precedence: the most specific cause wins', () => {
     expect(v.outcome === 'gap' && v.gap).toBe('killed')
 })
 
+// A test runner that found nothing to run observed nothing. The same words in a
+// lint report are the report, so only a test command may claim this row.
+describe('an empty suite is a gap only when a test command says it', () => {
+    test.each([
+        'error: 0 test files matching **{.test,.spec}.{js,ts}',
+        'No tests found, exiting with code 1',
+        'No test files found, exiting with code 1',
+        'no tests ran in 0.01s'
+    ])('%s', out => {
+        const run = ran({status: 1, stderr: out})
+        expect(classifyCommandRun(run, [], {emptySuite: true})).toMatchObject({
+            outcome: 'gap',
+            gap: 'empty-suite'
+        })
+        expect(classifyCommandRun(run).outcome).toBe('fail')
+    })
+})
+
 describe('outputTail', () => {
     test('joins stdout and stderr onto one line', () => {
         expect(outputTail('out', 'err')).toBe('out err')

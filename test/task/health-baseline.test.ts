@@ -19,6 +19,7 @@ import {
     inheritedHealthFindings,
     lazyHealthBaseline,
     parseHealthBaseline,
+    regressedCommands,
     type HealthBaseline
 } from '../../src/task/health-baseline.js'
 import type {HealthCommandResult, HealthOutcome} from '../../src/task/repo-health-check.js'
@@ -133,6 +134,28 @@ describe('classifyHealthDelta — the test suite', () => {
             )
         ).toBe('pre-existing')
     })
+
+    // Both sides measure every command now. When the run stopped at the red lint,
+    // the suite was absent from both, and breaking it read as pre-existing.
+    test('behind a lint that was already red, a suite the task broke is still REGRESSED, and named', () => {
+        const lintRed = (suiteOutcome: 'pass' | 'fail'): HealthCommandResult[] => [
+            {cmd: 'bun run lint', outcome: 'fail', exitCode: 1, kind: 'static'},
+            {
+                cmd: 'bun run test',
+                outcome: suiteOutcome,
+                exitCode: suiteOutcome === 'pass' ? 0 : 1,
+                kind: 'test'
+            }
+        ]
+        const before = {ok: false, commands: lintRed('pass')}
+        const after = {ok: false, commands: lintRed('fail')}
+        expect(classifyHealthDelta(before, after)).toBe('regressed')
+        expect(regressedCommands(before, after).map(c => c.cmd)).toEqual(['bun run test'])
+    })
+
+    test('with no baseline every failing command is regressed', () => {
+        expect(regressedCommands(null, {ok: false, commands: suite('fail', 1)})).toHaveLength(1)
+    })
 })
 
 describe('inheritedHealthFindings', () => {
@@ -144,6 +167,15 @@ describe('inheritedHealthFindings', () => {
 
     test('a clean result contributes nothing', () => {
         expect(inheritedHealthFindings(LINT_GREEN)).toEqual([])
+    })
+
+    test('a red suite claims the exit code only, not the same failing tests', () => {
+        const [line] = inheritedHealthFindings({
+            ok: false,
+            commands: [{cmd: 'bun run test', outcome: 'fail', exitCode: 1, kind: 'test'}]
+        })
+        expect(line).toContain('`bun run test` exits 1')
+        expect(line).toContain('not proof the same tests fail')
     })
 })
 
@@ -167,6 +199,16 @@ describe('the task-file section', () => {
         // Up to 40 lines of a linter's report, in a file committed with every task,
         // for a field the differential never reads.
         expect(formatHealthBaseline(baseline)).not.toContain('Parsing error')
+        const perCommand: HealthBaseline = {
+            ...baseline,
+            outcome: {
+                ...baseline.outcome,
+                commands: [
+                    {cmd: 'bun run lint', outcome: 'fail', exitCode: 1, output: 'Parsing error'}
+                ]
+            }
+        }
+        expect(formatHealthBaseline(perCommand)).not.toContain('Parsing error')
     })
 
     test('an absent or unparseable section is no baseline, never a fabricated clean one', () => {

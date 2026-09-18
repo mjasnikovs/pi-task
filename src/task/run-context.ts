@@ -19,8 +19,8 @@
  * run found it and is not re-read: a mid-run inventory refresh would hand two
  * tasks different orientation cores for the same question.
  *
- * TREE HASH is the other half, used by the gate-evidence cache; its one
- * implementation lives in tree-hash.ts.
+ * TREE HASH is the other half, used by the gate-evidence and repo-health caches;
+ * its one implementation lives in tree-hash.ts.
  */
 import {createHash} from 'node:crypto'
 import * as fsp from 'node:fs/promises'
@@ -33,7 +33,7 @@ import {getFileInventory} from './file-inventory.js'
 import type {GateEvidence} from './gate-evidence.js'
 import {getConfig} from '../config/config.js'
 import {buildOrientation, parseIgnorePatterns, type OrientationResult} from './orientation.js'
-import {HEALTH_MANIFEST_FILES} from './repo-health-check.js'
+import {HEALTH_MANIFEST_FILES, type HealthOutcome} from './repo-health-check.js'
 import {worktreeTreeHash} from './tree-hash.js'
 
 /**
@@ -144,6 +144,8 @@ export class RunContext {
     private _toolingHash: string | undefined
     private _evidence: {hash: string; value: GateEvidence} | undefined
     private _evidenceQueue: Promise<unknown> = Promise.resolve()
+    private _health: {hash: string; value: HealthOutcome} | undefined
+    private _healthQueue: Promise<unknown> = Promise.resolve()
 
     constructor(opts: RunContextOptions) {
         this.cwd = opts.cwd
@@ -310,6 +312,31 @@ export class RunContext {
             if (verified) verified.exitCode = c.exitCode
         }
         if (hash !== null) this._evidence = {hash, value}
+        return value
+    }
+
+    /**
+     * The repo-health check with its suite, at most once per tree, on the same terms
+     * as {@link gateEvidenceFor}. A verify, the enforce baseline on the commit it
+     * just judged and the next task's checkpoint all measure one tree; each running
+     * the whole suite again is the cost this removes.
+     *
+     * Stored under the tree the check LEFT, not the one it found: a `--fix` lint
+     * moves the tree, and the result describes the fixed one.
+     */
+    healthFor(produce: () => Promise<HealthOutcome>): Promise<HealthOutcome> {
+        const next = this._healthQueue.then(() => this.freshHealth(produce))
+        this._healthQueue = next.catch(() => {})
+        return next
+    }
+
+    private async freshHealth(produce: () => Promise<HealthOutcome>): Promise<HealthOutcome> {
+        const opts = this._signal ? {signal: this._signal} : {}
+        const found = await treeHash(this.cwd, opts)
+        if (found !== null && this._health?.hash === found) return this._health.value
+        const value = await produce()
+        const left = await treeHash(this.cwd, opts)
+        if (left !== null) this._health = {hash: left, value}
         return value
     }
 }

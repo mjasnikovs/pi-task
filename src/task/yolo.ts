@@ -29,6 +29,7 @@
  * the config.
  */
 import {getConfig} from '../config/config.js'
+import {defersBreakage} from './deferred-breakage.js'
 import type {AutoAnswer} from './parsers.js'
 import type {FinalGateChoice} from './final-gate-fix.js'
 
@@ -67,6 +68,10 @@ export type YoloPick = {kind: 'answer'; answer: string} | {kind: 'skip'; note: s
  * demotion — an answer proven to name an unverified API identifier. Auto-accepting
  * that would re-promote exactly the invention the demotion exists to stop, so a
  * machine may never take it; a human still can.
+ *
+ * An option that defers a breakage to an owner nobody is, is passed over here
+ * rather than at each caller: the clarify generator, the plan review and an
+ * UNKNOWN's own suggestion reach a machine with no guard in front of them.
  */
 export function yoloPickAnswer(
     enabled: boolean,
@@ -76,9 +81,16 @@ export function yoloPickAnswer(
     if (opts.unsafe !== undefined && opts.unsafe.length > 0) {
         return {kind: 'skip', note: opts.unsafe}
     }
-    const pick = opts.suggested ?? opts.alt
-    if (pick === undefined || pick.trim().length === 0) {
-        return {kind: 'skip', note: 'no recommended option to take'}
+    const offered = [opts.suggested, opts.alt].filter(
+        (o): o is string => o !== undefined && o.trim().length > 0
+    )
+    if (offered.length === 0) return {kind: 'skip', note: 'no recommended option to take'}
+    const pick = offered.find(o => !defersBreakage(o))
+    if (pick === undefined) {
+        return {
+            kind: 'skip',
+            note: 'the recommended answer leaves a test or build failing for an owner that does not exist — needs a human'
+        }
     }
     return {kind: 'answer', answer: pick}
 }
@@ -86,11 +98,11 @@ export function yoloPickAnswer(
 /**
  * The same policy expressed over an {@link AutoAnswer}, for the grill site. Of the
  * five `reason` tags an unknown can carry — `api-synthesis`, `deferred-breakage`,
- * `integration`, `threw`, `model-unknown` — the first two are unsafe: one names an
- * API nobody verified, the other hands a red suite to an owner nobody is. The other
+ * `integration`, `threw`, `model-unknown` — `api-synthesis` is unsafe by its tag:
+ * the answer names an API nobody verified. A `deferred-breakage` suggestion is the
+ * deferral itself, which `yoloPickAnswer` passes over for every site. The other
  * three carry an ordinary best-effort recommendation, which is precisely what a
- * human would be shown as the green card. The variants are told apart by that tag,
- * never by pattern-matching the answer text.
+ * human would be shown as the green card.
  */
 export function yoloPickAutoAnswer(enabled: boolean, auto: AutoAnswer): YoloPick {
     if (!enabled) return null
@@ -100,9 +112,6 @@ export function yoloPickAutoAnswer(enabled: boolean, auto: AutoAnswer): YoloPick
         ...(auto.alt !== undefined && {alt: auto.alt}),
         ...(auto.reason === 'api-synthesis' && {
             unsafe: 'the suggested answer names an unverified API identifier — needs a human'
-        }),
-        ...(auto.reason === 'deferred-breakage' && {
-            unsafe: 'the suggested answer leaves a test or build failing for an owner that does not exist — needs a human'
         })
     })
 }

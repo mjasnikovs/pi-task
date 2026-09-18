@@ -35,7 +35,7 @@ import {existsSync} from 'node:fs'
 import * as path from 'node:path'
 import * as fsp from 'node:fs/promises'
 import {runVerifyCommandLine, spawnCommand, type CommandRunner} from './command-run.js'
-import {failClassOfReason, isStaticClass} from './verify-work.js'
+import {failClassOfReason, isHealthClass, isStaticClass} from './verify-work.js'
 import {taskThatIntroduced} from './task-provenance.js'
 import {makeLedger} from './ledger.js'
 import {parseVerifyBlockStrict} from './spec-validation.js'
@@ -391,11 +391,12 @@ export async function readOpenAcceptDebts(cwd: string): Promise<AcceptDebt[]> {
 }
 
 /**
- * Close every open static-class debt that names `command`, stamping the task
+ * Close every open health-class debt that names `command`, stamping the task
  * whose verified work made that check pass again. Returns the debts closed.
  * A reason that quotes the command is the whole match: the health-check reason
  * (`repo health: \`bun run lint\` exited 1`) and its inherited form both do,
- * and nothing else in the ledger quotes a health command. Best-effort.
+ * and nothing else in the ledger quotes a health command. A suite debt closes
+ * here too: the repair verified clean, and that check runs the suite. Best-effort.
  */
 export async function closeHealthDebts(
     cwd: string,
@@ -408,7 +409,7 @@ export async function closeHealthDebts(
         const closing = all.filter(
             d =>
                 d.resolvedBy === undefined
-                && isStaticClassDebt(d.reason)
+                && isHealthClass(failClassOfReason(d.reason))
                 && d.reason.includes(quoted)
         )
         if (closing.length === 0) return []

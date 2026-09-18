@@ -1892,6 +1892,61 @@ describe('phaseAutoAnswer integration-unknown routing', () => {
     })
 })
 
+// Each guard re-asks once, and the answer that comes back faces BOTH guards again:
+// fixing a deferral by inventing an API used to be promoted straight into the spec.
+describe('phaseAutoAnswer: a re-asked answer faces every guard', () => {
+    const meta = {
+        id: 'TASK_0001',
+        state: 'in_progress' as const,
+        phase: 'grill' as const,
+        created_at: '2026-01-01T00:00:00Z',
+        updated_at: '2026-01-01T00:00:00Z',
+        title: 't'
+    }
+    const RESEARCH =
+        'APIS\n- `Bun.spawn(cmd)` — run a child process\n- `Bun.file(path)` — read a file'
+    const DEFERRAL = 'flag the test/migrate.test.ts breakage as a known issue for the test owner'
+    const INVENTED = 'update test/migrate.test.ts and call `Bun.mkdirSync` in beforeAll'
+    const CLEAN = 'update test/migrate.test.ts and create the directory in beforeAll'
+    const reply = (text: string) => ({
+        events: [
+            {type: 'agent_end', messages: [{role: 'assistant', content: [{type: 'text', text}]}]}
+        ]
+    })
+    const answer = (afterApiReask: string): SpawnFn =>
+        fakeSpawnByPrompt(args => {
+            const prompt = args[args.length - 1] ?? ''
+            if (prompt.includes('Your previous answer named'))
+                return reply(`ANSWER: ${afterApiReask}`)
+            if (prompt.includes('Your previous answer deferred'))
+                return reply(`ANSWER: ${INVENTED}`)
+            return reply(`ANSWER: ${DEFERRAL}`)
+        })
+    const ask = async (cwd: string, spawn: SpawnFn) => {
+        await writeTaskFile(cwd, meta, '\n')
+        return phaseAutoAnswer(
+            {cwd, taskId: 'TASK_0001', signal: new AbortController().signal, spawn},
+            'refined',
+            RESEARCH,
+            'Keep the one-shot DDL, or add IF NOT EXISTS?'
+        )
+    }
+
+    test('a deferral fixed by an invented API is re-asked for the API, then promoted clean', async () => {
+        await withTmpTaskDir(async cwd => {
+            const result = await ask(cwd, answer(CLEAN))
+            expect(result).toMatchObject({kind: 'answered', text: CLEAN})
+        })
+    })
+
+    test('an answer still inventing the API after its re-ask is surfaced, not promoted', async () => {
+        await withTmpTaskDir(async cwd => {
+            const result = await ask(cwd, answer(INVENTED))
+            expect(result).toMatchObject({kind: 'unknown', reason: 'api-synthesis'})
+        })
+    })
+})
+
 describe('phaseAutoAnswer enrichment', () => {
     test('injects npm version data ahead of the auto-answer prompt', async () => {
         await withTmpTaskDir(async cwd => {

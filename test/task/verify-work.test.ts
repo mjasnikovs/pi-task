@@ -1077,6 +1077,98 @@ describe('runWorkVerification', () => {
             expect(out.inheritedHealth).toContain('`bun run lint` exited 1')
         })
 
+        const lintRedSuite = (suite: 'pass' | 'fail') => ({
+            ok: false,
+            reason: suite === 'fail' ? '`bun run lint` exited 1; `bun run test` exited 1' : '',
+            ecosystem: 'package.json',
+            output: 'lint output',
+            commands: [
+                {
+                    cmd: 'bun run lint',
+                    outcome: 'fail' as const,
+                    exitCode: 1,
+                    kind: 'static' as const
+                },
+                suite === 'fail' ?
+                    {
+                        cmd: 'bun run test',
+                        outcome: 'fail' as const,
+                        exitCode: 1,
+                        kind: 'test' as const,
+                        output: '(fail) migrate > applies once'
+                    }
+                :   {
+                        cmd: 'bun run test',
+                        outcome: 'pass' as const,
+                        exitCode: 0,
+                        kind: 'test' as const
+                    }
+            ]
+        })
+
+        // A lint red on arrival used to stand in for the suite this task broke: the
+        // FAIL named the lint and carried the static class, so lint-fix ran, and an
+        // ACCEPT wrote a debt the final gate closed as soon as the statics passed.
+        test('a suite this task broke is a test-suite FAIL naming the suite, not the inherited lint', async () => {
+            const out = await runWorkVerification({
+                cwd: '/x',
+                spec: 'GOAL\nx',
+                repoHealth: async () => lintRedSuite('fail'),
+                healthBaseline: async () => ({
+                    at: '2026-09-18T00:00:00.000Z',
+                    treeHash: 'abc',
+                    outcome: lintRedSuite('pass')
+                }),
+                runChild: async () => 'WORK-VERIFIED: PASS'
+            })
+            expect(out.ok).toBe(false)
+            expect(out.failClass).toBe('test-suite')
+            expect(out.reason).toBe('test suite: `bun run test` exited 1')
+            expect(failClassOfReason(out.reason ?? '')).toBe('test-suite')
+            // What an ACCEPT hands to the repair channel is the suite, with its own output.
+            expect(out.ok ? null : out.health?.commands?.map(c => c.cmd)).toEqual(['bun run test'])
+            expect(out.ok ? null : out.health?.output).toBe('(fail) migrate > applies once')
+        })
+
+        test('an inherited red suite is owed as a suite, never as a static debt', async () => {
+            const out = await runWorkVerification({
+                cwd: '/x',
+                spec: 'GOAL\nx',
+                repoHealth: async () => lintRedSuite('fail'),
+                healthBaseline: async () => ({
+                    at: '2026-09-18T00:00:00.000Z',
+                    treeHash: 'abc',
+                    outcome: lintRedSuite('fail')
+                }),
+                runChild: async () => 'WORK-VERIFIED: PASS'
+            })
+            expect(out.ok).toBe(true)
+            expect(failClassOfReason(out.inheritedHealth ?? '')).toBe('test-suite')
+        })
+
+        // A test runner exits 1 for one failing test or for fifty, so an equal exit
+        // code is not the same failure, and the child must not be told it is.
+        test('an inherited red suite tells the child the exit code is all that was compared', async () => {
+            let prompt = ''
+            await runWorkVerification({
+                cwd: '/x',
+                spec: 'GOAL\nx',
+                repoHealth: async () => lintRedSuite('fail'),
+                healthBaseline: async () => ({
+                    at: '2026-09-18T00:00:00.000Z',
+                    treeHash: 'abc',
+                    outcome: lintRedSuite('fail')
+                }),
+                runChild: async (_t, p) => {
+                    prompt = p
+                    return 'WORK-VERIFIED: PASS'
+                }
+            })
+            expect(prompt).toContain('not proof the same tests fail')
+            expect(prompt).toContain('A TEST command is the')
+            expect(prompt).not.toContain('failed identically')
+        })
+
         test('a spec-less task still reports what it inherited', async () => {
             const out = await runWorkVerification({
                 cwd: '/x',
@@ -1197,6 +1289,7 @@ describe('verify failure class', () => {
         const classes: VerifyFailClass[] = [
             'repo-health',
             'static-checks',
+            'test-suite',
             'unobserved',
             'model-verdict',
             'harness-fault'

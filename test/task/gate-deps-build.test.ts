@@ -506,4 +506,52 @@ describe('health baseline', () => {
         const b = await healthBaselineFor(noGit(), 'TASK_0404', new AbortController().signal)
         expect(b).toBeNull()
     })
+
+    // The detached worktree has none of the tree's ignored files, so its suite
+    // fails for the environment. Recorded red, it would excuse the regression it
+    // matches; unmeasured, a red suite at verify is this task's to answer for.
+    test('the lazy baseline measures the statics only, never the suite', async () => {
+        const dir = makeRepo({
+            'package.json': JSON.stringify({scripts: {lint: 'true', test: 'exit 1'}})
+        })
+        await writeTaskFile(
+            dir,
+            {
+                id: 'TASK_0001',
+                state: 'in_progress',
+                phase: 'done',
+                created_at: 'x',
+                updated_at: 'x',
+                title: 'A'
+            },
+            '\n## spec\n\nGOAL\nx\n'
+        )
+        const b = await healthBaselineFor(dir, 'TASK_0001', new AbortController().signal)
+        expect(b?.outcome.commands.map(c => c.cmd)).toEqual(['bun run lint'])
+    })
+})
+
+describe('the gate health check leaves the tree as it found it', () => {
+    const porcelain = (dir: string): string =>
+        Bun.spawnSync(['git', 'status', '--porcelain'], {cwd: dir}).stdout.toString().trim()
+
+    // A suite writes coverage, reports and databases. Left in the tree they ride
+    // into the task's commit and read as enforce edits on a pass that made none.
+    test('files the suite created are removed; files already there are kept', async () => {
+        const dir = makeRepo({
+            'package.json': JSON.stringify({
+                scripts: {test: "node -e \"require('fs').writeFileSync('junit.xml','x')\""}
+            })
+        })
+        const fake = makeFakeCtx(dir)
+        const outcome = await deps().repoHealth(fake.ctx, dir, 'a task')
+        expect(outcome.ok).toBe(true)
+        expect(fs.existsSync(path.join(dir, 'junit.xml'))).toBe(false)
+        // The enforce baseline runs on a committed tree: it must still read clean.
+        expect(await deps().dirty(dir)).toBe(false)
+
+        write(dir, {'notes.txt': 'mine'})
+        await deps().repoHealth(fake.ctx, dir, 'a task')
+        expect(porcelain(dir)).toBe('?? notes.txt')
+    })
 })

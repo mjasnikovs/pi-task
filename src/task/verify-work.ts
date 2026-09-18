@@ -50,9 +50,11 @@ import {crossTaskDeletionVerifyFindings, type CrossTaskDeletion} from './task-pr
 import {
     classifyHealthDelta,
     inheritedHealthFindings,
+    regressedCommands,
     type HealthBaseline,
     type HealthSignal
 } from './health-baseline.js'
+import {describeHealthFailures, type HealthCommandResult} from './repo-health-check.js'
 import {parseSpec, sliceSpecSection, type Spec} from './spec-model.js'
 import {qaKindsFromRecord} from './qa-transcript.js'
 import {annotateConstraints, anyBinding, renderConstraintPolicy} from './constraint-policy.js'
@@ -147,9 +149,18 @@ export type VerifyOutcome = VerifyPass | VerifyFail
  * `static-checks` is the RUN-level twin of `repo-health`: final-gate.ts mints
  * `VERIFY_FAIL_PREFIX['static-checks']` for the same concept at the other
  * altitude, and `isStaticClass` answers true for both.
+ *
+ * `test-suite` is the same deterministic check when a TEST command regressed. It
+ * is its own class because a passing lint proves nothing about a suite: a static
+ * debt closes when the statics pass, and a lint fix cannot green a test.
  */
 export type VerifyFailClass =
-    'repo-health' | 'static-checks' | 'unobserved' | 'model-verdict' | 'harness-fault'
+    | 'repo-health'
+    | 'static-checks'
+    | 'test-suite'
+    | 'unobserved'
+    | 'model-verdict'
+    | 'harness-fault'
 
 /**
  * The prefix each class MINTS, stated once.
@@ -161,6 +172,7 @@ export type VerifyFailClass =
 export const VERIFY_FAIL_PREFIX: Record<VerifyFailClass, string> = {
     'repo-health': 'repo health:',
     'static-checks': 'static checks:',
+    'test-suite': 'test suite:',
     unobserved: 'work unobserved:',
     'model-verdict': 'work did not verify:',
     'harness-fault': 'verification pass could not run:'
@@ -197,6 +209,16 @@ export function failClassOfReason(reason: string): VerifyFailClass | undefined {
 /** Does this class name a deterministic whole-repo static check, at either altitude? */
 export function isStaticClass(cls: VerifyFailClass | undefined): boolean {
     return cls === 'repo-health' || cls === 'static-checks'
+}
+
+/** The class a red health result is minted under: the suite's when any test is red. */
+function healthFailClass(failing: readonly HealthCommandResult[]): VerifyFailClass {
+    return failing.some(c => c.kind === 'test') ? 'test-suite' : 'repo-health'
+}
+
+/** Does this class name the deterministic whole-repo check, suite included? */
+export function isHealthClass(cls: VerifyFailClass | undefined): boolean {
+    return isStaticClass(cls) || cls === 'test-suite'
 }
 
 /**
@@ -411,8 +433,8 @@ const PROBE_ADAPTERS: readonly ProbeAdapter[] = [
         ]
     }),
     /**
-     * PRE-EXISTING repo health (see health-baseline.ts): static checks that were
-     * ALREADY failing, the same way, before this task started. They used to be an
+     * PRE-EXISTING repo health (see health-baseline.ts): checks that were ALREADY
+     * failing, with the same exit code, before this task started. They used to be an
      * absolute FAIL that short-circuited the whole pass, so the task answered for
      * a sibling's defect and its own probe findings were never computed. As a row
      * they are stated to the child instead: judge this task's work, and do not
@@ -426,7 +448,7 @@ const PROBE_ADAPTERS: readonly ProbeAdapter[] = [
         ruleId: '4h',
         block: findings => [
             'INHERITED REPO-HEALTH NOTICE (deterministic, computed by the orchestrator by',
-            "re-running the project's own static checks and comparing them against the",
+            "re-running the project's own checks and comparing their exit codes against the",
             'baseline taken before this task started): these checks were ALREADY failing,',
             'with the same exit code, before any of this work existed:',
             ...findings.map(f => `- ${f}`),
@@ -437,13 +459,16 @@ const PROBE_ADAPTERS: readonly ProbeAdapter[] = [
         ],
         rule: [
             "4h. AN INHERITED RED CHECK IS NOT THIS TASK'S FAIL, AND NOT ITS PROOF — when the",
-            '   INHERITED REPO-HEALTH NOTICE above names a check, that check failed identically',
+            '   INHERITED REPO-HEALTH NOTICE above names a check, that check exited the same way',
             '   before this task ran. Do NOT fail this work for it: the defect belongs to',
             '   whatever put it there, it is recorded as durable debt, and the run-end gate',
             '   re-checks it. Do NOT lean on it either — a command that was already exiting',
             "   non-zero tells you nothing about this task's behavior, so verify that behavior",
             '   another way. A check that is failing DIFFERENTLY, or one absent from the notice,',
-            "   is this task's to answer for in the ordinary way."
+            "   is this task's to answer for in the ordinary way. A TEST command is the",
+            '   exception to the exit code: it exits the same way for one failing test or',
+            "   fifty. Run it, and a test that fails because of THIS work is this task's FAIL,",
+            '   whatever the spec says about it.'
         ]
     }),
     /**
@@ -1246,16 +1271,33 @@ export async function runWorkVerification(deps: VerificationDeps): Promise<Verif
         const h = await deps.repoHealth()
         if (!h.ok) {
             const baseline = deps.healthBaseline ? await deps.healthBaseline() : null
-            if (classifyHealthDelta(baseline?.outcome ?? null, h) === 'regressed') {
+            const before = baseline?.outcome ?? null
+            if (classifyHealthDelta(before, h) === 'regressed') {
+                // Named after what REGRESSED, not after whatever failed first: a lint
+                // red on arrival would otherwise stand in for the suite this task broke.
+                const regressed = regressedCommands(before, h)
+                if (regressed.length === 0) {
+                    return {
+                        ok: false,
+                        failClass: 'repo-health',
+                        reason: `repo health: ${h.reason}`,
+                        health: h
+                    }
+                }
+                const failClass = healthFailClass(regressed)
                 return {
                     ok: false,
-                    failClass: 'repo-health',
-                    reason: `repo health: ${h.reason}`,
-                    health: h
+                    failClass,
+                    reason: `${VERIFY_FAIL_PREFIX[failClass]} ${describeHealthFailures(regressed)}`,
+                    health: {...h, commands: regressed, output: regressed[0].output ?? h.output}
                 }
             }
             pre.repoHealth = inheritedHealthFindings(h)
-            inheritedHealth = `repo health: ${h.reason} — already failing before this task`
+            const failing = h.commands?.filter(c => c.outcome === 'fail') ?? []
+            inheritedHealth =
+                failing.length > 0 ?
+                    `${VERIFY_FAIL_PREFIX[healthFailClass(failing)]} ${describeHealthFailures(failing)} — already failing before this task`
+                :   `repo health: ${h.reason} — already failing before this task`
         }
     }
     const inherited = inheritedHealth === undefined ? {} : {inheritedHealth}

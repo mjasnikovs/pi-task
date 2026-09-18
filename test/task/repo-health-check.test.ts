@@ -92,6 +92,26 @@ describe('discoverTestCommands', () => {
     test('no manifest → nothing', () => {
         expect(discoverTestCommands(tmpRepo({'index.html': ''})).cmds).toEqual([])
     })
+
+    // A watch-mode script never exits, so every health run would spend its whole
+    // timeout on it and record a skip.
+    test('a watch-mode script is left out, by name or by flag', () => {
+        const dir = tmpRepo({
+            'package.json': JSON.stringify({
+                scripts: {
+                    test: 'bun test',
+                    'test:watch': 'bun test',
+                    'test:dev': 'jest --watchAll',
+                    'test:ui': 'vitest watch',
+                    'test:list': 'bun test src/watchlist.test.ts'
+                }
+            })
+        })
+        expect(discoverTestCommands(dir).cmds).toEqual([
+            ['bun', ['run', 'test']],
+            ['bun', ['run', 'test:list']]
+        ])
+    })
 })
 
 // The mx5-n TASK_0004 class: a task turns a green suite red, its spec calls that a
@@ -114,9 +134,9 @@ describe('runRepoHealthCheck — withTests', () => {
         const out = await runRepoHealthCheck(dir, {withTests: true})
         expect(out.ok).toBe(false)
         expect(out.reason).toContain('bun run test')
-        expect(out.commands).toEqual([
-            {cmd: 'bun run lint', outcome: 'pass', exitCode: 0},
-            {cmd: 'bun run test', outcome: 'fail', exitCode: 1}
+        expect(out.commands).toMatchObject([
+            {cmd: 'bun run lint', outcome: 'pass', exitCode: 0, kind: 'static'},
+            {cmd: 'bun run test', outcome: 'fail', exitCode: 1, kind: 'test'}
         ])
     })
 
@@ -133,15 +153,46 @@ describe('runRepoHealthCheck — withTests', () => {
         const dir = tmpRepo({'package.json': JSON.stringify({scripts: {test: 'exit 3'}})})
         const out = await runRepoHealthCheck(dir, {withTests: true})
         expect(out.ok).toBe(false)
-        expect(out.commands).toEqual([{cmd: 'bun run test', outcome: 'fail', exitCode: 3}])
+        expect(out.commands).toMatchObject([{cmd: 'bun run test', outcome: 'fail', exitCode: 3}])
     })
 
-    test('a red static short-circuits before the suite runs', async () => {
+    // A command the run never reached is absent from BOTH sides of the
+    // differential, so a suite behind a red lint could break unseen.
+    test('a red static does not stop the suite: every command is measured', async () => {
         const dir = tmpRepo({
-            'package.json': JSON.stringify({scripts: {lint: 'exit 1', test: 'true'}})
+            'package.json': JSON.stringify({
+                scripts: {lint: 'exit 1', test: 'node -e "console.error(1234); process.exit(2)"'}
+            })
         })
         const out = await runRepoHealthCheck(dir, {withTests: true})
-        expect(out.commands.map(c => c.cmd)).toEqual(['bun run lint'])
+        expect(out.ok).toBe(false)
+        expect(out.reason).toBe('`bun run lint` exited 1; `bun run test` exited 2')
+        expect(out.commands.map(c => [c.cmd, c.outcome, c.exitCode])).toEqual([
+            ['bun run lint', 'fail', 1],
+            ['bun run test', 'fail', 2]
+        ])
+        // Each failing command keeps its own output, so a subject is read from the
+        // command it is about.
+        expect(out.commands[1].output).toContain('1234')
+        expect(out.commands[0].output).not.toContain('1234')
+    })
+
+    test('a test script with no tests to run is a SKIP, not a FAIL', async () => {
+        const dir = tmpRepo({
+            'package.json': JSON.stringify({scripts: {lint: 'true', test: 'bun test'}})
+        })
+        const out = await runRepoHealthCheck(dir, {withTests: true})
+        expect(out.ok).toBe(true)
+        expect(out.commands.find(c => c.cmd === 'bun run test')?.outcome).toBe('skip')
+    })
+
+    test('"no tests found" in a LINT report is still a lint failure', async () => {
+        const dir = tmpRepo({
+            'package.json': JSON.stringify({scripts: {lint: 'echo "No tests found" && exit 1'}})
+        })
+        const out = await runRepoHealthCheck(dir, {withTests: true})
+        expect(out.ok).toBe(false)
+        expect(out.commands).toMatchObject([{cmd: 'bun run lint', outcome: 'fail'}])
     })
 
     test('a suite whose browser is missing is a SKIP, not a FAIL (the gate ladder, not the static one)', async () => {

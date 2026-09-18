@@ -163,6 +163,20 @@ describe('recheckAcceptDebts (FP-safe re-check)', () => {
         expect(open).toEqual([staticDebt, frozenDebt])
     })
 
+    // `staticOk` is the final gate's lint and typecheck, which never run the suite.
+    // A green lint closing a red suite is a defect reported RESOLVED that nobody fixed.
+    test('a test-suite debt is never closed by passing statics', async () => {
+        const suiteDebt: AcceptDebt = {
+            taskId: 'T3',
+            reason: 'test suite: `bun run test` exited 1',
+            origin: 'yolo-accepted'
+        }
+        const {open, resolved} = await recheckAcceptDebts([suiteDebt], {staticOk: true})
+        expect(resolved).toEqual([])
+        expect(open).toEqual([suiteDebt])
+        expect(isStaticClassDebt(suiteDebt.reason)).toBe(false)
+    })
+
     test('nothing recorded → nothing open (clean)', async () => {
         expect(await recheckAcceptDebts([], {staticOk: true})).toEqual({
             open: [],
@@ -863,6 +877,14 @@ describe('closed debts (resolvedBy) — a repair closes what its check opened', 
             // A second close finds nothing open.
             expect(await closeHealthDebts(cwd, 'bun run lint', 'TASK_0011')).toEqual([])
         }
+    })
+
+    // A repair verifies clean only when the whole check, suite included, is green.
+    test('closeHealthDebts closes a suite debt naming the repaired command', async () => {
+        const cwd = makeCwd()
+        await recordDebt(cwd, 'TASK_0006', 'test suite: `bun run test` exited 1', 'accepted')
+        const closed = await closeHealthDebts(cwd, 'bun run test', 'TASK_0007')
+        expect(closed.map(d => d.taskId)).toEqual(['TASK_0006'])
     })
 
     test('deriveOpenDebts never re-checks a closed debt, and keeps it on disk when pruning', async () => {

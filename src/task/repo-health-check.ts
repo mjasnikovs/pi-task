@@ -54,21 +54,27 @@ export interface HealthCommandResult {
     outcome: 'pass' | 'fail' | 'skip'
     /** Real exit status on a `fail`; null when nothing conclusive ran. */
     exitCode: number | null
+    /** Absent on a record written before the suite joined the check, which ran
+     *  statics only. A test red is judged, owed and repaired differently. */
+    kind?: 'static' | 'test'
+    /** This command's own captured output, on a `fail` only. */
+    output?: string
 }
 
 export interface HealthOutcome {
-    /** true → every discovered static check passed, or there was nothing to run.
-     *  false → a discovered command actually ran and exited non-zero. */
+    /** true → every discovered check passed or could not run, or there was nothing
+     *  to run. false → a discovered command actually ran and exited non-zero. */
     ok: boolean
-    /** Human-readable reason. On a fail, names the exact command and exit code. */
+    /** Human-readable reason. On a fail, names every failing command and its exit code. */
     reason: string
     /** Which manifest drove discovery, or null when none was found. */
     ecosystem: string | null
-    /** Every command that was REACHED, in run order. The run short-circuits on the
-     *  first failure, so commands after it are absent rather than passing. */
+    /** Every discovered command, in run order. A red one does not stop the run: a
+     *  command it skipped would be absent from both sides of the differential, which
+     *  then cannot see that command break. */
     commands: HealthCommandResult[]
     /**
-     * First lines of the failing command's combined stderr+stdout — captured so a
+     * First lines of the first failing command's combined stderr+stdout — captured so a
      * FAIL is explainable from artifacts alone. The exit code alone does not say
      * what happened: eslint exits 1 for findings and 2 when it could not run at
      * all (a missing config, say), so "`bun run lint` exited 2" is unreproducible
@@ -174,6 +180,13 @@ export function discoverHealthCommands(cwd: string): {
     return {ecosystem: null, cmds: []}
 }
 
+/** `test:watch`, `jest --watchAll`, `vitest watch`, `bun test --watch`. */
+function isWatchScript(name: string, body: string): boolean {
+    return (
+        /watch/i.test(name) || /(?:^|\s)--watch(?:All)?(?=[\s=]|$)|(?:^|\s)watch(?=\s|$)/.test(body)
+    )
+}
+
 /**
  * The project's OWN test commands, in the order the run-end gate runs them. One
  * statement for both gates: final-gate.ts appends `build` to this list for the
@@ -183,7 +196,8 @@ export function discoverHealthCommands(cwd: string): {
  * Every test-shaped script, not just the one literally named `test`: a project's
  * only browser-executing suite is often `test:ct`, and looking for `test` alone
  * never runs it. Plain `test` leads, then every `test:`/`test_`/`test-` name in
- * declaration order (Array#sort is stable).
+ * declaration order (Array#sort is stable). A watch-mode script is left out: it
+ * never exits, so all it can add is a timeout.
  */
 export function discoverTestCommands(cwd: string): {
     ecosystem: string | null
@@ -191,7 +205,9 @@ export function discoverTestCommands(cwd: string): {
 } {
     if (existsSync(path.join(cwd, 'package.json'))) {
         const s = packageScripts(cwd)
-        const names = Object.keys(s).filter(n => n === 'test' || /^test[:_-]/.test(n))
+        const names = Object.keys(s).filter(
+            n => (n === 'test' || /^test[:_-]/.test(n)) && !isWatchScript(n, s[n])
+        )
         names.sort((a, b) =>
             a === 'test' ? -1
             : b === 'test' ? 1
@@ -238,7 +254,7 @@ export type HealthProgress = (command: string) => void
  *  - No manifest / no static command  → ok (nothing can regress).
  *  - A command that CANNOT run (ENOENT / null exit / 127 inside the chain) → skipped,
  *    treated as an environment gap, not a fault.
- *  - A command that ran and exited non-zero → the first such failure is returned.
+ *  - A command that ran and exited non-zero → red. Every command still runs.
  *
  * This module owns DISCOVERY and its own output policy. Running a command and
  * deciding what its ending MEANS is `command-run.ts`'s — one statement of the
@@ -296,23 +312,38 @@ export async function runRepoHealthCheck(
         // ladder's `tail` keeps 400 characters, and that difference is real — a
         // truncated lint report is unactionable. So the run is classified, not
         // consumed: the verdict decides, the raw streams are what we show.
-        // `runtimeGap` only for a TEST command. The browser/runtime row was
-        // written for the gate's test commands and its pattern matches ordinary
-        // English, so on lint and typecheck a genuine report quoting "browsers are
-        // not installed" would skip the static check and certify the repo healthy.
-        const verdict = classifyCommandRun(r, [], {runtimeGap: test})
+        // `runtimeGap` and `emptySuite` only for a TEST command. Both rows read the
+        // command's output, and on lint and typecheck a genuine report quoting
+        // "browsers are not installed" would skip the static check and certify
+        // the repo healthy.
+        const verdict = classifyCommandRun(r, [], {runtimeGap: test, emptySuite: test})
+        const kind = test ? 'test' : 'static'
         if (verdict.outcome !== 'fail') {
             const passed = verdict.outcome === 'pass'
-            commands.push({cmd, outcome: passed ? 'pass' : 'skip', exitCode: passed ? 0 : null})
+            commands.push({
+                cmd,
+                outcome: passed ? 'pass' : 'skip',
+                exitCode: passed ? 0 : null,
+                kind
+            })
             continue
         }
-        commands.push({cmd, outcome: 'fail', exitCode: verdict.status})
+        commands.push({
+            cmd,
+            outcome: 'fail',
+            exitCode: verdict.status,
+            kind,
+            output: captureHealthOutput(r.stdout, r.stderr)
+        })
+    }
+    const firstFail = commands.find(c => c.outcome === 'fail')
+    if (firstFail) {
         return {
             ok: false,
-            reason: `\`${cmd}\` exited ${verdict.status}`,
+            reason: describeHealthFailures(commands),
             ecosystem,
             commands,
-            output: captureHealthOutput(r.stdout, r.stderr)
+            output: firstFail.output ?? ''
         }
     }
     return {
@@ -322,4 +353,12 @@ export async function runRepoHealthCheck(
         commands,
         output: ''
     }
+}
+
+/** "`bun run lint` exited 1; `bun run test` exited 1" — every failing command. */
+export function describeHealthFailures(commands: readonly HealthCommandResult[]): string {
+    return commands
+        .filter(c => c.outcome === 'fail')
+        .map(c => `\`${c.cmd}\` exited ${c.exitCode}`)
+        .join('; ')
 }

@@ -81,6 +81,7 @@ const REATTEMPTABLE_BUDGET = 3
 export const AUTOFIX_BUDGET: Record<VerifyFailClass, number> = {
     'repo-health': REATTEMPTABLE_BUDGET,
     'static-checks': REATTEMPTABLE_BUDGET,
+    'test-suite': REATTEMPTABLE_BUDGET,
     'model-verdict': REATTEMPTABLE_BUDGET,
     unobserved: 0,
     'harness-fault': 0
