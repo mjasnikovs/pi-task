@@ -1065,6 +1065,89 @@ describe('runWorkVerification', () => {
             expect(childRan).toBe(false)
         })
 
+        // Delete the test directory and the runner exits non-zero saying it found
+        // nothing — a gap, and a gap never fails. The whole check reported green
+        // while the suite the baseline ran had gone.
+        test('a suite the baseline ran and this tree no longer finds is this task’s FAIL', async () => {
+            let childRan = false
+            const withSuite = (gone: boolean) => ({
+                ok: true,
+                reason: 'passed',
+                ecosystem: 'package.json',
+                output: '',
+                commands: [
+                    {
+                        cmd: 'bun run lint',
+                        outcome: 'pass' as const,
+                        exitCode: 0,
+                        kind: 'static' as const
+                    },
+                    gone ?
+                        {
+                            cmd: 'bun run test',
+                            outcome: 'skip' as const,
+                            exitCode: null,
+                            kind: 'test' as const,
+                            gap: 'empty-suite' as const
+                        }
+                    :   {
+                            cmd: 'bun run test',
+                            outcome: 'pass' as const,
+                            exitCode: 0,
+                            kind: 'test' as const
+                        }
+                ]
+            })
+            const out = await runWorkVerification({
+                cwd: '/x',
+                spec: 'GOAL\nx',
+                repoHealth: async () => withSuite(true),
+                healthBaseline: async () => ({
+                    at: '2026-09-16T00:00:00.000Z',
+                    treeHash: 'abc',
+                    outcome: withSuite(false)
+                }),
+                runChild: async () => {
+                    childRan = true
+                    return 'WORK-VERIFIED: PASS'
+                }
+            })
+            expect(out.ok).toBe(false)
+            expect(out.failClass).toBe('test-suite')
+            expect(out.reason).toBe('test suite: `bun run test` found no tests to run')
+            expect(childRan).toBe(false)
+        })
+
+        test('a repo that never had tests to find still passes', async () => {
+            const none = {
+                ok: true,
+                reason: 'passed',
+                ecosystem: 'package.json',
+                output: '',
+                commands: [
+                    {
+                        cmd: 'bun run test',
+                        outcome: 'skip' as const,
+                        exitCode: null,
+                        kind: 'test' as const,
+                        gap: 'empty-suite' as const
+                    }
+                ]
+            }
+            const out = await runWorkVerification({
+                cwd: '/x',
+                spec: 'GOAL\nx',
+                repoHealth: async () => none,
+                healthBaseline: async () => ({
+                    at: '2026-09-16T00:00:00.000Z',
+                    treeHash: 'abc',
+                    outcome: none
+                }),
+                runChild: async () => 'WORK-VERIFIED: PASS'
+            })
+            expect(out.ok).toBe(true)
+        })
+
         test('inherited health rides on a FAIL outcome too', async () => {
             const out = await runWorkVerification({
                 cwd: '/x',

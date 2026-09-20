@@ -1269,7 +1269,12 @@ export async function runWorkVerification(deps: VerificationDeps): Promise<Verif
     if (deps.repoHealth) {
         stage('repo health')
         const h = await deps.repoHealth()
-        if (!h.ok) {
+        // `ok` is not the whole verdict: a suite this tree no longer finds observes
+        // nothing, so nothing fails, and only the differential sees it went away.
+        // Establishing a baseline can cost a worktree health run, so it is asked for
+        // only in the two shapes it can speak to.
+        const suiteGone = (h.commands ?? []).some(c => c.gap === 'empty-suite')
+        if (!h.ok || suiteGone) {
             const baseline = deps.healthBaseline ? await deps.healthBaseline() : null
             const before = baseline?.outcome ?? null
             if (classifyHealthDelta(before, h) === 'regressed') {
@@ -1289,15 +1294,22 @@ export async function runWorkVerification(deps: VerificationDeps): Promise<Verif
                     ok: false,
                     failClass,
                     reason: `${VERIFY_FAIL_PREFIX[failClass]} ${describeHealthFailures(regressed)}`,
-                    health: {...h, commands: regressed, output: regressed[0].output ?? h.output}
+                    health: {
+                        ...h,
+                        ok: false,
+                        commands: regressed,
+                        output: regressed[0].output ?? h.output
+                    }
                 }
             }
-            pre.repoHealth = inheritedHealthFindings(h)
-            const failing = h.commands?.filter(c => c.outcome === 'fail') ?? []
-            inheritedHealth =
-                failing.length > 0 ?
-                    `${VERIFY_FAIL_PREFIX[healthFailClass(failing)]} ${describeHealthFailures(failing)} — already failing before this task`
-                :   `repo health: ${h.reason} — already failing before this task`
+            if (!h.ok) {
+                pre.repoHealth = inheritedHealthFindings(h)
+                const failing = h.commands?.filter(c => c.outcome === 'fail') ?? []
+                inheritedHealth =
+                    failing.length > 0 ?
+                        `${VERIFY_FAIL_PREFIX[healthFailClass(failing)]} ${describeHealthFailures(failing)} — already failing before this task`
+                    :   `repo health: ${h.reason} — already failing before this task`
+            }
         }
     }
     const inherited = inheritedHealth === undefined ? {} : {inheritedHealth}

@@ -112,6 +112,25 @@ describe('discoverTestCommands', () => {
             ['bun', ['run', 'test:list']]
         ])
     })
+
+    // `--watch=false` is how a CI script turns watch OFF. Reading the flag's
+    // presence rather than its value dropped the only `test` script such a repo
+    // has, and a repo with no discovered suite has no differential to regress.
+    test('a flag that turns watch off is not a watch script', () => {
+        const dir = tmpRepo({
+            'package.json': JSON.stringify({
+                scripts: {
+                    test: 'jest --ci --watchAll=false --coverage',
+                    'test:vi': 'vitest run --watch=false',
+                    'test:on': 'jest --watch=true'
+                }
+            })
+        })
+        expect(discoverTestCommands(dir).cmds).toEqual([
+            ['bun', ['run', 'test']],
+            ['bun', ['run', 'test:vi']]
+        ])
+    })
 })
 
 // The mx5-n TASK_0004 class: a task turns a green suite red, its spec calls that a
@@ -183,7 +202,12 @@ describe('runRepoHealthCheck — withTests', () => {
         })
         const out = await runRepoHealthCheck(dir, {withTests: true})
         expect(out.ok).toBe(true)
-        expect(out.commands.find(c => c.cmd === 'bun run test')?.outcome).toBe('skip')
+        // The gap id rides on the result: alone it is a skip, but against a baseline
+        // that ran the suite it is how the differential sees the suite go away.
+        expect(out.commands.find(c => c.cmd === 'bun run test')).toMatchObject({
+            outcome: 'skip',
+            gap: 'empty-suite'
+        })
     })
 
     test('"no tests found" in a LINT report is still a lint failure', async () => {

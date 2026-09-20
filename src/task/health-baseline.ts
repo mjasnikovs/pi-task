@@ -77,6 +77,7 @@ export function classifyHealthDelta(
     baseline: HealthSignal | null,
     after: HealthSignal
 ): HealthDelta {
+    if (vanishedSuites(baseline, after).length > 0) return 'regressed'
     if (after.ok) return 'clean'
     if (!baseline) return 'regressed'
     const before = failures(baseline)
@@ -90,6 +91,28 @@ export function classifyHealthDelta(
 
 const failureKey = (c: HealthCommandResult): string => JSON.stringify([c.cmd, c.exitCode])
 
+/**
+ * Test commands the baseline saw PASS that now find no tests to run.
+ *
+ * A runner that found nothing observed nothing, which is a gap — in isolation. A
+ * task that deleted the test directory, renamed it, or broke the config's glob
+ * leaves the same gap, and the check reports the repo healthy because a gap never
+ * fails. Against a baseline that ran the suite, the suite is gone: this task's
+ * regression, and the largest one it can hide behind a green.
+ */
+export function vanishedSuites(
+    baseline: HealthSignal | null,
+    after: HealthSignal
+): HealthCommandResult[] {
+    if (!baseline) return []
+    const passed = new Set(
+        (baseline.commands ?? []).filter(c => c.outcome === 'pass').map(c => c.cmd)
+    )
+    return (after.commands ?? []).filter(
+        c => c.outcome === 'skip' && c.gap === 'empty-suite' && passed.has(c.cmd)
+    )
+}
+
 /** The failing commands the baseline did not have failing the same way — what a
  *  `regressed` verdict is about. Every failing command when there is no baseline. */
 export function regressedCommands(
@@ -97,7 +120,10 @@ export function regressedCommands(
     after: HealthSignal
 ): HealthCommandResult[] {
     const wasFailing = new Set(baseline ? failures(baseline).map(failureKey) : [])
-    return failures(after).filter(c => !wasFailing.has(failureKey(c)))
+    return [
+        ...failures(after).filter(c => !wasFailing.has(failureKey(c))),
+        ...vanishedSuites(baseline, after)
+    ]
 }
 
 /**

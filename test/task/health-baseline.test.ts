@@ -156,6 +156,49 @@ describe('classifyHealthDelta — the test suite', () => {
     test('with no baseline every failing command is regressed', () => {
         expect(regressedCommands(null, {ok: false, commands: suite('fail', 1)})).toHaveLength(1)
     })
+
+    // Deleting the test directory, renaming it, or breaking the config's glob makes
+    // the runner exit non-zero saying it found nothing. That is a gap, and a gap
+    // never fails — so the largest possible regression reported the repo healthy.
+    const gone: HealthCommandResult[] = [
+        {cmd: 'bun run lint', outcome: 'pass', exitCode: 0, kind: 'static'},
+        {cmd: 'bun run test', outcome: 'skip', exitCode: null, kind: 'test', gap: 'empty-suite'}
+    ]
+    const ran: HealthCommandResult[] = [
+        {cmd: 'bun run lint', outcome: 'pass', exitCode: 0, kind: 'static'},
+        {cmd: 'bun run test', outcome: 'pass', exitCode: 0, kind: 'test'}
+    ]
+
+    test('a suite the baseline ran and this tree no longer finds is REGRESSED, and named', () => {
+        const before = {ok: true, commands: ran}
+        const after = {ok: true, commands: gone}
+        expect(classifyHealthDelta(before, after)).toBe('regressed')
+        expect(regressedCommands(before, after).map(c => c.cmd)).toEqual(['bun run test'])
+    })
+
+    test('a repo that never had tests to find is still clean', () => {
+        expect(classifyHealthDelta({ok: true, commands: gone}, {ok: true, commands: gone})).toBe(
+            'clean'
+        )
+        expect(classifyHealthDelta(null, {ok: true, commands: gone})).toBe('clean')
+    })
+
+    // A missing browser is the environment, not the tree: it skips under a
+    // different gap id and says nothing about whether the suite still exists.
+    test('a suite skipped for a missing runtime is not a vanished suite', () => {
+        const skipped: HealthCommandResult[] = [
+            {
+                cmd: 'bun run test',
+                outcome: 'skip',
+                exitCode: null,
+                kind: 'test',
+                gap: 'missing-runtime'
+            }
+        ]
+        expect(classifyHealthDelta({ok: true, commands: ran}, {ok: true, commands: skipped})).toBe(
+            'clean'
+        )
+    })
 })
 
 describe('inheritedHealthFindings', () => {

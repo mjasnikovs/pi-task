@@ -641,6 +641,50 @@ describe('verify-command debt class', () => {
         expect(await classifyVerifyCommand(cwd, '', REASON)).toBeNull()
     })
 
+    // A red suite is not a task's VERIFY line — it belongs to the repo. Without the
+    // manifest as a second provenance the `test suite:` class has no closure path
+    // at all, and an inherited red suite stays reported open for the whole run
+    // after a later task greens it.
+    test('a test-suite reason names the repo’s own discovered test command', async () => {
+        const cwd = makeCwd()
+        fs.writeFileSync(
+            path.join(cwd, 'package.json'),
+            JSON.stringify({scripts: {lint: 'x', test: 'bun test'}})
+        )
+        const inherited = 'test suite: `bun run test` exited 1 — already failing before this task'
+        expect(await classifyVerifyCommand(cwd, '', inherited)).toBe('bun run test')
+        // Same strictness as the VERIFY-block match: a command this repo does not
+        // discover is not provenance, and a static red is still not the suite.
+        expect(
+            await classifyVerifyCommand(cwd, '', 'test suite: `bun run e2e` exited 1')
+        ).toBeNull()
+        expect(
+            await classifyVerifyCommand(cwd, '', 'repo health: `bun run test` exited 1')
+        ).toBeNull()
+    })
+
+    test('one command is re-run once, and it settles every debt that names it', async () => {
+        const debts: AcceptDebt[] = ['T1', 'T2', 'T3', 'T4'].map(taskId => ({
+            taskId,
+            reason: `test suite: \`bun run test\` exited 1 — already failing before ${taskId}`,
+            origin: 'inherited-health',
+            verifyCommand: 'bun run test'
+        }))
+        let runs = 0
+        const {open, resolved} = await recheckAcceptDebts(debts, {
+            staticOk: true,
+            rerunVerify: async () => {
+                runs += 1
+                return {outcome: 'pass'}
+            }
+        })
+        // Four debts, one suite. Re-running it per debt would spend the budget of
+        // three proving the same thing and leave the fourth open.
+        expect(runs).toBe(1)
+        expect(open).toEqual([])
+        expect(resolved).toHaveLength(4)
+    })
+
     // ─── Unfailable commands ────────────────────────────────────────────────
     //
     // The auto-close rests entirely on a ZERO exit meaning "the check passed". A
@@ -801,11 +845,13 @@ describe('verify-command debt class', () => {
     })
 
     test('inv-bounded — the per-run re-run budget caps the work and never closes past it', async () => {
+        // Ten DISTINCT commands: the budget counts commands, and debts that share
+        // one are settled by its single run (see the dedupe test above).
         const many: AcceptDebt[] = Array.from({length: 10}, (_, i) => ({
             taskId: `T${i}`,
-            reason: 'work did not verify: `bun test` fails',
+            reason: `work did not verify: \`bun test t${i}\` fails`,
             origin: 'yolo-accepted' as const,
-            verifyCommand: 'bun test'
+            verifyCommand: `bun test t${i}`
         }))
         let ran = 0
         const out = await recheckAcceptDebts(many, {

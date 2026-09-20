@@ -137,6 +137,24 @@ export type FinalGateFixFn = (
 const EXCLUDE_TASKS_DIR = ':(exclude).pi-tasks'
 
 /**
+ * A file the suite wrote as the repo's OWN record, not as a report about the run.
+ * A test added this task and never run locally generates its snapshot on the
+ * gate's run; deleting it commits a snapshot test with no snapshot, and the next
+ * suite — or CI — fails on a file the task was supposed to carry.
+ *
+ * A named set, not a shape test: the alternative is an allowlist of throwaway
+ * artefacts, and anything it misses rides into the commit, which is the problem
+ * the cleanup exists for. A stray snapshot is the smaller error.
+ */
+export function isSuiteRecord(rel: string): boolean {
+    return (
+        /(?:^|[\\/])__(?:snapshots|image_snapshots)__[\\/]/.test(rel)
+        || /\.snap$/.test(rel)
+        || /\.approved\.[^.\\/]+$/.test(rel)
+    )
+}
+
+/**
  * Pin the diff header prefixes on any command whose output we PARSE for paths.
  *
  * `parseAddedLines` reads the file out of the `+++ b/…` header, but the prefix is
@@ -895,7 +913,8 @@ export function buildGateDeps(params: {
     // The project's own checks, suite included, once per tree for the run. A suite
     // writes coverage, reports and databases into the tree; left there, they ride
     // into the task's commit and read as enforce edits, so what the check created
-    // is removed before the tree is hashed again.
+    // is removed before the tree is hashed again — except what it wrote as the
+    // repo's own record (see isSuiteRecord).
     const gateHealth = (cwd2: string, onCommand: HealthProgress): Promise<HealthOutcome> =>
         currentRunContext(cwd2).healthFor(async () => {
             const before = await untrackedFiles(cwd2)
@@ -904,7 +923,7 @@ export function buildGateDeps(params: {
             } finally {
                 const after = before ? await untrackedFiles(cwd2) : null
                 for (const rel of after ?? []) {
-                    if (!before?.has(rel)) {
+                    if (!before?.has(rel) && !isSuiteRecord(rel)) {
                         await fsp
                             .rm(path.join(cwd2, rel), {recursive: true, force: true})
                             .catch(() => {})

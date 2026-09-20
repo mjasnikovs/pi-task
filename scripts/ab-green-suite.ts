@@ -181,13 +181,30 @@ function fisherOneSided(aHit: number, aN: number, bHit: number, bN: number): num
 
 /** The trials that measured THESE prompts at this rep count: a ledger row from an
  *  edited prompt is a different experiment. */
-export function loadLedger(path: string, reps: number, promptHash: Record<Arm, string>): Row[] {
+/** Every trial this run's design recorded. */
+export function loadLedger(path: string, reps: number): Row[] {
     if (!existsSync(path)) return []
     return readFileSync(path, 'utf8')
         .split('\n')
         .filter(l => l.trim().length > 0)
         .map(l => JSON.parse(l) as Row)
-        .filter(r => r.reps === reps && r.promptHash === promptHash[r.arm])
+        .filter(r => r.reps === reps)
+}
+
+/**
+ * The recorded trials this run may APPEND to: same model, same prompt per arm. A
+ * trial run against an edited prompt is a different experiment.
+ *
+ * Resume's guard only. A rescore re-reads the trials that exist — that is what a
+ * scorer change is — so filtering it by the current prompt hash reported a
+ * complete ledger as INCOMPLETE after any prompt edit.
+ */
+export function resumableRows(
+    rows: readonly Row[],
+    fp: string,
+    promptHash: Record<Arm, string>
+): Row[] {
+    return rows.filter(r => r.fingerprint === fp && r.promptHash === promptHash[r.arm])
 }
 
 function report(rows: Row[], reps: number): number {
@@ -253,7 +270,7 @@ async function main(): Promise<void> {
     )
 
     const promptHash: Record<Arm, string> = {A: hash(prompts.A), B: hash(prompts.B)}
-    const recorded = loadLedger(ledger, reps, promptHash)
+    const recorded = loadLedger(ledger, reps)
     if (rescore) {
         const models = new Set(recorded.map(r => r.fingerprint))
         if (models.size > 1) {
@@ -263,7 +280,7 @@ async function main(): Promise<void> {
         process.exit(report(recorded, reps))
     }
     const fp = await fingerprint()
-    const rows = recorded.filter(r => r.fingerprint === fp)
+    const rows = resumableRows(recorded, fp, promptHash)
     console.log(`model fingerprint: ${fp}`)
     console.log(`resuming with ${rows.length} recorded trials`)
 

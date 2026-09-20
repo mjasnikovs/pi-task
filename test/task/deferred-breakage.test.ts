@@ -32,7 +32,21 @@ describe('defersBreakage', () => {
         'Keep option B with no schema changes and flag the test as a known issue',
         'Leave test/migrate.test.ts failing',
         'Skip updating the tests — they will be fixed in a follow-up task',
-        'the migrate test will fail but that is out of scope for this task'
+        'the migrate test will fail but that is out of scope for this task',
+        // A hedge is still a decision. These are the shapes a model reaches for
+        // first, so a modal that cancelled the phrase let the guard be rephrased
+        // away.
+        'I would flag it as a known issue and move on.',
+        'We could flag the failing suite as a known issue.',
+        'It might be simplest to leave the suite red for now.',
+        'This would be owned by whoever maintains the test suite.',
+        // Naming a person who does not exist is a deferral whatever the clause is
+        // about.
+        'Leave it for whoever owns that module.',
+        'Ownership belongs to the module owner.',
+        // A semicolon joins clauses of one thought; the breakage it defers sits in
+        // the other half.
+        'This is out of scope; the test can stay red.'
     ])('catches: %s', text => {
         expect(defersBreakage(text)).toBe(true)
     })

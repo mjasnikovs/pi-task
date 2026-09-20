@@ -36,7 +36,12 @@
 import {existsSync, readFileSync} from 'node:fs'
 import * as path from 'node:path'
 import {resolveRunner, runnerEnv} from './runner-resolve.js'
-import {classifyCommandRun, spawnCommand, type CommandRunner} from './command-run.js'
+import {
+    classifyCommandRun,
+    spawnCommand,
+    type CommandGapId,
+    type CommandRunner
+} from './command-run.js'
 
 /**
  * What ONE discovered command did. `outcome` is `classifyCommandRun`'s verdict, so
@@ -57,6 +62,9 @@ export interface HealthCommandResult {
     /** Absent on a record written before the suite joined the check, which ran
      *  statics only. A test red is judged, owed and repaired differently. */
     kind?: 'static' | 'test'
+    /** Why nothing was observed, on a `skip`. The differential reads it: a runner
+     *  that found no tests is a gap alone and a regression against a suite. */
+    gap?: CommandGapId
     /** This command's own captured output, on a `fail` only. */
     output?: string
 }
@@ -180,10 +188,17 @@ export function discoverHealthCommands(cwd: string): {
     return {ecosystem: null, cmds: []}
 }
 
-/** `test:watch`, `jest --watchAll`, `vitest watch`, `bun test --watch`. */
+/**
+ * `test:watch`, `jest --watchAll`, `vitest watch`, `bun test --watch`.
+ *
+ * The flag is read by its VALUE, not its presence: `--watchAll=false` is how a CI
+ * script turns watch off, and excluding it drops the only `test` script such a
+ * repo has.
+ */
 function isWatchScript(name: string, body: string): boolean {
     return (
-        /watch/i.test(name) || /(?:^|\s)--watch(?:All)?(?=[\s=]|$)|(?:^|\s)watch(?=\s|$)/.test(body)
+        /watch/i.test(name)
+        || /(?:^|\s)--watch(?:All)?(?:=(?:true|1))?(?=\s|$)|(?:^|\s)watch(?=\s|$)/.test(body)
     )
 }
 
@@ -324,7 +339,8 @@ export async function runRepoHealthCheck(
                 cmd,
                 outcome: passed ? 'pass' : 'skip',
                 exitCode: passed ? 0 : null,
-                kind
+                kind,
+                ...(verdict.outcome === 'gap' ? {gap: verdict.gap} : {})
             })
             continue
         }
@@ -358,7 +374,11 @@ export async function runRepoHealthCheck(
 /** "`bun run lint` exited 1; `bun run test` exited 1" — every failing command. */
 export function describeHealthFailures(commands: readonly HealthCommandResult[]): string {
     return commands
-        .filter(c => c.outcome === 'fail')
-        .map(c => `\`${c.cmd}\` exited ${c.exitCode}`)
+        .filter(c => c.outcome === 'fail' || c.gap === 'empty-suite')
+        .map(c =>
+            c.outcome === 'fail' ?
+                `\`${c.cmd}\` exited ${c.exitCode}`
+            :   `\`${c.cmd}\` found no tests to run`
+        )
         .join('; ')
 }

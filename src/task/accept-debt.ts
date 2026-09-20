@@ -36,6 +36,7 @@ import * as path from 'node:path'
 import * as fsp from 'node:fs/promises'
 import {runVerifyCommandLine, spawnCommand, type CommandRunner} from './command-run.js'
 import {failClassOfReason, isHealthClass, isStaticClass} from './verify-work.js'
+import {discoverTestCommands} from './repo-health-check.js'
 import {taskThatIntroduced} from './task-provenance.js'
 import {makeLedger} from './ledger.js'
 import {parseVerifyBlockStrict} from './spec-validation.js'
@@ -498,6 +499,8 @@ export async function classifyVerifyCommand(
     taskId: string,
     reason: string
 ): Promise<string | null> {
+    const suite = suiteCommandFromReason(cwd, reason)
+    if (suite !== null) return suite
     if (taskId.trim().length === 0) return null
     try {
         const spec = await fsp.readFile(taskFilePath(cwd, taskId.trim()), 'utf8')
@@ -511,6 +514,26 @@ export async function classifyVerifyCommand(
     } catch {
         return null
     }
+}
+
+/**
+ * The command a `test suite:` reason names, when the repo's own check is what
+ * discovers it. The suite is not a task's VERIFY line — it belongs to the repo —
+ * so without this the class has NO closure path at all: a passing lint may not
+ * close it (that is why the class exists), the run-end static check does not run
+ * the suite, and a repair splices only for a task's own regression. An inherited
+ * red suite was then reported open for the rest of the run after it went green.
+ *
+ * Provenance is the manifest: the span must equal a command `discoverTestCommands`
+ * produced, exactly as the VERIFY-block match must equal a parsed line.
+ */
+function suiteCommandFromReason(cwd: string, reason: string): string | null {
+    if (failClassOfReason(reason) !== 'test-suite') return null
+    const hit = verifyCommandFromReason(
+        reason,
+        discoverTestCommands(cwd).cmds.map(([bin, args]) => `${bin} ${args.join(' ')}`)
+    )
+    return hit !== null && isStorableCommand(hit) ? hit : null
 }
 
 export function verifyCommandFromReason(
@@ -580,6 +603,21 @@ export async function recheckAcceptDebts(
     const resolved: AcceptDebt[] = []
     const trail: string[] = []
     let rerunsLeft = MAX_VERIFY_RERUNS
+    const ran = new Map<string, VerifyRerunResult>()
+    const settle = (d: AcceptDebt, cmd: string, r: VerifyRerunResult): void => {
+        if (r.outcome === 'pass') {
+            resolved.push(d)
+            trail.push(`${d.taskId}: RESOLVED — re-ran \`${cmd}\` and it exited 0`)
+            return
+        }
+        trail.push(
+            `${d.taskId}: still open — re-ran \`${cmd}\`: `
+                + (r.outcome === 'fail' ?
+                    `it FAILED${r.detail ? ` (${r.detail})` : ''}`
+                :   `INCONCLUSIVE${r.detail ? ` (${r.detail})` : ''}, nothing was observed`)
+        )
+        open.push(d)
+    }
     for (const d of debts) {
         if (d.origin === 'cross-task-deletion') {
             const p = extractDeletedDebtPath(d.reason)
@@ -605,6 +643,15 @@ export async function recheckAcceptDebts(
             open.push(d)
             continue
         }
+        // One command, one run. A run that inherits a red suite records the same
+        // `bun run test` against every task in it, and re-running it once per debt
+        // would spend the whole budget proving the same thing and leave the rest
+        // open. The budget counts commands, which is what it was for.
+        const already = ran.get(cmd)
+        if (already !== undefined) {
+            settle(d, cmd, already)
+            continue
+        }
         if (rerunsLeft <= 0) {
             trail.push(
                 `${d.taskId}: NOT re-checked — the per-run re-run budget `
@@ -621,18 +668,8 @@ export async function recheckAcceptDebts(
             // A harness fault observes nothing, so it proves nothing.
             r = {outcome: 'gap', detail: 're-run harness fault'}
         }
-        if (r.outcome === 'pass') {
-            resolved.push(d)
-            trail.push(`${d.taskId}: RESOLVED — re-ran \`${cmd}\` and it exited 0`)
-            continue
-        }
-        trail.push(
-            `${d.taskId}: still open — re-ran \`${cmd}\`: `
-                + (r.outcome === 'fail' ?
-                    `it FAILED${r.detail ? ` (${r.detail})` : ''}`
-                :   `INCONCLUSIVE${r.detail ? ` (${r.detail})` : ''}, nothing was observed`)
-        )
-        open.push(d)
+        ran.set(cmd, r)
+        settle(d, cmd, r)
     }
     return {open, resolved, trail}
 }

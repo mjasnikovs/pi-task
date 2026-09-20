@@ -11,12 +11,11 @@
  * The phrases are the ones a model reaches for when it wants to defer, not the
  * word "test" — "add a test later" is a plan, not a deferral.
  *
- * SCOPE IS GRAMMATICAL, never a character count. A negation or a conditional
- * cancels a phrase only inside the phrase's own clause: "rather than flag it as a
- * known issue" rejects the phrase, and "without touching the test file, accepting
- * that it fails" does not. "Known issue", "follow-up" and "a later step" also name
- * legitimate plans — an upstream bug, a scope cut — so they count only in a clause
- * about a check.
+ * SCOPE IS GRAMMATICAL, never a character count. A negation cancels a phrase only
+ * inside the phrase's own clause: "rather than flag it as a known issue" rejects
+ * the phrase, and "without touching the test file, accepting that it fails" does
+ * not. "Known issue", "follow-up" and "a later step" also name legitimate plans —
+ * an upstream bug, a scope cut — so they count only in a clause about a check.
  */
 
 /** A test, or a static check that the same clause calls broken. */
@@ -24,16 +23,26 @@ const TEST_NOUN = /\b(?:tests?|suites?|assertions?)\b/i
 const BUILD_NOUN = /\b(?:lint|linter|typecheck|build|ci)\b/i
 const FAILURE = /\b(?:fail\w*|red|broken|breaks?|breakage|errors?)\b/i
 
-/** Before a phrase in its clause: the phrase is rejected, or it is what an option
- *  WOULD do — "IF NOT EXISTS would still leave the test failing" weighs an option. */
+/** Before a phrase in its clause: the phrase is rejected. */
 const NOT_A_DECISION =
-    /\b(?:not|never|no|don't|do not|doesn't|does not|rather than|instead of|isn't|is not|without|avoid|avoiding|would|could|might)\b/i
+    /\b(?:not|never|no|don't|do not|doesn't|does not|rather than|instead of|isn't|is not|without|avoid|avoiding)\b/i
 
-/** Where one clause ends and the next begins. */
+/**
+ * A modal cancels a phrase only where the sentence poses an option for it to
+ * weigh: "IF NOT EXISTS would still leave the test failing" describes what a
+ * rejected option does. A bare hedge does not — "I would flag it as a known
+ * issue" is the decision, and treating every modal as hypothetical let the guard
+ * be rephrased away.
+ */
+const MODAL = /\b(?:would|could|might)\b/i
+const HYPOTHETICAL = /\b(?:if|unless|either|whether|option|alternative|otherwise)\b/i
+
+/** Where one clause ends and the next begins. A semicolon joins clauses of ONE
+ *  thought, so the breakage a clause defers may sit in the other half. */
 const CLAUSE_BOUNDARY =
-    /[,:()]|\s[—–-]\s|\b(?:and|but|so|then|while|whereas|although|though|because|since|however)\b/gi
+    /[,:;()]|\s[—–-]\s|\b(?:and|but|so|then|while|whereas|although|though|because|since|however)\b/gi
 
-const SENTENCE_BOUNDARY = /[.!?](?=\s|$)|;|\n/
+const SENTENCE_BOUNDARY = /[.!?](?=\s|$)|\n/
 
 interface DeferralPhrase {
     re: RegExp
@@ -57,9 +66,12 @@ const PHRASES: readonly DeferralPhrase[] = [
         needs: 'alone'
     },
     {re: /\baccept(?:s|ed|ing)?\b.*?\b(?:fail\w*|red|broken)\b/i, needs: 'check'},
+    // Handing the work to an unnamed someone is the deferral itself, whatever the
+    // clause is about; bare `whoever` below still needs a check to be one.
+    {re: /\bwhoever\s+(?:owns|revisits|maintains|touches)\b/i, needs: 'alone'},
+    {re: /\bownership\s+(?:belongs|lies|rests)\s+(?:to|with)\b/i, needs: 'alone'},
     {re: /\bwhoever\b/i, needs: 'check'},
     {re: /\bowned\s+(?:by|follow[- ]?up)\b/i, needs: 'check'},
-    {re: /\bownership\s+(?:belongs|lies|rests)\s+(?:to|with)\b/i, needs: 'check'},
     {re: /\bleft\s+for\b/i, needs: 'check'},
     {re: /\bknown[- ]issues?\b/i, needs: 'check'},
     {re: /\bfollow[- ]?ups?\b/i, needs: 'check'},
@@ -107,7 +119,9 @@ export function defersBreakage(answer: string): boolean {
             for (const {re, needs} of PHRASES) {
                 const hit = re.exec(clause)
                 if (!hit) continue
-                if (NOT_A_DECISION.test(clause.slice(0, hit.index))) continue
+                const before = clause.slice(0, hit.index)
+                if (NOT_A_DECISION.test(before)) continue
+                if (MODAL.test(before) && HYPOTHETICAL.test(sentence)) continue
                 if (needs === 'check' && !aboutACheck(clause)) continue
                 if (needs === 'breakage' && !sentenceBreaks) continue
                 return true

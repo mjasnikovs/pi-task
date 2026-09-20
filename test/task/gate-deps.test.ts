@@ -20,9 +20,34 @@ import {
     collectTreeChanges,
     collectIgnoredSnapshot,
     gatePassesWithoutIgnored,
+    isSuiteRecord,
     parseBuildOutdirs
 } from '../../src/task/gate-deps.js'
 import {diffIgnoredSnapshots} from '../../src/task/write-guard.js'
+
+// The gate's health check removes what its own run created, so the suite's
+// coverage and reports do not ride into the task's commit. A snapshot a new test
+// generated on that run is the one thing the commit is supposed to carry.
+describe('isSuiteRecord', () => {
+    test.each([
+        'test/__snapshots__/foo.test.ts.snap',
+        '__snapshots__/a.snap',
+        'src/ui/__image_snapshots__/button.png',
+        'test/api.approved.txt'
+    ])('kept: %s', rel => {
+        expect(isSuiteRecord(rel)).toBe(true)
+    })
+
+    test.each([
+        'coverage/lcov.info',
+        'test-results/results.json',
+        'playwright-report/index.html',
+        'tmp.db',
+        'src/snapshots.ts'
+    ])('removed: %s', rel => {
+        expect(isSuiteRecord(rel)).toBe(false)
+    })
+})
 
 describe('truncateToolResult', () => {
     test('flattens whitespace to one line', () => {
