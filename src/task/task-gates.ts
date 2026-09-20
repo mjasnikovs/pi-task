@@ -40,7 +40,12 @@ import {
     type ResolutionChoice
 } from './verify-resolution.js'
 import {resolveDisposition, type SpecContradiction} from './gate-resolution.js'
-import {classifyHealthDelta, type HealthBaseline, type HealthSignal} from './health-baseline.js'
+import {
+    classifyHealthDelta,
+    regressedCommands,
+    type HealthBaseline,
+    type HealthSignal
+} from './health-baseline.js'
 import type {LintFixResult} from './lint-fix.js'
 import {SessionUI, notifyBoth, notifyRun} from '../remote/bridge.js'
 import {isYoloMode, YOLO_STAMP} from './yolo.js'
@@ -51,6 +56,7 @@ import {
     type RepairCandidate
 } from './root-cause-repair.js'
 import {attributeEnforceFailure} from './enforce-attribution.js'
+import {describeHealthFailures} from './repo-health-check.js'
 import {healthRedSubject, parseHealthRepairTitle, type HealthRed} from './health-repair.js'
 // The debt ledger is reached through the injected `recordDebt` dep (so it stays
 // absent-in-tests); only the origin TYPE and the cross-task-deletion reason SHAPE
@@ -850,20 +856,24 @@ export async function runEnforcePass(
             const delta = classifyHealthDelta(healthBefore ?? null, after)
             if (delta === 'regressed') {
                 enforceEditsBlocked = true
+                // What REGRESSED, not the check's own verdict: a vanished suite fails
+                // nothing, so `after.reason` reads "tests passed" under this discard.
+                const regressed = regressedCommands(healthBefore ?? null, after)
+                const why = regressed.length > 0 ? describeHealthFailures(regressed) : after.reason
                 const outputTail = after.output ? ` — output:\n${clampOutput(after.output)}` : ''
                 if (deps.discardEdits) {
                     await deps.discardEdits(p.cwd)
                     await rec(
-                        `enforce: edits discarded pre-commit — REGRESSED repo health (${after.reason})${outputTail}`
+                        `enforce: edits discarded pre-commit — REGRESSED repo health (${why})${outputTail}`
                     )
                 } else {
                     await rec(
-                        `enforce: edits REGRESSED repo health pre-commit (${after.reason}) — no discard available, left uncommitted${outputTail}`
+                        `enforce: edits REGRESSED repo health pre-commit (${why}) — no discard available, left uncommitted${outputTail}`
                     )
                 }
                 notifyRun(
                     active,
-                    `${p.tag}: guideline edits on "${p.title}" regressed repo health (${after.reason.slice(0, 120)}) — discarded before commit.`,
+                    `${p.tag}: guideline edits on "${p.title}" regressed repo health (${why.slice(0, 120)}) — discarded before commit.`,
                     'warning'
                 )
             } else if (delta === 'pre-existing') {

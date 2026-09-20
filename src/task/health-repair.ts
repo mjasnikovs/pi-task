@@ -22,7 +22,7 @@
  * because its script is a placeholder `exit 1`, and no repair task can fix either.
  */
 import type {HealthSignal} from './health-baseline.js'
-import type {HealthCommandResult} from './repo-health-check.js'
+import {isHealthRed, type HealthCommandResult} from './repo-health-check.js'
 import {parseRepairTitleFile} from './root-cause-repair.js'
 import {failClassOfReason} from './verify-work.js'
 
@@ -64,9 +64,13 @@ function resolveTracked(token: string, cwd: string, tracked: readonly string[]):
 }
 
 /**
- * What a red health result is about: its first failing command that `mayRepair`
+ * What a red health result is about: its first red command that `mayRepair`
  * admits. Null when there is none — a legacy baseline, a signal with no
  * per-command detail, or only reds no repair can fix — so nothing to pin to.
+ *
+ * A vanished suite is red here though it failed nothing and left `ok` true. It
+ * is the regression the differential exists to catch, and without a subject
+ * ACCEPT queued no repair for it and the checkpoint spliced none.
  */
 export function healthRedSubject(
     health: HealthSignal & {output?: string},
@@ -74,7 +78,7 @@ export function healthRedSubject(
     tracked: readonly string[] | null,
     mayRepair: (c: HealthCommandResult) => boolean = () => true
 ): HealthRed | null {
-    const failing = (health.commands ?? []).find(c => c.outcome === 'fail' && mayRepair(c))
+    const failing = (health.commands ?? []).find(c => isHealthRed(c) && mayRepair(c))
     if (!failing) return null
     const files: string[] = []
     if (tracked) {

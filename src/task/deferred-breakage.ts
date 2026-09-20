@@ -28,11 +28,11 @@ const NOT_A_DECISION =
     /\b(?:not|never|no|don't|do not|doesn't|does not|rather than|instead of|isn't|is not|without|avoid|avoiding)\b/i
 
 /**
- * A modal cancels a phrase only where the sentence poses an option for it to
- * weigh: "IF NOT EXISTS would still leave the test failing" describes what a
- * rejected option does. A bare hedge does not — "I would flag it as a known
- * issue" is the decision, and treating every modal as hypothetical let the guard
- * be rephrased away.
+ * A modal cancels a phrase only where the condition's own half of the sentence
+ * poses an option for it to weigh: "IF NOT EXISTS would still leave the test
+ * failing" describes what a rejected option does. A bare hedge does not — "I
+ * would flag it as a known issue" is the decision, and treating every modal as
+ * hypothetical let the guard be rephrased away.
  */
 const MODAL = /\b(?:would|could|might)\b/i
 const HYPOTHETICAL = /\b(?:if|unless|either|whether|option|alternative|otherwise)\b/i
@@ -69,7 +69,13 @@ const PHRASES: readonly DeferralPhrase[] = [
     // Handing the work to an unnamed someone is the deferral itself, whatever the
     // clause is about; bare `whoever` below still needs a check to be one.
     {re: /\bwhoever\s+(?:owns|revisits|maintains|touches)\b/i, needs: 'alone'},
-    {re: /\bownership\s+(?:belongs|lies|rests)\s+(?:to|with)\b/i, needs: 'alone'},
+    // Ownership handed to a ROLE is handed to nobody. Handed to a named team it is
+    // handed to someone, so it counts only where the clause is about a check.
+    {
+        re: /\bownership\s+(?:belongs|lies|rests)\s+(?:to|with)\s+(?:whoever|someone|somebody|another\b|a\s+later\b|the\s+(?:\w+\s+)?(?:owners?|maintainers?)\b)/i,
+        needs: 'alone'
+    },
+    {re: /\bownership\s+(?:belongs|lies|rests)\s+(?:to|with)\b/i, needs: 'check'},
     {re: /\bwhoever\b/i, needs: 'check'},
     {re: /\bowned\s+(?:by|follow[- ]?up)\b/i, needs: 'check'},
     {re: /\bleft\s+for\b/i, needs: 'check'},
@@ -115,16 +121,22 @@ function clauses(sentence: string): string[] {
 export function defersBreakage(answer: string): boolean {
     for (const sentence of prose(answer).split(SENTENCE_BOUNDARY)) {
         const sentenceBreaks = aboutACheck(sentence) && FAILURE.test(sentence)
-        for (const clause of clauses(sentence)) {
-            for (const {re, needs} of PHRASES) {
-                const hit = re.exec(clause)
-                if (!hit) continue
-                const before = clause.slice(0, hit.index)
-                if (NOT_A_DECISION.test(before)) continue
-                if (MODAL.test(before) && HYPOTHETICAL.test(sentence)) continue
-                if (needs === 'check' && !aboutACheck(clause)) continue
-                if (needs === 'breakage' && !sentenceBreaks) continue
-                return true
+        // A condition governs its own half of a semicolon. It joins two independent
+        // clauses, so "the test fails only if X; I would flag it as known" states a
+        // condition and then decides — the decision is not one of X's options.
+        for (const half of sentence.split(';')) {
+            const weighsOptions = HYPOTHETICAL.test(half)
+            for (const clause of clauses(half)) {
+                for (const {re, needs} of PHRASES) {
+                    const hit = re.exec(clause)
+                    if (!hit) continue
+                    const before = clause.slice(0, hit.index)
+                    if (NOT_A_DECISION.test(before)) continue
+                    if (MODAL.test(before) && weighsOptions) continue
+                    if (needs === 'check' && !aboutACheck(clause)) continue
+                    if (needs === 'breakage' && !sentenceBreaks) continue
+                    return true
+                }
             }
         }
     }

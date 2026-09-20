@@ -207,6 +207,19 @@ export function resumableRows(
     return rows.filter(r => r.fingerprint === fp && r.promptHash === promptHash[r.arm])
 }
 
+/**
+ * The arms whose trials were not all recorded against one prompt.
+ *
+ * Resume ignores another prompt's rows and appends a whole fresh set, so a ledger
+ * can hold two generations at the same rep count. Rescore then reads 2*reps
+ * trials, never trips INCOMPLETE, and puts two experiments through one test.
+ */
+export function mixedPromptArms(rows: readonly Row[]): Arm[] {
+    return (['A', 'B'] as const).filter(
+        a => new Set(rows.filter(r => r.arm === a).map(r => r.promptHash)).size > 1
+    )
+}
+
 function report(rows: Row[], reps: number): number {
     const arms: Record<Arm, Row[]> = {A: [], B: []}
     for (const r of rows) arms[r.arm].push(r)
@@ -275,6 +288,11 @@ async function main(): Promise<void> {
         const models = new Set(recorded.map(r => r.fingerprint))
         if (models.size > 1) {
             console.log(`ABSTAIN — the ledger mixes ${models.size} models: ${[...models].join(', ')}`)
+            process.exit(2)
+        }
+        const mixed = mixedPromptArms(recorded)
+        if (mixed.length > 0) {
+            console.log(`ABSTAIN — arm ${mixed.join(' and ')} mixes trials from two prompts`)
             process.exit(2)
         }
         process.exit(report(recorded, reps))

@@ -46,7 +46,11 @@ describe('defersBreakage', () => {
         'Ownership belongs to the module owner.',
         // A semicolon joins clauses of one thought; the breakage it defers sits in
         // the other half.
-        'This is out of scope; the test can stay red.'
+        'This is out of scope; the test can stay red.',
+        // A condition does not reach across a semicolon. What follows one is the
+        // decision, not an option the condition weighs.
+        'The test fails only if the fixture is stale; I would flag it as a known issue and move on.',
+        'Either way the suite is red; I would leave the test failing for whoever owns it.'
     ])('catches: %s', text => {
         expect(defersBreakage(text)).toBe(true)
     })
@@ -68,7 +72,9 @@ describe('defersBreakage', () => {
         'update the failing test in test/x.test.ts, since the router is out of scope',
         'Use option B, leave the existing seed data untouched, and update test/migrate.test.ts so the suite stays green',
         // Weighing an option is not choosing it.
-        "IF NOT EXISTS is not in §4, and it would still leave the test's assertions failing"
+        "IF NOT EXISTS is not in §4, and it would still leave the test's assertions failing",
+        // Ownership of a named team is not ownership by nobody.
+        'Ownership belongs to the platform team, who already have the fix queued.'
     ])('passes: %s', text => {
         expect(defersBreakage(text)).toBe(false)
     })

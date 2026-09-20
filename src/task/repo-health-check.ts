@@ -371,10 +371,15 @@ export async function runRepoHealthCheck(
     }
 }
 
+/** A command the repo owes an answer for: it failed, or its suite went missing. */
+export function isHealthRed(c: HealthCommandResult): boolean {
+    return c.outcome === 'fail' || c.gap === 'empty-suite'
+}
+
 /** "`bun run lint` exited 1; `bun run test` exited 1" — every failing command. */
 export function describeHealthFailures(commands: readonly HealthCommandResult[]): string {
     return commands
-        .filter(c => c.outcome === 'fail' || c.gap === 'empty-suite')
+        .filter(isHealthRed)
         .map(c =>
             c.outcome === 'fail' ?
                 `\`${c.cmd}\` exited ${c.exitCode}`

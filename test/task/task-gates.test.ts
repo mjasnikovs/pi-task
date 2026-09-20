@@ -1172,6 +1172,68 @@ test('enforce edits that REGRESS repo health (clean before → fail after) are d
     })
 })
 
+test('a discard for a VANISHED suite is explained by the suite, not by the passing checks', async () => {
+    // Nothing failed, so the check's own reason reads "static checks and tests
+    // passed" — printed verbatim, the trail said the edits were discarded for a
+    // repo health that passed.
+    await withTmpTaskDir(async dir => {
+        const {ctx} = makeFakeCtx(dir)
+        const trail: string[] = []
+        let healthCall = 0
+        const lint = {
+            cmd: 'bun run lint',
+            outcome: 'pass' as const,
+            exitCode: 0,
+            kind: 'static' as const
+        }
+        const deps = makeDeps({
+            record: (_c, _i, line) => {
+                trail.push(line)
+                return Promise.resolve()
+            },
+            commit: () => Promise.resolve({committed: true}),
+            verify: () => Promise.resolve({ok: true}),
+            enforce: () => Promise.resolve({ok: true}),
+            dirty: () => Promise.resolve(true),
+            repoHealth: () => {
+                healthCall += 1
+                return Promise.resolve({
+                    ok: true,
+                    reason: 'package.json: static checks and tests passed',
+                    ecosystem: 'package.json',
+                    output: '',
+                    commands:
+                        healthCall === 1 ?
+                            [
+                                lint,
+                                {
+                                    cmd: 'bun run test',
+                                    outcome: 'pass' as const,
+                                    exitCode: 0,
+                                    kind: 'test' as const
+                                }
+                            ]
+                        :   [
+                                lint,
+                                {
+                                    cmd: 'bun run test',
+                                    outcome: 'skip' as const,
+                                    exitCode: 1,
+                                    kind: 'test' as const,
+                                    gap: 'empty-suite' as const
+                                }
+                            ]
+                })
+            },
+            discardEdits: () => Promise.resolve()
+        })
+        await runGatesForTask(ctx, deps, baseParams({cwd: dir}))
+        const discardLine = trail.find(l => l.startsWith('enforce: edits discarded pre-commit'))
+        expect(discardLine).toContain('`bun run test` found no tests to run')
+        expect(discardLine).not.toContain('passed')
+    })
+})
+
 test('enforce edits are KEPT when repo was ALREADY failing before the pass (run-8 F8)', async () => {
     // The linter can be crashing before enforce touches anything. An absolute
     // guard discards enforce's edits for a fault they did not cause; the

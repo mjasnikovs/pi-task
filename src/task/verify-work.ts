@@ -124,8 +124,10 @@ export interface VerifyFail {
     crossTaskDeletions?: CrossTaskDeletion[]
     inheritedHealth?: string
     /** The health result behind a `repo-health` FAIL: which command, and what its
-     *  output named. What an ACCEPT of this FAIL hands to the repair channel. */
-    health?: HealthSignal & {output?: string}
+     *  output named. What an ACCEPT of this FAIL hands to the repair channel.
+     *  `reason` describes what REGRESSED, which is not what the check itself said:
+     *  a vanished suite fails nothing, so the check's verdict reads "tests passed". */
+    health?: HealthSignal & {output?: string; reason?: string}
     /** What the deterministic probes found for THIS verdict, carried out so an
      *  AUTOFIX re-run is told what the gate already knows (see fix-context.ts)
      *  instead of re-deriving it from the one-line reason. */
@@ -1290,13 +1292,17 @@ export async function runWorkVerification(deps: VerificationDeps): Promise<Verif
                     }
                 }
                 const failClass = healthFailClass(regressed)
+                // Re-minted, never `h.reason`: a vanished suite fails nothing, so the
+                // check's own reason reads "tests passed" under a REGRESSED verdict.
+                const why = describeHealthFailures(regressed)
                 return {
                     ok: false,
                     failClass,
-                    reason: `${VERIFY_FAIL_PREFIX[failClass]} ${describeHealthFailures(regressed)}`,
+                    reason: `${VERIFY_FAIL_PREFIX[failClass]} ${why}`,
                     health: {
                         ...h,
                         ok: false,
+                        reason: why,
                         commands: regressed,
                         output: regressed[0].output ?? h.output
                     }

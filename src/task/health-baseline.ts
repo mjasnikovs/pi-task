@@ -92,24 +92,25 @@ export function classifyHealthDelta(
 const failureKey = (c: HealthCommandResult): string => JSON.stringify([c.cmd, c.exitCode])
 
 /**
- * Test commands the baseline saw PASS that now find no tests to run.
+ * Test commands the baseline RAN that now find no tests to run.
  *
  * A runner that found nothing observed nothing, which is a gap — in isolation. A
  * task that deleted the test directory, renamed it, or broke the config's glob
  * leaves the same gap, and the check reports the repo healthy because a gap never
  * fails. Against a baseline that ran the suite, the suite is gone: this task's
  * regression, and the largest one it can hide behind a green.
+ *
+ * Ran, not passed. A baseline that ran the suite RED ran it, and deleting a red
+ * suite is the same move with a larger payoff: the whole check turns green.
  */
 export function vanishedSuites(
     baseline: HealthSignal | null,
     after: HealthSignal
 ): HealthCommandResult[] {
     if (!baseline) return []
-    const passed = new Set(
-        (baseline.commands ?? []).filter(c => c.outcome === 'pass').map(c => c.cmd)
-    )
+    const ran = new Set((baseline.commands ?? []).filter(c => c.outcome !== 'skip').map(c => c.cmd))
     return (after.commands ?? []).filter(
-        c => c.outcome === 'skip' && c.gap === 'empty-suite' && passed.has(c.cmd)
+        c => c.outcome === 'skip' && c.gap === 'empty-suite' && ran.has(c.cmd)
     )
 }
 

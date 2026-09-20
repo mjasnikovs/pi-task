@@ -2,7 +2,7 @@ import {afterEach, beforeEach, describe, expect, test} from 'bun:test'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import {loadLedger, resumableRows, section} from './ab-green-suite.js'
+import {loadLedger, mixedPromptArms, resumableRows, section} from './ab-green-suite.js'
 
 let dir = ''
 
@@ -72,5 +72,18 @@ describe('resumableRows', () => {
         ]
         expect(resumableRows(rows, 'm', {A: 'a1', B: 'b1'}).map(r => `${r.arm}:${r.promptHash}`))
             .toEqual(['A:a1', 'B:b1'])
+    })
+})
+
+describe('mixedPromptArms', () => {
+    // Resume appends a whole fresh set after a prompt edit, so the ledger holds
+    // both generations at the same reps. Rescore then reads 2*reps trials, never
+    // trips the INCOMPLETE check, and computes one statistic over two experiments.
+    test('an arm carrying two prompts is named', () => {
+        expect(mixedPromptArms([row('A', 'a1'), row('A', 'old'), row('B', 'b1')])).toEqual(['A'])
+    })
+
+    test('the two arms differing from each other is the design, not a mix', () => {
+        expect(mixedPromptArms([row('A', 'a1'), row('B', 'b1')])).toEqual([])
     })
 })

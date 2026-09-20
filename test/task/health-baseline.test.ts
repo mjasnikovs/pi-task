@@ -176,6 +176,19 @@ describe('classifyHealthDelta — the test suite', () => {
         expect(regressedCommands(before, after).map(c => c.cmd)).toEqual(['bun run test'])
     })
 
+    // The guard is about the suite disappearing, not about it having been green.
+    // Deleting a RED suite is the same move, and it turns the whole check green.
+    test('a suite the baseline ran RED and this tree no longer finds is REGRESSED', () => {
+        const wasRed: HealthCommandResult[] = [
+            {cmd: 'bun run lint', outcome: 'pass', exitCode: 0, kind: 'static'},
+            {cmd: 'bun run test', outcome: 'fail', exitCode: 1, kind: 'test'}
+        ]
+        const before = {ok: false, commands: wasRed}
+        const after = {ok: true, commands: gone}
+        expect(classifyHealthDelta(before, after)).toBe('regressed')
+        expect(regressedCommands(before, after).map(c => c.cmd)).toEqual(['bun run test'])
+    })
+
     test('a repo that never had tests to find is still clean', () => {
         expect(classifyHealthDelta({ok: true, commands: gone}, {ok: true, commands: gone})).toBe(
             'clean'

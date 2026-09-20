@@ -76,6 +76,33 @@ describe('healthRedSubject', () => {
         expect(healthRedSubject({ok: false}, CWD, TRACKED)).toBeNull()
     })
 
+    // The largest regression the differential catches is the one that fails
+    // nothing: the suite is gone, so `ok` is true and no command is `fail`. With
+    // no subject, ACCEPT queued no repair for it and the checkpoint spliced none.
+    test('a vanished suite is a subject, though nothing failed', () => {
+        const health: HealthOutcome = {
+            ok: true,
+            reason: 'node: static checks and tests passed',
+            ecosystem: 'node',
+            commands: [
+                {cmd: 'bun run lint', outcome: 'pass', exitCode: 0, kind: 'static'},
+                {
+                    cmd: 'bun run test',
+                    outcome: 'skip',
+                    exitCode: 1,
+                    kind: 'test',
+                    gap: 'empty-suite'
+                }
+            ],
+            output: ''
+        }
+        expect(healthRedSubject(health, CWD, TRACKED)).toEqual({
+            command: 'bun run test',
+            exitCode: 1,
+            files: []
+        })
+    })
+
     // Every command runs now, so two can be red at once. The subject's files come
     // from ITS output: a lint subject read from the suite's stack trace would pin
     // the repair to a test file the lint never named.

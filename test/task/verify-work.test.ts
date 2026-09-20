@@ -1115,6 +1115,9 @@ describe('runWorkVerification', () => {
             expect(out.ok).toBe(false)
             expect(out.failClass).toBe('test-suite')
             expect(out.reason).toBe('test suite: `bun run test` found no tests to run')
+            // The health signal is carried into the trail and the enforce gate. Left
+            // as the check minted it, a REGRESSED verdict was reported as "passed".
+            expect(out.health?.reason).toBe('`bun run test` found no tests to run')
             expect(childRan).toBe(false)
         })
 
