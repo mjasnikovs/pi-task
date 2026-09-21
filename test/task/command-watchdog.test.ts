@@ -3,6 +3,7 @@ import type {ExtensionAPI} from '@earendil-works/pi-coding-agent'
 import {
     CommandWatchdog,
     consumeWatchdogAbort,
+    noteWatchdogAbort,
     registerCommandWatchdog,
     reminderMessage,
     type WatchdogDeps
@@ -417,6 +418,26 @@ describe('registerCommandWatchdog', () => {
         await settle()
         expect(sent).toEqual([])
         expect(consumeWatchdogAbort()).toBe(false)
+    })
+
+    test('a stale fire leaves a pending abort flag raised elsewhere alone', async () => {
+        const {pi, handlers, sent} = fakePi()
+        const staleCtx = {
+            abort: (): void => {
+                throw new Error('This extension ctx is stale after session replacement or reload.')
+            }
+        }
+        registerCommandWatchdog(pi)
+        handlers.get('tool_execution_start')!(
+            {toolCallId: 'c1', toolName: 'bash'} as never,
+            staleCtx as never
+        )
+        // A LIVE abort raised the shared flag first, and the steer loop has not
+        // read it yet. The stale fire must not consume it on its way out.
+        noteWatchdogAbort()
+        await settle()
+        expect(sent).toEqual([])
+        expect(consumeWatchdogAbort()).toBe(true)
     })
 
     for (const event of ['turn_end', 'session_shutdown'] as const) {

@@ -2,6 +2,7 @@ import type {ExtensionAPI, ExtensionContext} from '@earendil-works/pi-coding-age
 import {getConfig} from '../config/config.js'
 import {SELF_BOUNDED_TOOLS} from '../config/tool-list.js'
 import {CommandWatchdog, realTimerDeps, reminderMessage} from '../shared/command-watchdog.js'
+import {isStaleCtxError} from './stale-ctx.js'
 
 /**
  * MAIN-SESSION adapter for the command watchdog.
@@ -64,20 +65,23 @@ export {
  * it falls back to prompting; it can never permanently suppress a human's steer
  * prompt.
  */
-/**
- * True when the error is Pi's stale-context guard: the timer fired after the
- * session was replaced or reloaded (newSession/fork/switchSession/reload), so
- * the captured ctx must no longer be used. Anything else keeps throwing.
- */
-function isStaleCtxError(err: unknown): boolean {
-    return err instanceof Error && err.message.includes('stale after session')
-}
-
 let watchdogAbortPending = false
 
-/** @internal Set by onFire when it aborts a turn. Exported for the adapter and tests. */
-export function noteWatchdogAbort(): void {
+/**
+ * @internal Set by onFire when it aborts a turn. Exported for the adapter and tests.
+ * Returns the previous value, which an abort that then fails must put back — the
+ * flag is shared by both watchdogs, so clearing it unconditionally would swallow a
+ * genuine abort's pending flag and leave the steer loop prompting an empty room.
+ */
+export function noteWatchdogAbort(): boolean {
+    const was = watchdogAbortPending
     watchdogAbortPending = true
+    return was
+}
+
+/** @internal Put the flag back after a noted abort did not happen. */
+export function restoreWatchdogAbort(was: boolean): void {
+    watchdogAbortPending = was
 }
 
 /** True exactly once per watchdog abort; clears the flag. */
@@ -112,16 +116,16 @@ export function registerCommandWatchdog(pi: ExtensionAPI): void {
             // to bound its next attempt. The flag must precede the abort so the
             // steer loop can never observe the 'aborted' turn before the flag.
             if (ctx) {
-                noteWatchdogAbort()
+                const wasPending = noteWatchdogAbort()
                 try {
                     ctx.abort()
                 } catch (err) {
+                    restoreWatchdogAbort(wasPending) // no turn was aborted
                     // Timer fired after session replacement/reload: the captured ctx
                     // is stale by design (Pi invalidates it in AgentSession.dispose).
                     // Swallow only that guard; anything else keeps throwing, and no
                     // follow-up is posted into the replacement session.
                     if (!isStaleCtxError(err)) throw err
-                    consumeWatchdogAbort() // undo the flag: no turn was aborted
                     return
                 }
             }

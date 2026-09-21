@@ -193,7 +193,8 @@ describe('registerStreamWatchdog', () => {
                 }
             }
             const pi = {
-                on: (name: string, fn: (e: unknown, ctx: unknown) => void) => handlers.set(name, fn),
+                on: (name: string, fn: (e: unknown, ctx: unknown) => void) =>
+                    handlers.set(name, fn),
                 sendUserMessage: (text: string) => messages.push(text)
             } as unknown as ExtensionAPI
             registerStreamWatchdog(pi)
