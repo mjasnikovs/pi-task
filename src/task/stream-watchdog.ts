@@ -8,6 +8,15 @@ import {
 import {noteWatchdogAbort, WATCHDOG_CANCEL_MARKER} from './command-watchdog.js'
 
 /**
+ * True when the error is Pi's stale-context guard: the timer fired after the
+ * session was replaced or reloaded (newSession/fork/switchSession/reload), so
+ * the captured ctx must no longer be used. Anything else keeps throwing.
+ */
+function isStaleCtxError(err: unknown): boolean {
+    return err instanceof Error && err.message.includes('stale after session')
+}
+
+/**
  * MAIN-SESSION adapter for the model-stream watchdog.
  *
  * WHY: a turn can die mid-stream — the last thing recorded is an ordinary
@@ -55,11 +64,24 @@ export function registerStreamWatchdog(pi: ExtensionAPI): void {
             // a steering prompt to an empty room, wedging an unattended run.
             if (ctx) {
                 noteWatchdogAbort()
-                ctx.abort()
+                try {
+                    ctx.abort()
+                } catch (err) {
+                    // Timer fired after session replacement/reload: the captured ctx
+                    // is stale by design (Pi invalidates it in AgentSession.dispose).
+                    // Swallow only that guard; anything else keeps throwing, and no
+                    // follow-up is posted into the replacement session.
+                    if (!isStaleCtxError(err)) throw err
+                    return
+                }
             }
-            pi.sendUserMessage(streamStallReminder(idleMs, WATCHDOG_CANCEL_MARKER), {
-                deliverAs: 'followUp'
-            })
+            try {
+                pi.sendUserMessage(streamStallReminder(idleMs, WATCHDOG_CANCEL_MARKER), {
+                    deliverAs: 'followUp'
+                })
+            } catch (err) {
+                if (!isStaleCtxError(err)) throw err
+            }
         }
     })
 

@@ -64,6 +64,15 @@ export {
  * it falls back to prompting; it can never permanently suppress a human's steer
  * prompt.
  */
+/**
+ * True when the error is Pi's stale-context guard: the timer fired after the
+ * session was replaced or reloaded (newSession/fork/switchSession/reload), so
+ * the captured ctx must no longer be used. Anything else keeps throwing.
+ */
+function isStaleCtxError(err: unknown): boolean {
+    return err instanceof Error && err.message.includes('stale after session')
+}
+
 let watchdogAbortPending = false
 
 /** @internal Set by onFire when it aborts a turn. Exported for the adapter and tests. */
@@ -104,9 +113,22 @@ export function registerCommandWatchdog(pi: ExtensionAPI): void {
             // steer loop can never observe the 'aborted' turn before the flag.
             if (ctx) {
                 noteWatchdogAbort()
-                ctx.abort()
+                try {
+                    ctx.abort()
+                } catch (err) {
+                    // Timer fired after session replacement/reload: the captured ctx
+                    // is stale by design (Pi invalidates it in AgentSession.dispose).
+                    // Swallow only that guard; anything else keeps throwing, and no
+                    // follow-up is posted into the replacement session.
+                    if (!isStaleCtxError(err)) throw err
+                    return
+                }
             }
-            pi.sendUserMessage(reminderMessage(toolName, timeoutMs), {deliverAs: 'followUp'})
+            try {
+                pi.sendUserMessage(reminderMessage(toolName, timeoutMs), {deliverAs: 'followUp'})
+            } catch (err) {
+                if (!isStaleCtxError(err)) throw err
+            }
         }
     })
 

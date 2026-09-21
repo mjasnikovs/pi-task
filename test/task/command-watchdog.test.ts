@@ -397,6 +397,27 @@ describe('registerCommandWatchdog', () => {
         expect(sent).toEqual([])
     })
 
+    test('a stale ctx after session replacement does not throw and posts nothing', async () => {
+        const {pi, handlers, sent} = fakePi()
+        const stale = new Error(
+            'This extension ctx is stale after session replacement or reload. Do not use it.'
+        )
+        const staleCtx = {
+            abort: (): void => {
+                throw stale
+            }
+        }
+        registerCommandWatchdog(pi)
+        handlers.get('tool_execution_start')!(
+            {toolCallId: 'c1', toolName: 'bash'} as never,
+            staleCtx as never
+        )
+        // The fire happens on a real timer: without the guard this throws
+        // inside the callback and fails the run as an unhandled error.
+        await settle()
+        expect(sent).toEqual([])
+    })
+
     for (const event of ['turn_end', 'session_shutdown'] as const) {
         test(`${event} disarms a start that never got its end`, async () => {
             const {pi, handlers, sent} = fakePi()

@@ -180,6 +180,31 @@ describe('registerStreamWatchdog', () => {
         })
     })
 
+    test('a stale ctx after session replacement does not throw and posts nothing', async () => {
+        await withWindow(50, async () => {
+            const handlers = new Map<string, (e: unknown, ctx: unknown) => void>()
+            const messages: string[] = []
+            const stale = new Error(
+                'This extension ctx is stale after session replacement or reload. Do not use it.'
+            )
+            const staleCtx = {
+                abort: (): void => {
+                    throw stale
+                }
+            }
+            const pi = {
+                on: (name: string, fn: (e: unknown, ctx: unknown) => void) => handlers.set(name, fn),
+                sendUserMessage: (text: string) => messages.push(text)
+            } as unknown as ExtensionAPI
+            registerStreamWatchdog(pi)
+            handlers.get('turn_start')?.({}, staleCtx)
+            // The fire happens on a real interval: without the guard this throws
+            // inside the timer and fails the run as an unhandled error.
+            await sleep(300)
+            expect(messages).toEqual([])
+        })
+    })
+
     test('subscribes to every stream-bearing event, so no live turn looks idle', () => {
         const f = fakePi()
         registerStreamWatchdog(f.pi)
