@@ -86,8 +86,8 @@ describe('healthRedSubject', () => {
             ecosystem: 'node',
             commands: [
                 {cmd: 'bun run lint', outcome: 'pass', exitCode: 0, kind: 'static'},
-                // `runRepoHealthCheck` writes null for every non-fail outcome, so a
-                // real vanished suite never carries an exit code.
+                // `runRepoHealthCheck` writes null for a skip, so a real vanished
+                // suite never carries an exit code.
                 {
                     cmd: 'bun run test',
                     outcome: 'skip',

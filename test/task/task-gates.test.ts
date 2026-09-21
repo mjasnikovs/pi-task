@@ -1218,7 +1218,7 @@ test('a discard for a VANISHED suite is explained by the suite, not by the passi
                                 {
                                     cmd: 'bun run test',
                                     outcome: 'skip' as const,
-                                    exitCode: 1,
+                                    exitCode: null,
                                     kind: 'test' as const,
                                     gap: 'empty-suite' as const
                                 }

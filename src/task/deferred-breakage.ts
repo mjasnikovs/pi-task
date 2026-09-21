@@ -23,24 +23,40 @@ const TEST_NOUN = /\b(?:tests?|suites?|assertions?)\b/i
 const BUILD_NOUN = /\b(?:lint|linter|typecheck|build|ci)\b/i
 const FAILURE = /\b(?:fail\w*|red|broken|breaks?|breakage|errors?)\b/i
 
-/** Before a phrase in its clause: the phrase is rejected. */
+/** Before a phrase in its clause: the phrase is rejected. Models emit U+2019 as
+ *  readily as ASCII, so a contraction must not turn the verdict on the character. */
 const NOT_A_DECISION =
-    /\b(?:not|never|no|don't|do not|doesn't|does not|rather than|instead of|isn't|is not|without|avoid|avoiding)\b/i
+    /\b(?:not|never|no|do(?:es)?n['’]t|do(?:es)? not|won['’]t|will not|wouldn['’]t|would not|rather than|instead of|isn['’]t|is not|without|avoid|avoiding)\b/i
 
 /**
- * A modal cancels a phrase only where the sentence poses an option for it to
- * weigh: "IF NOT EXISTS would still leave the test failing" describes what a
- * rejected option does. A bare hedge does not — "I would flag it as a known
- * issue" is the decision, and treating every modal as hypothetical let the guard
- * be rephrased away.
+ * A modal cancels a phrase only where the sentence is weighing something: "IF NOT
+ * EXISTS would still leave the test failing" describes what a rejected option
+ * does. A bare hedge does not — "I would flag it as a known issue" is the
+ * decision, and treating every modal as hypothetical let the guard be rephrased
+ * away.
  */
 const MODAL = /\b(?:would|could|might)\b/i
-/** A condition governs its own half of a semicolon and reaches no further. */
+/** A condition governs the clauses it opens and stops at the conclusion drawn. */
 const CONDITION = /\b(?:if|unless)\b/i
-/** Options are posed once and weighed in any later clause of the sentence. */
-const OPTION = /\b(?:either|whether|option|alternative|otherwise)\b/i
-/** Whatever the sentence weighs, "I would …" is the answer's own decision. */
+/** Options are posed once and weighed anywhere in the sentence. */
+const OPTION = /\b(?:either|whether|options?|alternatives?|otherwise)\b/i
+/** Under a condition the subject says whose modal it is: "the latter would leave
+ *  it red" is the option behaving, "I would leave it red" is the answer deciding. */
 const FIRST_PERSON = /\b(?:i|we)\s+(?:would|could|might)\b/i
+/**
+ * The repair the sentence goes on to choose. An option's consequence is a
+ * hypothesis only where the sentence chooses against it; a deferral that nothing
+ * overrules is the decision, however the sentence hedges it. Checking for the
+ * choice rather than for a pronoun is what stops "it could be left failing for
+ * whoever owns it" from riding out on one option word.
+ */
+const CHOOSES_REPAIR =
+    /\b(?:i|we)(?:\s+will|\s+shall|['’]ll)\s+(?:update|fix|change|add|adjust|amend|correct)\b|\bso\s+(?:update|fix|change|adjust|amend|correct)\b/i
+/** Where a hypothesis's reach ends: a semicolon starts an independent clause, and
+ *  "so" introduces the conclusion drawn, not another branch of the hypothesis.
+ *  Neither is a comma, which is why scoping a condition by punctuation alone let
+ *  "fails only if X, so it could be flagged as known" through. */
+const HYPOTHESIS_END = /;|\bso\b|\btherefore\b|\bhence\b|\bthus\b/i
 
 /** Where one clause ends and the next begins. A semicolon joins clauses of ONE
  *  thought, so the breakage a clause defers may sit in the other half. */
@@ -74,11 +90,15 @@ const PHRASES: readonly DeferralPhrase[] = [
     // Handing the work to an unnamed someone is the deferral itself, whatever the
     // clause is about; bare `whoever` below still needs a check to be one.
     {re: /\bwhoever\s+(?:owns|revisits|maintains|touches)\b/i, needs: 'alone'},
-    // Ownership handed to a ROLE is handed to nobody: no release manager exists in
-    // a /task-auto run. A named team is someone, so the lookahead hands those to
-    // the `check` rule below rather than listing every job title here.
+    // Ownership handed to a ROLE is handed to nobody: no release manager, QA or
+    // on-call engineer sits in a /task-auto run. Anyone else the answer names — a
+    // person, a team, the runner, this task — is ownership TAKEN, so the phrase
+    // alone is not the deferral. The list names the nobodies rather than exempting
+    // the somebodies, because the two misses cost differently: a role it does not
+    // know still reaches the `check` rule below, while a somebody it mistakes for
+    // nobody destroys the answer this guard exists to protect.
     {
-        re: /\bownership\s+(?:belongs|lies|rests)\s+(?:to|with)\b(?!.*\b(?:teams?|groups?|squads?|guilds?|crews?)\b)/i,
+        re: /\bownership\s+(?:belongs|lies|rests)\s+(?:to|with)\s+(?:whoever|someone|somebody|anyone|another\b|a\s+(?:later|future|separate)\b|(?:the\s+)?(?:release\s+manager|on[- ]call|qa|sre)\b|the\s+(?:\w+\s+)?(?:owners?|maintainers?)\b)/i,
         needs: 'alone'
     },
     {re: /\bownership\s+(?:belongs|lies|rests)\s+(?:to|with)\b/i, needs: 'check'},
@@ -106,11 +126,13 @@ function aboutACheck(text: string): boolean {
 /**
  * Parenthetical asides go, and a code span keeps its words but loses the
  * punctuation that would split a clause in two: `toEqual([{filename: X}])` is
- * one token of the sentence around it, not three clauses.
+ * one token of the sentence around it, not three clauses. Brackets close up
+ * instead of spacing, because a bracket binds to what it encloses — spacing
+ * `arr[i]` leaves a bare `i` for the first-person rule to read as a pronoun.
  */
 function prose(answer: string): string {
     let text = answer.replace(/`([^`]*)`/g, (_m, code: string) =>
-        code.replace(/[,;:()[\]{}]/g, ' ')
+        code.replace(/[[\]{}]/g, '').replace(/[,;:()]/g, ' ')
     )
     let before: string
     do {
@@ -127,19 +149,23 @@ function clauses(sentence: string): string[] {
 export function defersBreakage(answer: string): boolean {
     for (const sentence of prose(answer).split(SENTENCE_BOUNDARY)) {
         const sentenceBreaks = aboutACheck(sentence) && FAILURE.test(sentence)
-        const posesOptions = OPTION.test(sentence)
-        // A semicolon joins two independent clauses, so "the test fails only if X;
-        // it could be flagged as known" states a condition and then decides. The
-        // options the sentence posed reach across it; the condition does not.
-        for (const half of sentence.split(';')) {
-            const weighsOptions = posesOptions || CONDITION.test(half)
-            for (const clause of clauses(half)) {
+        const weighsRejectedOption = OPTION.test(sentence) && CHOOSES_REPAIR.test(sentence)
+        const cancelsModal = (before: string, underCondition: boolean): boolean =>
+            (underCondition && !FIRST_PERSON.test(before)) || weighsRejectedOption
+        // A condition governs the clauses it opens and stops at the conclusion the
+        // sentence draws, so "fails only if the fixture is stale, so it could be
+        // flagged as known" states a condition and then decides. An option is posed
+        // once and weighed anywhere, but only where the sentence goes on to pick a
+        // repair is the modal describing the branch it rejected.
+        for (const segment of sentence.split(HYPOTHESIS_END)) {
+            const underCondition = CONDITION.test(segment)
+            for (const clause of clauses(segment)) {
                 for (const {re, needs} of PHRASES) {
                     const hit = re.exec(clause)
                     if (!hit) continue
                     const before = clause.slice(0, hit.index)
                     if (NOT_A_DECISION.test(before)) continue
-                    if (MODAL.test(before) && weighsOptions && !FIRST_PERSON.test(before)) continue
+                    if (MODAL.test(before) && cancelsModal(before, underCondition)) continue
                     if (needs === 'check' && !aboutACheck(clause)) continue
                     if (needs === 'breakage' && !sentenceBreaks) continue
                     return true
