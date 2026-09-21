@@ -3,6 +3,7 @@ import type {ExtensionAPI} from '@earendil-works/pi-coding-agent'
 import {
     CommandWatchdog,
     consumeWatchdogAbort,
+    noteWatchdogAbort,
     registerCommandWatchdog,
     reminderMessage,
     type WatchdogDeps
@@ -395,6 +396,48 @@ describe('registerCommandWatchdog', () => {
 
         expect(owner.aborts).toBe(0)
         expect(sent).toEqual([])
+    })
+
+    test('a stale ctx after session replacement does not throw and posts nothing', async () => {
+        const {pi, handlers, sent} = fakePi()
+        const stale = new Error(
+            'This extension ctx is stale after session replacement or reload. Do not use it.'
+        )
+        const staleCtx = {
+            abort: (): void => {
+                throw stale
+            }
+        }
+        registerCommandWatchdog(pi)
+        handlers.get('tool_execution_start')!(
+            {toolCallId: 'c1', toolName: 'bash'} as never,
+            staleCtx as never
+        )
+        // The fire happens on a real timer: without the guard this throws
+        // inside the callback and fails the run as an unhandled error.
+        await settle()
+        expect(sent).toEqual([])
+        expect(consumeWatchdogAbort()).toBe(false)
+    })
+
+    test('a stale fire leaves a pending abort flag raised elsewhere alone', async () => {
+        const {pi, handlers, sent} = fakePi()
+        const staleCtx = {
+            abort: (): void => {
+                throw new Error('This extension ctx is stale after session replacement or reload.')
+            }
+        }
+        registerCommandWatchdog(pi)
+        handlers.get('tool_execution_start')!(
+            {toolCallId: 'c1', toolName: 'bash'} as never,
+            staleCtx as never
+        )
+        // A LIVE abort raised the shared flag first, and the steer loop has not
+        // read it yet. The stale fire must not consume it on its way out.
+        noteWatchdogAbort()
+        await settle()
+        expect(sent).toEqual([])
+        expect(consumeWatchdogAbort()).toBe(true)
     })
 
     for (const event of ['turn_end', 'session_shutdown'] as const) {

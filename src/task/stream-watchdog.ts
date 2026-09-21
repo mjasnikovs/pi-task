@@ -5,7 +5,12 @@ import {
     StreamWatchdog,
     streamStallReminder
 } from '../shared/stream-watchdog.js'
-import {noteWatchdogAbort, WATCHDOG_CANCEL_MARKER} from './command-watchdog.js'
+import {
+    noteWatchdogAbort,
+    restoreWatchdogAbort,
+    WATCHDOG_CANCEL_MARKER
+} from './command-watchdog.js'
+import {isStaleCtxError} from './stale-ctx.js'
 
 /**
  * MAIN-SESSION adapter for the model-stream watchdog.
@@ -54,12 +59,26 @@ export function registerStreamWatchdog(pi: ExtensionAPI): void {
             // steer loop can otherwise observe the 'aborted' turn first and show
             // a steering prompt to an empty room, wedging an unattended run.
             if (ctx) {
-                noteWatchdogAbort()
-                ctx.abort()
+                const wasPending = noteWatchdogAbort()
+                try {
+                    ctx.abort()
+                } catch (err) {
+                    restoreWatchdogAbort(wasPending) // no turn was aborted
+                    // Timer fired after session replacement/reload: the captured ctx
+                    // is stale by design (Pi invalidates it in AgentSession.dispose).
+                    // Swallow only that guard; anything else keeps throwing, and no
+                    // follow-up is posted into the replacement session.
+                    if (!isStaleCtxError(err)) throw err
+                    return
+                }
             }
-            pi.sendUserMessage(streamStallReminder(idleMs, WATCHDOG_CANCEL_MARKER), {
-                deliverAs: 'followUp'
-            })
+            try {
+                pi.sendUserMessage(streamStallReminder(idleMs, WATCHDOG_CANCEL_MARKER), {
+                    deliverAs: 'followUp'
+                })
+            } catch (err) {
+                if (!isStaleCtxError(err)) throw err
+            }
         }
     })
 
