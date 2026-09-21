@@ -5,7 +5,7 @@ import {
     StreamWatchdog,
     streamStallReminder
 } from '../shared/stream-watchdog.js'
-import {noteWatchdogAbort, WATCHDOG_CANCEL_MARKER} from './command-watchdog.js'
+import {consumeWatchdogAbort, noteWatchdogAbort, WATCHDOG_CANCEL_MARKER} from './command-watchdog.js'
 
 /**
  * True when the error is Pi's stale-context guard: the timer fired after the
@@ -72,6 +72,7 @@ export function registerStreamWatchdog(pi: ExtensionAPI): void {
                     // Swallow only that guard; anything else keeps throwing, and no
                     // follow-up is posted into the replacement session.
                     if (!isStaleCtxError(err)) throw err
+                    consumeWatchdogAbort() // undo the flag: no turn was aborted
                     return
                 }
             }

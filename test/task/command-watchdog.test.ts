@@ -416,6 +416,7 @@ describe('registerCommandWatchdog', () => {
         // inside the callback and fails the run as an unhandled error.
         await settle()
         expect(sent).toEqual([])
+        expect(consumeWatchdogAbort()).toBe(false)
     })
 
     for (const event of ['turn_end', 'session_shutdown'] as const) {

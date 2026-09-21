@@ -202,6 +202,7 @@ describe('registerStreamWatchdog', () => {
             // inside the timer and fails the run as an unhandled error.
             await sleep(300)
             expect(messages).toEqual([])
+            expect(consumeWatchdogAbort()).toBe(false)
         })
     })
 

@@ -121,6 +121,7 @@ export function registerCommandWatchdog(pi: ExtensionAPI): void {
                     // Swallow only that guard; anything else keeps throwing, and no
                     // follow-up is posted into the replacement session.
                     if (!isStaleCtxError(err)) throw err
+                    consumeWatchdogAbort() // undo the flag: no turn was aborted
                     return
                 }
             }
