@@ -56,6 +56,19 @@ async function readWhenWritten(file: string, needle: string): Promise<string> {
     }
 }
 
+/** List `dir` once the appender has created it and put something in it. */
+async function listWhenFilled(dir: string): Promise<string[]> {
+    for (;;) {
+        try {
+            const names = await fsp.readdir(dir)
+            if (names.length > 0) return names
+        } catch {
+            // not created yet
+        }
+        await new Promise(resolve => setImmediate(resolve))
+    }
+}
+
 describe('path layout', () => {
     test('a run directory is <state home>/pi-task/<repo hash>/<run id>', () => {
         process.env.XDG_STATE_HOME = '/state'
@@ -188,14 +201,17 @@ describe('the trail leaves the repository', () => {
                 seams: happy()
             }).run()
 
-            const runs = fs.readdirSync(repoStateDir(cwd))
+            const runs = await listWhenFilled(repoStateDir(cwd))
             expect(runs).toHaveLength(1)
             const runDir = stateDir(cwd, runs[0])
-            const logs = fs.readdirSync(runDir).filter(f => f.endsWith('-debug.log'))
-            expect(logs).toEqual(['TASK_0001-debug.log'])
-            expect(await readWhenWritten(path.join(runDir, logs[0]), 'run: start')).toContain(
-                'run: start'
-            )
+            // The line first: it proves the file is there, so the listing below is
+            // read after the appender created it and not during.
+            expect(
+                await readWhenWritten(path.join(runDir, 'TASK_0001-debug.log'), 'run: start')
+            ).toContain('run: start')
+            expect(fs.readdirSync(runDir).filter(f => f.endsWith('-debug.log'))).toEqual([
+                'TASK_0001-debug.log'
+            ])
 
             const trail = fs.readdirSync(path.join(cwd, '.pi-tasks'))
             expect(trail.filter(f => f.endsWith('.log'))).toEqual([])
