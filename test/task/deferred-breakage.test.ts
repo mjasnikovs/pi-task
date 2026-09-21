@@ -50,7 +50,17 @@ describe('defersBreakage', () => {
         // A condition does not reach across a semicolon. What follows one is the
         // decision, not an option the condition weighs.
         'The test fails only if the fixture is stale; I would flag it as a known issue and move on.',
-        'Either way the suite is red; I would leave the test failing for whoever owns it.'
+        'Either way the suite is red; I would leave the test failing for whoever owns it.',
+        // A condition reaches no further than its own half, whoever the modal is about.
+        'The test fails only if the fixture is stale; it could be flagged as a known issue.',
+        // ...and a comma is not a semicolon, so the condition must not reach the
+        // decision that follows one either.
+        'The test fails only if the fixture is stale, so I would flag it as a known issue and move on.',
+        'The suite fails only if the fixture is stale and I would leave it red for the test owner.',
+        // A ROLE is nobody. No release manager or QA sits in a /task-auto run.
+        'Ownership rests with the release manager.',
+        'Ownership belongs to QA.',
+        'Ownership lies with the on-call engineer.'
     ])('catches: %s', text => {
         expect(defersBreakage(text)).toBe(true)
     })
@@ -73,8 +83,13 @@ describe('defersBreakage', () => {
         'Use option B, leave the existing seed data untouched, and update test/migrate.test.ts so the suite stays green',
         // Weighing an option is not choosing it.
         "IF NOT EXISTS is not in §4, and it would still leave the test's assertions failing",
+        // ...including across a semicolon: the options were posed before it, and the
+        // clause weighing them is not the decision the sentence goes on to make.
+        "Either update the assertions or add IF NOT EXISTS; the latter would leave the test's assertions failing, so I will update test/migrate.test.ts.",
+        'Either drop the column or keep it; keeping it would leave the suite failing, so update the migration.',
         // Ownership of a named team is not ownership by nobody.
-        'Ownership belongs to the platform team, who already have the fix queued.'
+        'Ownership belongs to the platform team, who already have the fix queued.',
+        'Ownership rests with the release engineering group.'
     ])('passes: %s', text => {
         expect(defersBreakage(text)).toBe(false)
     })

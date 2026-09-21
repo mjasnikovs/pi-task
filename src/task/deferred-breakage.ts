@@ -28,14 +28,19 @@ const NOT_A_DECISION =
     /\b(?:not|never|no|don't|do not|doesn't|does not|rather than|instead of|isn't|is not|without|avoid|avoiding)\b/i
 
 /**
- * A modal cancels a phrase only where the condition's own half of the sentence
- * poses an option for it to weigh: "IF NOT EXISTS would still leave the test
- * failing" describes what a rejected option does. A bare hedge does not — "I
- * would flag it as a known issue" is the decision, and treating every modal as
- * hypothetical let the guard be rephrased away.
+ * A modal cancels a phrase only where the sentence poses an option for it to
+ * weigh: "IF NOT EXISTS would still leave the test failing" describes what a
+ * rejected option does. A bare hedge does not — "I would flag it as a known
+ * issue" is the decision, and treating every modal as hypothetical let the guard
+ * be rephrased away.
  */
 const MODAL = /\b(?:would|could|might)\b/i
-const HYPOTHETICAL = /\b(?:if|unless|either|whether|option|alternative|otherwise)\b/i
+/** A condition governs its own half of a semicolon and reaches no further. */
+const CONDITION = /\b(?:if|unless)\b/i
+/** Options are posed once and weighed in any later clause of the sentence. */
+const OPTION = /\b(?:either|whether|option|alternative|otherwise)\b/i
+/** Whatever the sentence weighs, "I would …" is the answer's own decision. */
+const FIRST_PERSON = /\b(?:i|we)\s+(?:would|could|might)\b/i
 
 /** Where one clause ends and the next begins. A semicolon joins clauses of ONE
  *  thought, so the breakage a clause defers may sit in the other half. */
@@ -69,10 +74,11 @@ const PHRASES: readonly DeferralPhrase[] = [
     // Handing the work to an unnamed someone is the deferral itself, whatever the
     // clause is about; bare `whoever` below still needs a check to be one.
     {re: /\bwhoever\s+(?:owns|revisits|maintains|touches)\b/i, needs: 'alone'},
-    // Ownership handed to a ROLE is handed to nobody. Handed to a named team it is
-    // handed to someone, so it counts only where the clause is about a check.
+    // Ownership handed to a ROLE is handed to nobody: no release manager exists in
+    // a /task-auto run. A named team is someone, so the lookahead hands those to
+    // the `check` rule below rather than listing every job title here.
     {
-        re: /\bownership\s+(?:belongs|lies|rests)\s+(?:to|with)\s+(?:whoever|someone|somebody|another\b|a\s+later\b|the\s+(?:\w+\s+)?(?:owners?|maintainers?)\b)/i,
+        re: /\bownership\s+(?:belongs|lies|rests)\s+(?:to|with)\b(?!.*\b(?:teams?|groups?|squads?|guilds?|crews?)\b)/i,
         needs: 'alone'
     },
     {re: /\bownership\s+(?:belongs|lies|rests)\s+(?:to|with)\b/i, needs: 'check'},
@@ -121,18 +127,19 @@ function clauses(sentence: string): string[] {
 export function defersBreakage(answer: string): boolean {
     for (const sentence of prose(answer).split(SENTENCE_BOUNDARY)) {
         const sentenceBreaks = aboutACheck(sentence) && FAILURE.test(sentence)
-        // A condition governs its own half of a semicolon. It joins two independent
-        // clauses, so "the test fails only if X; I would flag it as known" states a
-        // condition and then decides — the decision is not one of X's options.
+        const posesOptions = OPTION.test(sentence)
+        // A semicolon joins two independent clauses, so "the test fails only if X;
+        // it could be flagged as known" states a condition and then decides. The
+        // options the sentence posed reach across it; the condition does not.
         for (const half of sentence.split(';')) {
-            const weighsOptions = HYPOTHETICAL.test(half)
+            const weighsOptions = posesOptions || CONDITION.test(half)
             for (const clause of clauses(half)) {
                 for (const {re, needs} of PHRASES) {
                     const hit = re.exec(clause)
                     if (!hit) continue
                     const before = clause.slice(0, hit.index)
                     if (NOT_A_DECISION.test(before)) continue
-                    if (MODAL.test(before) && weighsOptions) continue
+                    if (MODAL.test(before) && weighsOptions && !FIRST_PERSON.test(before)) continue
                     if (needs === 'check' && !aboutACheck(clause)) continue
                     if (needs === 'breakage' && !sentenceBreaks) continue
                     return true

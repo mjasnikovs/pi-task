@@ -86,21 +86,23 @@ describe('healthRedSubject', () => {
             ecosystem: 'node',
             commands: [
                 {cmd: 'bun run lint', outcome: 'pass', exitCode: 0, kind: 'static'},
+                // `runRepoHealthCheck` writes null for every non-fail outcome, so a
+                // real vanished suite never carries an exit code.
                 {
                     cmd: 'bun run test',
                     outcome: 'skip',
-                    exitCode: 1,
+                    exitCode: null,
                     kind: 'test',
                     gap: 'empty-suite'
                 }
             ],
             output: ''
         }
-        expect(healthRedSubject(health, CWD, TRACKED)).toEqual({
-            command: 'bun run test',
-            exitCode: 1,
-            files: []
-        })
+        const vanished = healthRedSubject(health, CWD, TRACKED)
+        expect(vanished).toEqual({command: 'bun run test', exitCode: null, files: []})
+        const title = buildHealthRepairTitle({...vanished!, owners: []})
+        expect(title).toBe('repair `bun run test`: exits ? (no task in this run owns it)')
+        expect(parseHealthRepairTitle(title)?.command).toBe('bun run test')
     })
 
     // Every command runs now, so two can be red at once. The subject's files come
