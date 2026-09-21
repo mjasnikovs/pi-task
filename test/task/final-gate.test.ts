@@ -357,6 +357,8 @@ describe('runFinalIntegrationGate', () => {
 
     test('a long-running start command PASSES the gate and is named', async () => {
         const dir = makeDir({scripts: {test: 'exit 0', start: 'sleep 30'}})
+        // A grace is safe to shorten here and only here: the boot outlives any of
+        // them, so expiry is the verdict under test rather than a race against it.
         const out = await runFinalIntegrationGate(dir, {timeoutMs: 900_000, bootGraceMs: 400})
         expect(out.ok).toBe(true)
         expect(out.reason).toContain('bun run start')
@@ -382,7 +384,6 @@ describe('runFinalIntegrationGate — orphaned-port recovery (run 9 item 3)', ()
         let reaped = 0
         const out = await runFinalIntegrationGate(dir, {
             timeoutMs: 900_000,
-            bootGraceMs: 300,
             bootDeps: {
                 findPortHolder: () => ({pid: 99999, command: '/usr/bin/postgres -D /data'}),
                 reap: () => {
@@ -419,7 +420,6 @@ describe('runFinalIntegrationGate — orphaned-port recovery (run 9 item 3)', ()
         let reaped = 0
         const out = await runFinalIntegrationGate(dir, {
             timeoutMs: 900_000,
-            bootGraceMs: 300,
             bootDeps: {
                 findPortHolder: () => ({pid: 4242, command: 'bun run start'}),
                 reap: () => {
@@ -1481,6 +1481,10 @@ describe('unobservedVerdict — zero observation is UNOBSERVED, never a PASS (IA
 describe('bootSkipVerdict — a discovered boot that never ran is UNOBSERVED (mx5 run 18)', () => {
     /** A served app (hono in deps is what detectsServedApp reads) whose `dev`
      *  script exits 127 inside the chain — a docker-less skip, in miniature. */
+    // No `bootGraceMs` anywhere below, deliberately. The subject is a boot child
+    // that exits at once because its binary is missing, and a grace shortened to
+    // keep a test quick is also short enough to beat that exit to the verdict — a
+    // 400ms one did, on the windows runner. The shipped default lets the exit win.
     const servedSkipPkg = (extra: Record<string, string> = {}) => ({
         dependencies: {hono: '4.12.27'},
         scripts: {test: 'exit 0', build: 'exit 0', dev: 'pi-task-no-such-binary-9f3c', ...extra}
@@ -1508,7 +1512,7 @@ describe('bootSkipVerdict — a discovered boot that never ran is UNOBSERVED (mx
 
     test('the run-18 shape: other commands PASS, the boot skips → UNOBSERVED, not a bare PASS', async () => {
         const dir = makeDir(servedSkipPkg())
-        const out = await runFinalIntegrationGate(dir, {timeoutMs: 900_000, bootGraceMs: 400})
+        const out = await runFinalIntegrationGate(dir, {timeoutMs: 900_000})
         // Non-blocking by decision, exactly like unobservedVerdict: a missing docker
         // is not something an autofix child can repair, and putting it in `reason`
         // as a FAIL invites a fabricated boot command.
@@ -1527,7 +1531,7 @@ describe('bootSkipVerdict — a discovered boot that never ran is UNOBSERVED (mx
         const dir = makeDir(
             servedSkipPkg({'test:ct': 'exit 0', 'test:e2e': 'exit 0', lint: 'exit 0'})
         )
-        const out = await runFinalIntegrationGate(dir, {timeoutMs: 900_000, bootGraceMs: 400})
+        const out = await runFinalIntegrationGate(dir, {timeoutMs: 900_000})
         expect(out.ok).toBe(true)
         expect(out.unobserved).toContain('NEVER RAN')
         expect(out.unobserved).not.toContain('gate ran nothing')
@@ -1539,7 +1543,7 @@ describe('bootSkipVerdict — a discovered boot that never ran is UNOBSERVED (mx
             dependencies: {hono: '4.12.27'},
             scripts: {test: 'exit 0', build: 'exit 0'}
         })
-        const out = await runFinalIntegrationGate(dir, {timeoutMs: 900_000, bootGraceMs: 400})
+        const out = await runFinalIntegrationGate(dir, {timeoutMs: 900_000})
         expect(out.unobserved).toBeUndefined()
         expect(out.reason).toBe('statics + `bun run test`, `bun run build` passed')
     })
@@ -1549,8 +1553,8 @@ describe('bootSkipVerdict — a discovered boot that never ran is UNOBSERVED (mx
             scripts: {test: 'exit 0', build: 'exit 0', dev: 'pi-task-no-such-bin'}
         })
         const none = makeDir({scripts: {test: 'exit 0', build: 'exit 0'}})
-        const a = await runFinalIntegrationGate(cli, {timeoutMs: 900_000, bootGraceMs: 400})
-        const b = await runFinalIntegrationGate(none, {timeoutMs: 900_000, bootGraceMs: 400})
+        const a = await runFinalIntegrationGate(cli, {timeoutMs: 900_000})
+        const b = await runFinalIntegrationGate(none, {timeoutMs: 900_000})
         expect(a.unobserved).toBeUndefined()
         expect(a.reason).toBe(b.reason)
     })
@@ -1591,7 +1595,7 @@ describe('bootSkipVerdict — a discovered boot that never ran is UNOBSERVED (mx
                 dev: `node -e "console.error('bun: command not found: no-such-bin'); process.exit(1)"`
             }
         })
-        const out = await runFinalIntegrationGate(dir, {timeoutMs: 900_000, bootGraceMs: 400})
+        const out = await runFinalIntegrationGate(dir, {timeoutMs: 900_000})
         expect(out.ok).toBe(true)
         expect(out.failures ?? []).toEqual([])
         expect(out.unobserved).toContain('NEVER RAN')
@@ -1600,7 +1604,7 @@ describe('bootSkipVerdict — a discovered boot that never ran is UNOBSERVED (mx
 
     test('a boot skip does NOT turn a FAILing gate into a different failure', async () => {
         const dir = makeDir(servedSkipPkg({test: 'echo boom && exit 1'}))
-        const out = await runFinalIntegrationGate(dir, {timeoutMs: 900_000, bootGraceMs: 400})
+        const out = await runFinalIntegrationGate(dir, {timeoutMs: 900_000})
         expect(out.ok).toBe(false)
         expect(out.unobserved).toBeUndefined()
         expect(out.failures?.some(f => f.includes('NEVER RAN'))).toBeFalsy()
@@ -1611,7 +1615,7 @@ describe('bootSkipVerdict — a discovered boot that never ran is UNOBSERVED (mx
             dependencies: {hono: '4.12.27'},
             scripts: {test: "node -e 'process.exit(127)'", dev: 'pi-task-no-such-binary-9f3c'}
         })
-        const out = await runFinalIntegrationGate(dir, {timeoutMs: 900_000, bootGraceMs: 400})
+        const out = await runFinalIntegrationGate(dir, {timeoutMs: 900_000})
         expect(out.ok).toBe(true)
         expect(out.unobserved).toContain('NEVER RAN')
         expect(out.unobserved).toContain('skipped as environment gaps')

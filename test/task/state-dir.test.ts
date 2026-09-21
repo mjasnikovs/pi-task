@@ -36,18 +36,36 @@ afterEach(() => {
 })
 
 /**
- * Read a file the moment it exists. The appender is fire-and-forget by design —
- * a run must never wait on its own trail — so there is nothing to await. Polling
- * on the file itself is the real signal; a file that never arrives is caught by
- * the suite's own per-test timeout rather than by a sleep guessed here.
+ * Read a file once it holds `needle`. The appender is fire-and-forget by design —
+ * a run must never wait on its own trail — so there is nothing to await.
+ *
+ * The content is the real signal, not the file: an append opens the file before it
+ * writes, so a read that races the open returns "" from a file that exists. A file
+ * or a line that never arrives is caught by the suite's own per-test timeout rather
+ * than by a sleep guessed here.
  */
-async function readWhenWritten(file: string): Promise<string> {
+async function readWhenWritten(file: string, needle: string): Promise<string> {
     for (;;) {
         try {
-            return await fsp.readFile(file, 'utf8')
+            const text = await fsp.readFile(file, 'utf8')
+            if (text.includes(needle)) return text
         } catch {
-            await new Promise(resolve => setImmediate(resolve))
+            // not created yet
         }
+        await new Promise(resolve => setImmediate(resolve))
+    }
+}
+
+/** List `dir` once the appender has created it and put something in it. */
+async function listWhenFilled(dir: string): Promise<string[]> {
+    for (;;) {
+        try {
+            const names = await fsp.readdir(dir)
+            if (names.length > 0) return names
+        } catch {
+            // not created yet
+        }
+        await new Promise(resolve => setImmediate(resolve))
     }
 }
 
@@ -161,7 +179,9 @@ describe('the trail leaves the repository', () => {
             const file = runLogPath(cwd, 'verify-debug.log')
             expect(fs.existsSync(path.dirname(file))).toBe(false)
             makeDebugAppender(file)('=== verify start ===')
-            expect(await readWhenWritten(file)).toContain('=== verify start ===')
+            expect(await readWhenWritten(file, '=== verify start ===')).toContain(
+                '=== verify start ==='
+            )
         })
     })
 
@@ -181,12 +201,17 @@ describe('the trail leaves the repository', () => {
                 seams: happy()
             }).run()
 
-            const runs = fs.readdirSync(repoStateDir(cwd))
+            const runs = await listWhenFilled(repoStateDir(cwd))
             expect(runs).toHaveLength(1)
             const runDir = stateDir(cwd, runs[0])
-            const logs = fs.readdirSync(runDir).filter(f => f.endsWith('-debug.log'))
-            expect(logs).toEqual(['TASK_0001-debug.log'])
-            expect(await readWhenWritten(path.join(runDir, logs[0]))).toContain('run: start')
+            // The line first: it proves the file is there, so the listing below is
+            // read after the appender created it and not during.
+            expect(
+                await readWhenWritten(path.join(runDir, 'TASK_0001-debug.log'), 'run: start')
+            ).toContain('run: start')
+            expect(fs.readdirSync(runDir).filter(f => f.endsWith('-debug.log'))).toEqual([
+                'TASK_0001-debug.log'
+            ])
 
             const trail = fs.readdirSync(path.join(cwd, '.pi-tasks'))
             expect(trail.filter(f => f.endsWith('.log'))).toEqual([])

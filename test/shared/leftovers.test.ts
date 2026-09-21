@@ -64,6 +64,33 @@ describe('linux, darwin: reap ends when the leftover is gone', () => {
         }
     })
 
+    /**
+     * The scan cannot answer "is it gone". A dying process drops its memory — and
+     * with it the token — while it still holds its ports, so it leaves the scan
+     * before it leaves the process table: measured at 375 of 400 SIGTERMs, and the
+     * reap then settled on a server the next phase had to bind past. The scan here
+     * reproduces that by hand, answering once and never again, while the leftover
+     * is still very much alive; only the SIGKILL after the grace can end it.
+     */
+    testPosix('a leftover that leaves the token scan alive is followed until it dies', async () => {
+        let scans = 0
+        const {env, reap} = trackLeftovers(process.platform, process.env, 200, () =>
+            ++scans === 1 ? [server.child.pid!] : []
+        )
+        const server = leftover(
+            env,
+            `process.on('SIGTERM', () => {}); console.log('up'); ${keepAlive}`
+        )
+        try {
+            await server.ready
+            await reap()
+            expect(dead(server.child.pid!)).toBe(true)
+            expect(await server.exited).toBe('SIGKILL')
+        } finally {
+            server.child.kill('SIGKILL')
+        }
+    })
+
     testPosix(
         'a leftover deaf to SIGTERM is SIGKILLed after the grace, then resolved',
         async () => {
