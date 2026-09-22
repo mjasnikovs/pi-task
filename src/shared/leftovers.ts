@@ -106,6 +106,9 @@ function trackToken(base: NodeJS.ProcessEnv, graceMs: number, procs: Procs): Lef
                 // pinned to its start time and followed in the process table until its
                 // row is gone.
                 const held = new Map<number, string | undefined>()
+                // The pids this pass could still show to be the ones it found: the
+                // token says so, or their start time does. Nothing else is signalled.
+                const proven = new Set<number>()
                 const termedAt = new Map<number, number>()
                 const killed = new Set<number>()
                 const send = (pid: number, sig: NodeJS.Signals): void => {
@@ -117,10 +120,16 @@ function trackToken(base: NodeJS.ProcessEnv, graceMs: number, procs: Procs): Lef
                 }
                 const follow = (): void => {
                     const seen = new Set(procs.scan(marker))
+                    proven.clear()
                     for (const pid of new Set([...held.keys(), ...seen])) {
-                        const pin = nextPin(procs.sample(pid), seen.has(pid), held.get(pid))
-                        if (pin === drop) held.delete(pid)
-                        else held.set(pid, pin)
+                        const row = procs.sample(pid)
+                        const pin = nextPin(row, seen.has(pid), held.get(pid))
+                        if (pin === drop) {
+                            held.delete(pid)
+                            continue
+                        }
+                        held.set(pid, pin)
+                        if (seen.has(pid) || row !== 'unknown') proven.add(pid)
                     }
                 }
                 /**
@@ -135,6 +144,7 @@ function trackToken(base: NodeJS.ProcessEnv, graceMs: number, procs: Procs): Lef
                 }
                 const signalDue = (waited: number, last: boolean): void => {
                     for (const pid of held.keys()) {
+                        if (!proven.has(pid)) continue
                         const sig = due(pid, waited, last)
                         if (sig === undefined) continue
                         send(pid, sig)

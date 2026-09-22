@@ -164,6 +164,19 @@ describe('linux, darwin: the reap against a process table the test writes', () =
         expect(sent).toEqual(['SIGTERM 7'])
     })
 
+    test('a pid the table stopped answering for, and the scan dropped, is not killed', async () => {
+        const sent: string[] = []
+        let scans = 0
+        await reapWith(
+            fakeProcs(
+                sent,
+                () => (++scans === 1 ? [7] : []),
+                () => 'unknown'
+            )
+        )
+        expect(sent).toEqual(['SIGTERM 7'])
+    })
+
     test('a pid the scan still reports is the new leftover, not the old one to drop', async () => {
         const sent: string[] = []
         let samples = 0
