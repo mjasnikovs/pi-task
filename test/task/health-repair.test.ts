@@ -3,6 +3,7 @@ import {
     buildHealthRepairFence,
     buildHealthRepairTitle,
     healthRedSubject,
+    healthReds,
     parseHealthRepairTitle,
     planCoversHealthRed,
     suiteRegressionOwed
@@ -138,6 +139,31 @@ describe('healthRedSubject', () => {
         })
         expect(healthRedSubject(health, CWD, TRACKED, () => false)).toBeNull()
     })
+
+    // A covered first red must not hide the next one: the checkpoint splices the
+    // first red the plan does not already carry a repair for.
+    test('every red the caller may repair, each read from its own output', () => {
+        const health: HealthOutcome = {
+            ok: false,
+            reason: '',
+            ecosystem: 'node',
+            commands: [
+                {cmd: 'bun run lint', outcome: 'fail', exitCode: 1, kind: 'static', output: ''},
+                {
+                    cmd: 'bun run test',
+                    outcome: 'fail',
+                    exitCode: 1,
+                    kind: 'test',
+                    output: `${CWD}/test/api.test.ts`
+                }
+            ],
+            output: ''
+        }
+        const reds = healthReds(health, CWD, TRACKED)
+        expect(reds.map(r => r.command)).toEqual(['bun run lint', 'bun run test'])
+        const plan = [{title: 'repair `bun run lint`: exits 1 (x)'}]
+        expect(reds.find(r => !planCoversHealthRed(plan, r))?.command).toBe('bun run test')
+    })
 })
 
 describe('suiteRegressionOwed', () => {
@@ -204,23 +230,38 @@ describe('title grammar', () => {
 
 describe('planCoversHealthRed', () => {
     const lintRed = {command: 'bun run lint', exitCode: 1, files: ['src/client/api.ts']}
+    const plan = (...titles: string[]): Array<{title: string}> => titles.map(title => ({title}))
 
     test('covered by the same command, by a shared file, or by a root-cause repair', () => {
-        expect(planCoversHealthRed(['repair `bun run lint`: exits 1 (x)'], lintRed)).toBe(true)
+        expect(planCoversHealthRed(plan('repair `bun run lint`: exits 1 (x)'), lintRed)).toBe(true)
         expect(
             planCoversHealthRed(
-                ['repair src/other.ts, src/client/api.ts: `tsc --noEmit` exits 2 (x)'],
+                plan('repair src/other.ts, src/client/api.ts: `tsc --noEmit` exits 2 (x)'),
                 lintRed
             )
         ).toBe(true)
-        expect(planCoversHealthRed(['repair src/client/api.ts: some defect'], lintRed)).toBe(true)
+        expect(planCoversHealthRed(plan('repair src/client/api.ts: some defect'), lintRed)).toBe(
+            true
+        )
     })
 
     test('not covered by a different command over different files, nor by prose', () => {
         expect(
-            planCoversHealthRed(['repair src/other.ts: `tsc --noEmit` exits 2 (x)'], lintRed)
+            planCoversHealthRed(plan('repair src/other.ts: `tsc --noEmit` exits 2 (x)'), lintRed)
         ).toBe(false)
-        expect(planCoversHealthRed(['Fix src/client/api.ts lint'], lintRed)).toBe(false)
+        expect(planCoversHealthRed(plan('Fix src/client/api.ts lint'), lintRed)).toBe(false)
+    })
+
+    // A repair that turned its check green is done with it. The same check red
+    // again later is a new regression, and only a repair that FAILED may stop the
+    // next one from being spliced.
+    test('a repair that closed debts no longer covers; one that failed still does', () => {
+        const done = [
+            {title: 'repair `bun run lint`: exits 1 (x)', done: true, producedId: 'TASK_0004'}
+        ]
+        expect(planCoversHealthRed(done, lintRed, new Set(['TASK_0004']))).toBe(false)
+        expect(planCoversHealthRed(done, lintRed, new Set(['TASK_0002']))).toBe(true)
+        expect(planCoversHealthRed(done, lintRed)).toBe(true)
     })
 })
 

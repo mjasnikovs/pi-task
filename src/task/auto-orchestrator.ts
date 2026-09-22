@@ -42,7 +42,7 @@ import {
 } from './auto-io.js'
 import {decideResume, UNATTENDED_STATES} from './resume-gap.js'
 import {ENTRY_ATTEMPT_BUDGET} from './gate-resolution.js'
-import {readOpenAcceptDebts, recordDebt} from './accept-debt.js'
+import {readAcceptDebts, recordDebt} from './accept-debt.js'
 import {
     drainRepairQueue,
     mergeRepairCandidates,
@@ -85,7 +85,7 @@ import {runGatesForTask, type GateDeps} from './task-gates.js'
 import {
     buildHealthRepairFence,
     buildHealthRepairTitle,
-    healthRedSubject,
+    healthReds,
     suiteRegressionOwed,
     parseHealthRepairTitle,
     planCoversHealthRed
@@ -575,21 +575,18 @@ async function spliceHealthRepair(
     deps: AutoDeps
 ): Promise<boolean> {
     try {
-        const debts = await readOpenAcceptDebts(cwd)
-        const red = healthRedSubject(
+        const ledger = await readAcceptDebts(cwd)
+        const debts = ledger.filter(d => d.resolvedBy === undefined)
+        const repaired = new Set(
+            ledger.flatMap(d => (d.resolvedBy === undefined ? [] : [d.resolvedBy]))
+        )
+        const red = healthReds(
             health,
             cwd,
             (await deps.repoFiles?.(cwd)) ?? null,
             c => c.kind !== 'test' || suiteRegressionOwed(c.cmd, debts)
-        )
+        ).find(r => !planCoversHealthRed(entries, r, repaired))
         if (!red) return false
-        if (
-            planCoversHealthRed(
-                entries.map(e => e.title),
-                red
-            )
-        )
-            return false
         const owners: string[] = []
         for (const f of red.files) {
             const owner = await deps.introducedBy?.(cwd, f)

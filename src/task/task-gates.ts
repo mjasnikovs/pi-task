@@ -31,7 +31,13 @@
 import type {ExtensionCommandContext} from '@earendil-works/pi-coding-agent'
 import type {RunSingleTaskResult} from './orchestrator.js'
 import type {CommitResult} from './auto-commit.js'
-import {verifyFailClass, type VerifyFail, type VerifyOutcome} from './verify-work.js'
+import {
+    VERIFY_FAIL_PREFIX,
+    verifyFailClass,
+    type VerifyFail,
+    type VerifyFailClass,
+    type VerifyOutcome
+} from './verify-work.js'
 import type {EnforceOutcome} from './enforce-guidelines.js'
 import {
     resolutionOptions,
@@ -56,7 +62,7 @@ import {
     type RepairCandidate
 } from './root-cause-repair.js'
 import {attributeEnforceFailure} from './enforce-attribution.js'
-import {describeHealthFailures} from './repo-health-check.js'
+import {describeHealthFailures, isHealthRed} from './repo-health-check.js'
 import {healthRedSubject, parseHealthRepairTitle, type HealthRed} from './health-repair.js'
 // The debt ledger is reached through the injected `recordDebt` dep (so it stays
 // absent-in-tests); only the origin TYPE and the cross-task-deletion reason SHAPE
@@ -374,6 +380,26 @@ export async function askVerifyResolution(
 }
 
 /** The repair a red health check earns, as the picker and the trail name it. */
+/** Was `command` among the checks this verdict inherited red? */
+function inheritsRed(verified: VerifyOutcome, command: string): boolean {
+    return verified.inheritedHealth?.includes(`\`${command}\``) ?? false
+}
+
+/**
+ * The reason the bounded lint fix is handed, or null when the FAIL has no static
+ * half. A suite regressed beside a lint still leaves the lint for it to fix; told
+ * about the suite too, it would chase a red its static check cannot observe.
+ */
+function staticFixReason(verified: VerifyOutcome, failClass: VerifyFailClass): string | null {
+    if (failClass === 'repo-health') return verified.reason ?? ''
+    if (failClass !== 'test-suite') return null
+    const statics = (verified.health?.commands ?? []).filter(
+        c => c.kind !== 'test' && isHealthRed(c)
+    )
+    if (statics.length === 0) return null
+    return `${VERIFY_FAIL_PREFIX['repo-health']} ${describeHealthFailures(statics)}`
+}
+
 function describeHealthRepair(red: HealthRed): string {
     return red.files.length > 0 ?
             `a repair for ${red.files.join(', ')} (\`${red.command}\`)`
@@ -509,14 +535,15 @@ export async function resolveVerifyGate(
             // re-verify and re-enter the loop on the fresh verdict; not applied (guard
             // trip, no convergence) → fall through to the decision table unchanged.
             const failClass = verifyFailClass(verified) ?? 'model-verdict'
-            if (!lintFixAttempted && deps.lintFix && failClass === 'repo-health') {
+            const lintFixReason = staticFixReason(verified, failClass)
+            if (!lintFixAttempted && deps.lintFix && lintFixReason !== null) {
                 lintFixAttempted = true
                 notifyRun(
                     active,
                     `${p.tag}: static findings on "${p.title}" — attempting bounded lint fix…`,
                     'info'
                 )
-                const fix = await deps.lintFix(active, p.cwd, p.title, p.taskId, failReason)
+                const fix = await deps.lintFix(active, p.cwd, p.title, p.taskId, lintFixReason)
                 await rec(
                     `lint-fix: ${
                         fix.ok ?
@@ -727,10 +754,11 @@ export async function resolveVerifyGate(
             await rec(`accept-debt: inherited repo health — ${verified.inheritedHealth}`)
             await settleDebt('inherited-health', verified.inheritedHealth)
         }
-        // A health repair that verified CLEAN — the check it exists for ran green,
-        // nothing inherited — closes the debts that check opened, under its own id.
+        // A health repair that verified CLEAN — the check it exists for ran green —
+        // closes the debts that check opened, under its own id. Another check
+        // inherited red beside it says nothing about this one.
         const repair = parseHealthRepairTitle(p.title)
-        if (repair && verified.ok && !verified.reason && !verified.inheritedHealth) {
+        if (repair && verified.ok && !verified.reason && !inheritsRed(verified, repair.command)) {
             try {
                 const closed = await deps.closeHealthDebts?.(p.cwd, repair.command, p.taskId)
                 if (closed && closed.length > 0) {

@@ -16,6 +16,9 @@
  * the phrase, and "without touching the test file, accepting that it fails" does
  * not. "Known issue", "follow-up" and "a later step" also name legitimate plans —
  * an upstream bug, a scope cut — so they count only in a clause about a check.
+ * "Follow-up", "a later step", "defer" and "out of scope" also schedule NEW
+ * tests, so they count only where the check is broken or an existing test is
+ * left for someone else to update.
  */
 
 /** A test, or a static check that the same clause calls broken. */
@@ -68,8 +71,10 @@ const SENTENCE_BOUNDARY = /[.!?](?=\s|$)|\n/
 interface DeferralPhrase {
     re: RegExp
     /** alone — the phrase is a deferral by itself; check — only in a clause about a
-     *  check; breakage — only in a sentence that says a check fails. */
-    needs: 'alone' | 'check' | 'breakage'
+     *  check; broken-check — only in a clause about a check that is broken or needs
+     *  its existing test updated, since the phrase also schedules new tests;
+     *  breakage — only in a sentence that says a check fails. */
+    needs: 'alone' | 'check' | 'broken-check' | 'breakage'
 }
 
 const PHRASES: readonly DeferralPhrase[] = [
@@ -106,18 +111,22 @@ const PHRASES: readonly DeferralPhrase[] = [
     {re: /\bowned\s+(?:by|follow[- ]?up)\b/i, needs: 'check'},
     {re: /\bleft\s+for\b/i, needs: 'check'},
     {re: /\bknown[- ]issues?\b/i, needs: 'check'},
-    {re: /\bfollow[- ]?ups?\b/i, needs: 'check'},
+    {re: /\bfollow[- ]?ups?\b/i, needs: 'broken-check'},
     {
         re: /\b(?:a|the|another|some)\s+(?:later|future|subsequent|separate)\s+(?:step|task|change|pr)\b/i,
-        needs: 'check'
+        needs: 'broken-check'
     },
-    {re: /\bdefer(?:s|red|ring)?\b/i, needs: 'check'},
-    {re: /\bout\s+of\s+scope\b/i, needs: 'check'},
+    {re: /\bdefer(?:s|red|ring)?\b/i, needs: 'broken-check'},
+    {re: /\bout\s+of\s+scope\b/i, needs: 'broken-check'},
     {
         re: /\b(?:that|this|which|it|they|those)\s+(?:is|are|remains?)\s+out\s+of\s+scope\b/i,
         needs: 'breakage'
     }
 ]
+
+/** Work on a test that already exists — what "a later task should update the test" defers. */
+const REPAIR_VERB =
+    /\b(?:updat(?:e|es|ed|ing)|fix(?:es|ed|ing)?|adjust(?:s|ed|ing)?|amend(?:s|ed|ing)?|correct(?:s|ed|ing)?|repair(?:s|ed|ing)?|chang(?:e|es|ed|ing))\b/i
 
 function aboutACheck(text: string): boolean {
     return TEST_NOUN.test(text) || (BUILD_NOUN.test(text) && FAILURE.test(text))
@@ -167,6 +176,11 @@ export function defersBreakage(answer: string): boolean {
                     if (NOT_A_DECISION.test(before)) continue
                     if (MODAL.test(before) && cancelsModal(before, underCondition)) continue
                     if (needs === 'check' && !aboutACheck(clause)) continue
+                    if (
+                        needs === 'broken-check'
+                        && !(aboutACheck(clause) && (sentenceBreaks || REPAIR_VERB.test(clause)))
+                    )
+                        continue
                     if (needs === 'breakage' && !sentenceBreaks) continue
                     return true
                 }

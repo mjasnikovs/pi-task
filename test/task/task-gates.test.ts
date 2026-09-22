@@ -1110,6 +1110,37 @@ test('lint-fix: NOT attempted for a test-suite FAIL', async () => {
     })
 })
 
+// The suite names the class, but a lint regressed beside it is still static
+// findings the bounded fix can converge on: its check runs the statics only.
+test('lint-fix: attempted for the static half of a test-suite FAIL, told only about it', async () => {
+    await withTmpTaskDir(async dir => {
+        const {ctx} = makeFakeCtx(dir)
+        const reasons: string[] = []
+        const deps = makeDeps({
+            verify: () =>
+                Promise.resolve({
+                    ok: false,
+                    failClass: 'test-suite',
+                    reason: 'test suite: `bun run lint` exited 1; `bun run test` exited 1',
+                    health: {
+                        ok: false,
+                        commands: [
+                            {cmd: 'bun run lint', outcome: 'fail', exitCode: 1, kind: 'static'},
+                            {cmd: 'bun run test', outcome: 'fail', exitCode: 1, kind: 'test'}
+                        ]
+                    }
+                }),
+            lintFix: (_ctx, _cwd, _title, _id, failReason) => {
+                reasons.push(failReason)
+                return Promise.resolve({ok: false, class: 'not-applied' as const, reason: 'x'})
+            },
+            recommend: () => Promise.resolve({recommend: 'autofix', rationale: 'suite red'})
+        })
+        await runGatesForTask(ctx, deps, baseParams({cwd: dir}))
+        expect(reasons).toEqual(['repo health: `bun run lint` exited 1'])
+    })
+})
+
 // ─── Enforce pre-commit repo-health gate ─────────────────────────────────────
 
 test('enforce edits that REGRESS repo health (clean before → fail after) are discarded BEFORE commit', async () => {
@@ -2348,6 +2379,36 @@ describe('health repair — the gate half (health-repair.ts)', () => {
                 })
             )
             expect(closes).toBe(0)
+        })
+    })
+
+    // An unrelated check already red before the repair ran does not make the
+    // repair's own check any less green.
+    test('a repair whose own check went green closes its debts beside an unrelated inherited red', async () => {
+        await withTmpTaskDir(async dir => {
+            const {ctx} = makeFakeCtx(dir)
+            const closes: string[] = []
+            const deps = makeDeps({
+                verify: () =>
+                    Promise.resolve({
+                        ok: true,
+                        inheritedHealth:
+                            'test suite: `bun run test` exited 1 — already failing before this task'
+                    }),
+                closeHealthDebts: (_c, command) => {
+                    closes.push(command)
+                    return Promise.resolve([])
+                }
+            })
+            await runGatesForTask(
+                ctx,
+                deps,
+                baseParams({
+                    cwd: dir,
+                    title: 'repair `bun run lint`: exits 1 (no task in this run owns it)'
+                })
+            )
+            expect(closes).toEqual(['bun run lint'])
         })
     })
 

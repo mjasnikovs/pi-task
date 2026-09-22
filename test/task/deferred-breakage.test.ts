@@ -104,6 +104,12 @@ describe('defersBreakage', () => {
         'Use the file owner permissions (0644)',
         'the module owner field in package.json',
         'update the failing test in test/x.test.ts, since the router is out of scope',
+        // Writing NEW tests later is a plan. Only a check this sentence calls broken,
+        // or an existing test left for someone else to update, is a deferral.
+        'Add integration tests in a follow-up task.',
+        'Write the unit tests in a later step once the API settles.',
+        'Use Vitest; the test suite for the parser is out of scope.',
+        'Defer the e2e tests to the next milestone.',
         'Use option B, leave the existing seed data untouched, and update test/migrate.test.ts so the suite stays green',
         // Weighing an option is not choosing it.
         "IF NOT EXISTS is not in §4, and it would still leave the test's assertions failing",

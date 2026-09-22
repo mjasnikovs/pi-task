@@ -151,7 +151,7 @@ describe('linux, darwin: the reap against a process table the test writes', () =
         expect(sent).toEqual(['SIGTERM 7', 'SIGKILL 7'])
     })
 
-    test('a pid whose start time never read is dropped, not killed, once the scan drops it', async () => {
+    test('a pid whose start time never read is not killed once the scan drops it', async () => {
         const sent: string[] = []
         let scans = 0
         await reapWith(
@@ -161,6 +161,32 @@ describe('linux, darwin: the reap against a process table the test writes', () =
                 () => (scans === 1 ? 'unknown' : {startedAt: 'A', ended: false})
             )
         )
+        expect(sent).toEqual(['SIGTERM 7'])
+    })
+
+    // A dying process releases its token before its ports. Found while its row
+    // could not be read, it is still held until the row is gone, and never killed
+    // on a start time the reap adopted after the token had already gone.
+    test('a pid whose start time never read is followed until gone, not killed', async () => {
+        const sent: string[] = []
+        let scans = 0
+        let samples = 0
+        const gone = 4
+        await trackLeftovers(
+            'linux',
+            {},
+            60_000,
+            fakeProcs(
+                sent,
+                () => (++scans === 1 ? [7] : []),
+                () => {
+                    samples += 1
+                    if (samples === 1) return 'unknown'
+                    return samples < gone ? {startedAt: 'A', ended: false} : 'gone'
+                }
+            )
+        ).reap()
+        expect(samples).toBe(gone)
         expect(sent).toEqual(['SIGTERM 7'])
     })
 

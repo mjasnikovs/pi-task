@@ -298,6 +298,13 @@ export const INFRA_GAP_OUTPUT_RE =
 export const EMPTY_SUITE_OUTPUT_RE =
     /\b0 test files matching\b|\bNo tests found\b|\bNo test files found\b|\bno tests ran\b|\bcollected 0 items\b/i
 
+/**
+ * Counts of tests that ran, in bun, jest, vitest, mocha, pytest, cargo and go
+ * shapes. A suite that runs several packages prints the empty-suite phrase for
+ * one of them beside the real results of the rest, and that run observed tests.
+ */
+const TESTS_RAN_OUTPUT_RE = /\b[1-9]\d*\s+(?:pass(?:ed|ing)?|fail(?:ed|ing|ures?)?)\b|^--- FAIL:/im
+
 /** Which way a command failed to tell us anything. */
 export type CommandGapId =
     | 'spawn-failed'
@@ -357,7 +364,8 @@ const GAP_RULES: ReadonlyArray<{
     {
         id: 'empty-suite',
         detail: () => 'no tests found',
-        applies: (_run, output) => EMPTY_SUITE_OUTPUT_RE.test(output)
+        applies: (_run, output) =>
+            EMPTY_SUITE_OUTPUT_RE.test(output) && !TESTS_RAN_OUTPUT_RE.test(output)
     }
 ]
 

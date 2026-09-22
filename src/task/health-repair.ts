@@ -64,30 +64,42 @@ function resolveTracked(token: string, cwd: string, tracked: readonly string[]):
 }
 
 /**
- * What a red health result is about: its first red command that `mayRepair`
- * admits. Null when there is none — a legacy baseline, a signal with no
+ * What a red health result is about: every red command that `mayRepair` admits,
+ * in run order. Empty when there is none — a legacy baseline, a signal with no
  * per-command detail, or only reds no repair can fix — so nothing to pin to.
  *
  * A vanished suite is red here though it failed nothing and left `ok` true. It
  * is the regression the differential exists to catch, and without a subject
  * ACCEPT queued no repair for it and the checkpoint spliced none.
  */
-export function healthRedSubject(
+export function healthReds(
     health: HealthSignal & {output?: string},
     cwd: string,
     tracked: readonly string[] | null,
     mayRepair: (c: HealthCommandResult) => boolean = () => true
+): HealthRed[] {
+    return (health.commands ?? [])
+        .filter(c => isHealthRed(c) && mayRepair(c))
+        .map(failing => {
+            const files: string[] = []
+            if (tracked) {
+                for (const m of (failing.output ?? health.output ?? '').matchAll(PATH_TOKEN_RE)) {
+                    const rel = resolveTracked(m[0], cwd, tracked)
+                    if (rel !== null && !files.includes(rel)) files.push(rel)
+                }
+            }
+            return {command: failing.cmd, exitCode: failing.exitCode, files}
+        })
+}
+
+/** The first of {@link healthReds}, or null. */
+export function healthRedSubject(
+    health: HealthSignal & {output?: string},
+    cwd: string,
+    tracked: readonly string[] | null,
+    mayRepair?: (c: HealthCommandResult) => boolean
 ): HealthRed | null {
-    const failing = (health.commands ?? []).find(c => isHealthRed(c) && mayRepair(c))
-    if (!failing) return null
-    const files: string[] = []
-    if (tracked) {
-        for (const m of (failing.output ?? health.output ?? '').matchAll(PATH_TOKEN_RE)) {
-            const rel = resolveTracked(m[0], cwd, tracked)
-            if (rel !== null && !files.includes(rel)) files.push(rel)
-        }
-    }
-    return {command: failing.cmd, exitCode: failing.exitCode, files}
+    return healthReds(health, cwd, tracked, mayRepair)[0] ?? null
 }
 
 /**
@@ -146,15 +158,29 @@ export function parseHealthRepairTitle(title: string): HealthRepairSubject | nul
     return {command: m[3].trim(), files: m[2].split(',').map(f => f.trim())}
 }
 
+/** A plan entry as coverage reads it: its title, and the task it produced. */
+export interface PlanEntryRef {
+    title: string
+    producedId?: string
+}
+
 /**
  * Does the plan already carry a repair for this red? Same command, or any of the
  * same files — including a file-scoped root-cause repair (root-cause-repair.ts),
  * which pins the same file. Checked-off entries count: a repair that ran and
  * failed lands in the debt ledger, never in the plan a second time.
+ *
+ * `repaired` holds the tasks that closed a debt: their check went green, so the
+ * same check red again is a new regression the next repair is for.
  */
-export function planCoversHealthRed(titles: readonly string[], red: HealthRed): boolean {
+export function planCoversHealthRed(
+    entries: readonly PlanEntryRef[],
+    red: HealthRed,
+    repaired: ReadonlySet<string> = new Set()
+): boolean {
     const files = new Set(red.files.map(f => normalisePath(f).toLowerCase()))
-    return titles.some(t => {
+    return entries.some(({title: t, producedId}) => {
+        if (producedId !== undefined && repaired.has(producedId)) return false
         const rootCause = parseRepairTitleFile(t)
         if (rootCause !== null && files.has(normalisePath(rootCause).toLowerCase())) return true
         const h = parseHealthRepairTitle(t)

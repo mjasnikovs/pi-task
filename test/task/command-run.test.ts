@@ -115,6 +115,24 @@ describe('an empty suite is a gap only when a test command says it', () => {
     })
 })
 
+// A monorepo suite runs every package: one that has no tests prints the phrase,
+// and a real failure elsewhere in the same run must still fail.
+describe('an empty-suite phrase beside tests that ran is not a gap', () => {
+    test.each([
+        'packages/a: No tests found, exiting with code 1\npackages/b:\n 3 pass\n 1 fail',
+        'No tests found\nTests:       1 failed, 3 passed, 4 total',
+        'No test files found\n Tests  1 failed | 3 passed (4)',
+        'no tests ran in 0.01s\n1 failing',
+        'no tests ran\n--- FAIL: TestParse (0.00s)'
+    ])('%s', out => {
+        expect(
+            classifyCommandRun(ran({status: 1, stdout: out}), [], {emptySuite: true})
+        ).toMatchObject({
+            outcome: 'fail'
+        })
+    })
+})
+
 describe('outputTail', () => {
     test('joins stdout and stderr onto one line', () => {
         expect(outputTail('out', 'err')).toBe('out err')

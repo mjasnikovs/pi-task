@@ -105,7 +105,7 @@ function trackToken(base: NodeJS.ProcessEnv, graceMs: number, procs: Procs): Lef
                 // so the scan reads it as gone about 9 times in 10. Each pid found is
                 // pinned to its start time and followed in the process table until its
                 // row is gone.
-                const held = new Map<number, string | undefined>()
+                const held = new Map<number, Pin>()
                 // The pids this pass could still show to be the ones it found: the
                 // token says so, or their start time does. Nothing else is signalled.
                 const proven = new Set<number>()
@@ -129,7 +129,7 @@ function trackToken(base: NodeJS.ProcessEnv, graceMs: number, procs: Procs): Lef
                             continue
                         }
                         held.set(pid, pin)
-                        if (seen.has(pid) || row !== 'unknown') proven.add(pid)
+                        if (seen.has(pid) || (row !== 'unknown' && pin.proof)) proven.add(pid)
                     }
                 }
                 /**
@@ -177,18 +177,25 @@ type Signal = 'SIGTERM' | 'SIGKILL'
 const drop = Symbol('drop')
 
 /**
+ * A held pid's start time. `proof` is false for one adopted after the token was
+ * gone: the pid may have been reused in between, so the reap waits on it but
+ * never signals it.
+ */
+interface Pin {
+    startedAt: string | undefined
+    proof: boolean
+}
+
+/**
  * The pin a held pid keeps for the next pass. `ours` is the token scan's answer,
  * and it is proof the pid is ours right now, whoever held it before.
  */
-function nextPin(
-    row: Sample,
-    ours: boolean,
-    pin: string | undefined
-): string | undefined | typeof drop {
-    if (row === 'unknown') return pin
+function nextPin(row: Sample, ours: boolean, pin: Pin | undefined): Pin | typeof drop {
+    if (row === 'unknown') return pin ?? {startedAt: undefined, proof: false}
     if (row === 'gone' || row.ended) return drop
-    if (ours) return row.startedAt
-    return pin === row.startedAt ? pin : drop
+    if (ours) return {startedAt: row.startedAt, proof: true}
+    if (pin?.startedAt === undefined) return {startedAt: row.startedAt, proof: false}
+    return pin.startedAt === row.startedAt ? pin : drop
 }
 
 /** The state follows the LAST ')': the name before it can hold ') Z' itself. */
