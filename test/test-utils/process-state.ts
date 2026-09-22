@@ -1,5 +1,4 @@
-import {spawnSync} from 'node:child_process'
-import * as fs from 'node:fs'
+import {darwinSample, linuxSample} from '../../src/shared/leftovers.js'
 
 /**
  * Whether `pid` has ended, zombies included: a zombie still answers `kill(pid, 0)`
@@ -7,21 +6,11 @@ import * as fs from 'node:fs'
  * no zombies, so there `kill(pid, 0)` already reads the end.
  */
 export function dead(pid: number): boolean {
-    if (process.platform === 'linux') {
-        let stat: string
-        try {
-            stat = fs.readFileSync(`/proc/${pid}/stat`, 'utf8')
-        } catch {
-            return true
-        }
-        // The state follows the LAST ')': the name before it can hold ') Z' itself.
-        return /^[ZX]/.test(stat.slice(stat.lastIndexOf(')') + 2))
-    }
-    if (process.platform === 'darwin') {
-        const r = spawnSync('/bin/ps', ['-o', 'stat=', '-p', String(pid)], {encoding: 'utf8'})
-        if (r.error) throw r.error
-        const state = r.stdout.trim()
-        return state === '' || state.startsWith('Z')
+    // The same reading the reap follows a leftover with, so the two cannot disagree.
+    if (process.platform === 'linux' || process.platform === 'darwin') {
+        const row = process.platform === 'linux' ? linuxSample(pid) : darwinSample(pid)
+        if (row === 'unknown') throw new Error(`the process table would not answer for ${pid}`)
+        return row === 'gone' || row.ended
     }
     if (process.platform !== 'win32') {
         throw new Error(`no zombie-aware process state on ${process.platform}`)

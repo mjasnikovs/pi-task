@@ -374,6 +374,8 @@ describe('runFinalIntegrationGate', () => {
 // held by something it cannot attribute to itself, it must surface a HARNESS
 // diagnosis instead — a bare app FAIL would blame the code for a busy port.
 describe('runFinalIntegrationGate — orphaned-port recovery (run 9 item 3)', () => {
+    // No `bootGraceMs`: both boot scripts here exit the moment they run, so the
+    // shipped grace is never waited out. A boot script that lingers needs its own.
     // A start script that binds a listener on the injected pid's behalf would need a
     // real server; instead we drive the classifier + recovery with an EADDRINUSE
     // start script and injected BootDeps, keeping the test hermetic.
@@ -1469,6 +1471,10 @@ describe('unobservedVerdict — zero observation is UNOBSERVED, never a PASS (IA
     })
 })
 
+// No `bootGraceMs` below except where the grace itself is the subject. These boot
+// children exit at once because their binary is missing, and a grace shortened to
+// keep a test quick is also short enough to beat that exit to the verdict — a 400ms
+// one did, on the windows runner. The shipped default lets the exit win.
 /**
  * A SKIPPED boot check is a verdict, not a silence.
  *
@@ -1481,10 +1487,6 @@ describe('unobservedVerdict — zero observation is UNOBSERVED, never a PASS (IA
 describe('bootSkipVerdict — a discovered boot that never ran is UNOBSERVED (mx5 run 18)', () => {
     /** A served app (hono in deps is what detectsServedApp reads) whose `dev`
      *  script exits 127 inside the chain — a docker-less skip, in miniature. */
-    // No `bootGraceMs` anywhere below, deliberately. The subject is a boot child
-    // that exits at once because its binary is missing, and a grace shortened to
-    // keep a test quick is also short enough to beat that exit to the verdict — a
-    // 400ms one did, on the windows runner. The shipped default lets the exit win.
     const servedSkipPkg = (extra: Record<string, string> = {}) => ({
         dependencies: {hono: '4.12.27'},
         scripts: {test: 'exit 0', build: 'exit 0', dev: 'pi-task-no-such-binary-9f3c', ...extra}

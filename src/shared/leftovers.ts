@@ -35,18 +35,19 @@ export interface Leftovers {
  * `taskkill /F` returns once the tree is dead, and its port free (40 of 40 on the
  * windows runner).
  *
- * `find` is the token scan, injectable because losing a live leftover from it is
- * what the reap has to survive — see the comment on the scan in `trackToken`.
+ * `procs` is the process table the reap works against, injectable because losing a
+ * live leftover from the scan is what the reap has to survive — see the comment on
+ * the hold in `trackToken`.
  */
 export function trackLeftovers(
     platform: NodeJS.Platform,
     base: NodeJS.ProcessEnv,
     graceMs: number,
-    find?: (marker: string) => number[]
+    procs?: Procs
 ): Leftovers {
     if (platform === 'win32') return trackShells(base)
     if (platform === 'linux' || platform === 'darwin') {
-        return trackToken(platform, base, graceMs, find)
+        return trackToken(base, graceMs, procs ?? procsFor(platform))
     }
     return {env: base, reap: () => Promise.resolve()}
 }
@@ -61,114 +62,173 @@ export function system32(...segments: string[]): string {
 
 // ─── linux, darwin: the environment token ───────────────────────────────────
 
-function trackToken(
-    platform: 'linux' | 'darwin',
-    base: NodeJS.ProcessEnv,
-    graceMs: number,
-    scan?: (marker: string) => number[]
-): Leftovers {
+/** A pid's row in the process table. `ended` covers zombies: one has released its
+ *  ports already and only waits to be reaped. */
+export type Sample =
+    | {startedAt: string; ended: boolean}
+    /** No row at all: the process is gone, and its ports with it. */
+    | 'gone'
+    /** The table could not be read. Says nothing about the process. */
+    | 'unknown'
+
+/**
+ * The process table the reap works against. One object, so what the reap needs of
+ * the table stays one dependency however many readings it takes.
+ */
+export interface Procs {
+    /** Pids whose environment carries `marker`. */
+    scan: (marker: string) => number[]
+    /** `pid`'s row, read in one pass: state and start time at the same instant. */
+    sample: (pid: number) => Sample
+    signal: (pid: number, sig: NodeJS.Signals) => void
+}
+
+export function procsFor(platform: 'linux' | 'darwin'): Procs {
+    return {
+        scan: marker =>
+            platform === 'linux' ? linuxPidsWith(marker) : pidsInPsTable(darwinPsTable(), marker),
+        sample: pid => (platform === 'linux' ? linuxSample(pid) : darwinSample(pid)),
+        signal: (pid, sig) => process.kill(pid, sig)
+    }
+}
+
+function trackToken(base: NodeJS.ProcessEnv, graceMs: number, procs: Procs): Leftovers {
     const token = randomUUID()
     const marker = `${LEFTOVER_TOKEN_ENV}=${token}`
-    const defaultScan = (m: string): number[] =>
-        platform === 'linux' ? linuxPidsWith(m) : pidsInPsTable(darwinPsTable(), m)
-    const find = (): number[] => (scan ?? defaultScan)(marker)
-    const endedOf = platform === 'linux' ? linuxEnded : darwinEnded
     return {
         env: {...base, [LEFTOVER_TOKEN_ENV]: token},
         reap: () =>
             new Promise(resolve => {
                 const started = performance.now()
-                let killed = false
-                // Discovery stays by token, so a pid recycled mid-reap is never
-                // signalled. Liveness cannot: a dying process releases its memory —
-                // and with it the token — while it still holds its ports, so the
-                // scan reads it as gone about 9 times in 10. Each pid found is
-                // pinned to its start time and followed in the process table until
-                // that entry is reaped.
-                const held = new Map<number, Held>()
-                const follow = (): void => {
-                    for (const pid of find()) if (!held.has(pid)) held.set(pid, hold(platform, pid))
-                    for (const [pid, h] of held) if (endedOf(h)) held.delete(pid)
+                // Discovery is by token; liveness cannot be. A dying process releases
+                // its memory — and with it the token — while it still holds its ports,
+                // so the scan reads it as gone about 9 times in 10. Each pid found is
+                // pinned to its start time and followed in the process table until its
+                // row is gone.
+                const held = new Map<number, string | undefined>()
+                // The pids this pass could still show to be the ones it found: the
+                // token says so, or their start time does. Nothing else is signalled.
+                const proven = new Set<number>()
+                const termedAt = new Map<number, number>()
+                const killed = new Set<number>()
+                const send = (pid: number, sig: NodeJS.Signals): void => {
+                    try {
+                        procs.signal(pid, sig)
+                    } catch {
+                        // already gone
+                    }
                 }
-                follow()
-                signalEach([...held.keys()], 'SIGTERM')
-                // Each pass waits as long as the scan before it took, so the wait
-                // costs half a core at most and no invented interval.
+                const follow = (): void => {
+                    const seen = new Set(procs.scan(marker))
+                    proven.clear()
+                    for (const pid of new Set([...held.keys(), ...seen])) {
+                        const row = procs.sample(pid)
+                        const pin = nextPin(row, seen.has(pid), held.get(pid))
+                        if (pin === drop) {
+                            held.delete(pid)
+                            continue
+                        }
+                        held.set(pid, pin)
+                        if (seen.has(pid) || row !== 'unknown') proven.add(pid)
+                    }
+                }
+                /**
+                 * Its own grace runs from its own SIGTERM: a leftover discovered late
+                 * has had none of the run's. `last` is the pass the reap gives up on.
+                 */
+                const due = (pid: number, waited: number, last: boolean): Signal | undefined => {
+                    const termed = termedAt.get(pid)
+                    if (termed === undefined) return last ? 'SIGKILL' : 'SIGTERM'
+                    if (killed.has(pid)) return undefined
+                    return last || waited - termed >= graceMs ? 'SIGKILL' : undefined
+                }
+                const signalDue = (waited: number, last: boolean): void => {
+                    for (const pid of held.keys()) {
+                        if (!proven.has(pid)) continue
+                        const sig = due(pid, waited, last)
+                        if (sig === undefined) continue
+                        send(pid, sig)
+                        if (!termedAt.has(pid)) termedAt.set(pid, waited)
+                        if (sig === 'SIGKILL') killed.add(pid)
+                    }
+                }
                 const poll = (): void => {
-                    const scanStart = performance.now()
+                    const passStart = performance.now()
                     follow()
                     const waited = performance.now() - started
                     // A process SIGKILL cannot end (uninterruptible sleep) gets one
-                    // more grace, then the run goes on without it.
-                    if (held.size === 0 || waited >= 2 * graceMs) return resolve()
-                    if (!killed && waited >= graceMs) {
-                        signalEach([...held.keys()], 'SIGKILL')
-                        killed = true
-                    }
-                    setTimeout(poll, performance.now() - scanStart).unref()
+                    // more grace, then the run goes on without it — never before it
+                    // has had that SIGKILL.
+                    const last = waited >= 2 * graceMs
+                    signalDue(waited, last)
+                    if (held.size === 0 || last) return resolve()
+                    // Each pass waits as long as the one before it took, so the wait
+                    // costs half a core at most and no invented interval.
+                    setTimeout(poll, performance.now() - passStart).unref()
                 }
                 poll()
             })
     }
 }
 
-/** A pid under reap, pinned to the process that held it when it was found. */
-interface Held {
-    pid: number
-    /** Absent when the pid was already gone, or its start time unreadable. */
-    startedAt?: string
-}
+type Signal = 'SIGTERM' | 'SIGKILL'
 
-function hold(platform: 'linux' | 'darwin', pid: number): Held {
-    const startedAt = platform === 'linux' ? linuxStartTime(pid) : darwinField(pid, 'lstart=')
-    return startedAt === undefined ? {pid} : {pid, startedAt}
-}
+/** The reap is done with this pid: ended, or no longer provably the one it held. */
+const drop = Symbol('drop')
 
 /**
- * Whether the process `held` names has ended, zombies included: a zombie has already
- * released its ports and only waits to be reaped. A pid whose start time no longer
- * matches belongs to someone else, so the one we held is gone.
+ * The pin a held pid keeps for the next pass. `ours` is the token scan's answer,
+ * and it is proof the pid is ours right now, whoever held it before.
  */
-function linuxEnded(held: Held): boolean {
-    const rest = linuxStatAfterName(held.pid)
-    if (rest === null) return true
-    if (held.startedAt !== undefined && startTimeIn(rest) !== held.startedAt) return true
-    return /^[ZX]/.test(rest)
+function nextPin(
+    row: Sample,
+    ours: boolean,
+    pin: string | undefined
+): string | undefined | typeof drop {
+    if (row === 'unknown') return pin
+    if (row === 'gone' || row.ended) return drop
+    if (ours) return row.startedAt
+    return pin === row.startedAt ? pin : drop
 }
 
-function darwinEnded(held: Held): boolean {
-    const state = darwinField(held.pid, 'state=')
-    if (state === undefined) return true
-    if (held.startedAt !== undefined && darwinField(held.pid, 'lstart=') !== held.startedAt) {
-        return true
-    }
-    return state.startsWith('Z')
-}
-
-/** `/proc/<pid>/stat` from the state char on: the name before it can hold ') Z' itself. */
-function linuxStatAfterName(pid: number): string | null {
-    try {
-        const stat = fs.readFileSync(`/proc/${pid}/stat`, 'utf8')
-        return stat.slice(stat.lastIndexOf(')') + 2)
-    } catch {
-        return null
-    }
+/** The state follows the LAST ')': the name before it can hold ') Z' itself. */
+function statAfterName(stat: string): string {
+    return stat.slice(stat.lastIndexOf(')') + 2)
 }
 
 /** starttime is stat field 22, and `rest` begins at field 3. */
-function startTimeIn(rest: string): string | undefined {
-    return rest.split(' ')[19]
+function startTimeIn(rest: string): string {
+    return rest.split(' ')[19] ?? ''
 }
 
-function linuxStartTime(pid: number): string | undefined {
-    const rest = linuxStatAfterName(pid)
-    return rest === null ? undefined : startTimeIn(rest)
+/** Zombie and dead: the process has released its ports, reaped or not. */
+const ENDED_STATE = /^[ZXx]/
+
+export function linuxSample(pid: number, procRoot = '/proc'): Sample {
+    let stat: string
+    try {
+        stat = fs.readFileSync(path.join(procRoot, String(pid), 'stat'), 'utf8')
+    } catch (e) {
+        // A missing entry is an answer. EACCES, EMFILE and the rest are not.
+        return (e as NodeJS.ErrnoException).code === 'ENOENT' ? 'gone' : 'unknown'
+    }
+    const rest = statAfterName(stat)
+    return {startedAt: startTimeIn(rest), ended: ENDED_STATE.test(rest)}
 }
 
-function darwinField(pid: number, field: string): string | undefined {
-    const r = spawnSync('/bin/ps', ['-o', field, '-p', String(pid)], {encoding: 'utf8'})
-    const out = r.stdout?.trim()
-    return out ? out : undefined
+/** `ps -p` as the sampler runs it, injectable so a failed fork can be tested. */
+export type RunPs = (args: string[]) => {error?: Error; status: number | null; stdout?: string}
+
+const runPs: RunPs = args => spawnSync('/bin/ps', args, {encoding: 'utf8'})
+
+export function darwinSample(pid: number, run: RunPs = runPs): Sample {
+    const r = run(['-o', 'state=,lstart=', '-p', String(pid)])
+    // A fork that failed says nothing about the process. `ps` exits 1 when there is
+    // genuinely no such process, and that is the only empty answer to believe.
+    if (r.error || r.status === null) return 'unknown'
+    const row = /^(\S+)\s+(\S.*)$/.exec(r.stdout?.trim() ?? '')
+    if (row) return {startedAt: row[2]!, ended: row[1]!.startsWith('Z')}
+    return r.status === 0 ? 'unknown' : 'gone'
 }
 
 /** Pids whose environment holds `marker`, read from `<procRoot>/<pid>/environ`. */
@@ -212,19 +272,6 @@ export function pidsInPsTable(table: string, marker: string): number[] {
         .filter(row => row.includes(marker))
         .map(row => Number.parseInt(row, 10))
         .filter(pid => pid > 0)
-}
-
-function signalEach(pids: number[], sig: NodeJS.Signals): number {
-    let sent = 0
-    for (const pid of pids) {
-        try {
-            process.kill(pid, sig)
-            sent++
-        } catch {
-            // already gone
-        }
-    }
-    return sent
 }
 
 // ─── win32: the shells `BASH_ENV` recorded ──────────────────────────────────
