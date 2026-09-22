@@ -36,7 +36,7 @@ Every phase boundary is written to `.pi-tasks/TASK_NNNN.md`, so a task survives 
 pi install npm:@mjasnikovs/pi-task
 ```
 
-> Requires [`pi`](https://www.npmjs.com/package/@earendil-works/pi-coding-agent) (the Earendil coding agent) ≥ 0.80.
+> Requires [`pi`](https://www.npmjs.com/package/@earendil-works/pi-coding-agent) (the Earendil coding agent) ≥ 0.87.
 
 ## Quickstart
 
