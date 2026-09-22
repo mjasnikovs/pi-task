@@ -36,37 +36,49 @@ afterEach(() => {
 })
 
 /**
- * Read a file once it holds `needle`. The appender is fire-and-forget by design —
- * a run must never wait on its own trail — so there is nothing to await.
- *
- * The content is the real signal, not the file: an append opens the file before it
- * writes, so a read that races the open returns "" from a file that exists. A file
- * or a line that never arrives is caught by the suite's own per-test timeout rather
- * than by a sleep guessed here.
+ * Wait until `check` answers. Each pass waits as long as the one before it took, so
+ * the wait costs no core and no interval invented here. What never arrives is caught
+ * by the suite's own per-test timeout.
  */
-async function readWhenWritten(file: string, needle: string): Promise<string> {
+async function settles(check: () => Promise<boolean>): Promise<void> {
     for (;;) {
-        try {
-            const text = await fsp.readFile(file, 'utf8')
-            if (text.includes(needle)) return text
-        } catch {
-            // not created yet
-        }
-        await new Promise(resolve => setImmediate(resolve))
+        const started = performance.now()
+        if (await check()) return
+        await new Promise(resolve => setTimeout(resolve, performance.now() - started))
     }
 }
 
-/** List `dir` once the appender has created it and put something in it. */
-async function listWhenFilled(dir: string): Promise<string[]> {
-    for (;;) {
+/**
+ * Wait for `file` to hold `needle`. The appender is fire-and-forget by design — a run
+ * must never wait on its own trail — so there is nothing to await. This is the wait,
+ * not an assertion: the content is the real signal, since an append opens the file
+ * before it writes and a read that races the open returns "" from a file that exists.
+ */
+async function waitForLine(file: string, needle: string): Promise<void> {
+    await settles(async () => {
         try {
-            const names = await fsp.readdir(dir)
-            if (names.length > 0) return names
+            return (await fsp.readFile(file, 'utf8')).includes(needle)
         } catch {
-            // not created yet
+            return false
         }
-        await new Promise(resolve => setImmediate(resolve))
-    }
+    })
+}
+
+/** List what `dir` holds once the appender has created it and put a match in it. */
+async function listWhenFilled(
+    dir: string,
+    keep: (name: string) => boolean = () => true
+): Promise<string[]> {
+    let names: string[] = []
+    await settles(async () => {
+        try {
+            names = (await fsp.readdir(dir)).filter(keep)
+        } catch {
+            return false
+        }
+        return names.length > 0
+    })
+    return names
 }
 
 describe('path layout', () => {
@@ -179,9 +191,8 @@ describe('the trail leaves the repository', () => {
             const file = runLogPath(cwd, 'verify-debug.log')
             expect(fs.existsSync(path.dirname(file))).toBe(false)
             makeDebugAppender(file)('=== verify start ===')
-            expect(await readWhenWritten(file, '=== verify start ===')).toContain(
-                '=== verify start ==='
-            )
+            await waitForLine(file, '=== verify start ===')
+            expect(fs.existsSync(path.dirname(file))).toBe(true)
         })
     })
 
@@ -204,14 +215,11 @@ describe('the trail leaves the repository', () => {
             const runs = await listWhenFilled(repoStateDir(cwd))
             expect(runs).toHaveLength(1)
             const runDir = stateDir(cwd, runs[0])
-            // The line first: it proves the file is there, so the listing below is
-            // read after the appender created it and not during.
-            expect(
-                await readWhenWritten(path.join(runDir, 'TASK_0001-debug.log'), 'run: start')
-            ).toContain('run: start')
-            expect(fs.readdirSync(runDir).filter(f => f.endsWith('-debug.log'))).toEqual([
-                'TASK_0001-debug.log'
-            ])
+            // Waited for, not listed once: the appender creates the file after the
+            // run it describes has ended, so a listing read now may still be empty.
+            const logs = await listWhenFilled(runDir, f => f.endsWith('-debug.log'))
+            expect(logs).toEqual(['TASK_0001-debug.log'])
+            await waitForLine(path.join(runDir, logs[0]!), 'run: start')
 
             const trail = fs.readdirSync(path.join(cwd, '.pi-tasks'))
             expect(trail.filter(f => f.endsWith('.log'))).toEqual([])

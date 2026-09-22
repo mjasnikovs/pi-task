@@ -4,12 +4,17 @@ import * as fs from 'node:fs'
 import * as path from 'node:path'
 import {
     BASH_ENV_SCRIPT,
+    darwinSample,
     linuxPidsWith,
+    linuxSample,
     parseProcessTable,
     parseShells,
     pidsInPsTable,
+    procsFor,
     startedByShells,
-    trackLeftovers
+    trackLeftovers,
+    type Procs,
+    type Sample
 } from '../../src/shared/leftovers.js'
 import {fakeSystem32} from '../test-utils/fake-reap.js'
 import {testPosix} from '../test-utils/platform.js'
@@ -74,13 +79,19 @@ describe('linux, darwin: reap ends when the leftover is gone', () => {
      */
     testPosix('a leftover that leaves the token scan alive is followed until it dies', async () => {
         let scans = 0
-        const {env, reap} = trackLeftovers(process.platform, process.env, 200, () =>
-            ++scans === 1 ? [server.child.pid!] : []
-        )
+        // Declared before the scan that reads it: a scan run at track time would
+        // otherwise fail as a leftovers bug rather than as this test's ordering.
+        let pid = 0
+        const real = procsFor(process.platform === 'darwin' ? 'darwin' : 'linux')
+        const {env, reap} = trackLeftovers(process.platform, process.env, 200, {
+            ...real,
+            scan: () => (++scans === 1 ? [pid] : [])
+        })
         const server = leftover(
             env,
             `process.on('SIGTERM', () => {}); console.log('up'); ${keepAlive}`
         )
+        pid = server.child.pid!
         try {
             await server.ready
             await reap()
@@ -107,6 +118,134 @@ describe('linux, darwin: reap ends when the leftover is gone', () => {
             } finally {
                 server.child.kill('SIGKILL')
             }
+        }
+    )
+})
+
+describe('linux, darwin: the reap against a process table the test writes', () => {
+    /** Records every signal the reap sends, so what it did is what is asserted. */
+    const fakeProcs = (
+        sent: string[],
+        scan: () => number[],
+        sample: (pid: number) => Sample
+    ): Procs => ({
+        scan,
+        sample,
+        signal: (pid, sig) => {
+            sent.push(`${sig} ${pid}`)
+        }
+    })
+    const graceMs = 20
+    const reapWith = (procs: Procs): Promise<void> =>
+        trackLeftovers('linux', {}, graceMs, procs).reap()
+
+    test('a table that cannot be read is not a process that ended', async () => {
+        const sent: string[] = []
+        await reapWith(
+            fakeProcs(
+                sent,
+                () => [7],
+                () => 'unknown'
+            )
+        )
+        expect(sent).toEqual(['SIGTERM 7', 'SIGKILL 7'])
+    })
+
+    test('a pid whose start time never read is dropped, not killed, once the scan drops it', async () => {
+        const sent: string[] = []
+        let scans = 0
+        await reapWith(
+            fakeProcs(
+                sent,
+                () => (++scans === 1 ? [7] : []),
+                () => (scans === 1 ? 'unknown' : {startedAt: 'A', ended: false})
+            )
+        )
+        expect(sent).toEqual(['SIGTERM 7'])
+    })
+
+    test('a pid the scan still reports is the new leftover, not the old one to drop', async () => {
+        const sent: string[] = []
+        let samples = 0
+        await reapWith(
+            fakeProcs(
+                sent,
+                () => [7],
+                () => ({
+                    startedAt: ++samples === 1 ? 'A' : 'B',
+                    ended: sent.includes('SIGKILL 7')
+                })
+            )
+        )
+        expect(sent).toEqual(['SIGTERM 7', 'SIGKILL 7'])
+    })
+
+    test('a leftover discovered after the grace is still signalled', async () => {
+        const sent: string[] = []
+        await reapWith(
+            fakeProcs(
+                sent,
+                () => (sent.some(s => s.startsWith('SIGKILL')) ? [7, 8] : [7]),
+                pid => ({startedAt: 'A', ended: sent.includes(`SIGKILL ${pid}`)})
+            )
+        )
+        expect(sent).toContain('SIGKILL 8')
+    })
+
+    test('a pass that outlasts the grace does not resolve before the SIGKILL', async () => {
+        const sent: string[] = []
+        let scans = 0
+        // One pass has to straddle both thresholds: under the grace when it starts,
+        // past the give-up when it ends.
+        const spin = (ms: number): void => {
+            const until = performance.now() + ms
+            while (performance.now() < until) {
+                /* the pass itself is the cost under test */
+            }
+        }
+        await reapWith(
+            fakeProcs(
+                sent,
+                () => {
+                    if (++scans > 1) spin(3 * graceMs)
+                    return [7]
+                },
+                () => ({startedAt: 'A', ended: false})
+            )
+        )
+        expect(sent).toEqual(['SIGTERM 7', 'SIGKILL 7'])
+    })
+})
+
+describe("linux, darwin: a pid's row in the process table", () => {
+    test('darwin: a `ps` that failed to run is not a process that ended', () => {
+        expect(darwinSample(7, () => ({error: new Error('spawn EAGAIN'), status: null}))).toBe(
+            'unknown'
+        )
+        expect(darwinSample(7, () => ({status: 1, stdout: ''}))).toBe('gone')
+        const row = 'S     Mon Sep 14 16:34:16 2026'
+        expect(darwinSample(7, () => ({status: 0, stdout: `${row}\n`}))).toEqual({
+            startedAt: 'Mon Sep 14 16:34:16 2026',
+            ended: false
+        })
+        expect(darwinSample(7, () => ({status: 0, stdout: `Z${row.slice(1)}\n`}))).toMatchObject({
+            ended: true
+        })
+    })
+
+    // Root reads a 000 file, so the unreadable half cannot be staged there.
+    test.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
+        'linux: a stat that cannot be read is not a process that ended',
+        () => {
+            const root = tmpDir('fake-proc-stat-')
+            const fields = Array.from({length: 18}, (_, i) => String(i)).join(' ')
+            fs.mkdirSync(path.join(root, '7'))
+            const stat = path.join(root, '7', 'stat')
+            fs.writeFileSync(stat, `7 (node) S ${fields} 99887766 0 0`)
+            expect(linuxSample(7, root)).toEqual({startedAt: '99887766', ended: false})
+            expect(linuxSample(9, root)).toBe('gone')
+            fs.chmodSync(stat, 0o000)
+            expect(linuxSample(7, root)).toBe('unknown')
         }
     )
 })
