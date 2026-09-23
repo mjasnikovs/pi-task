@@ -87,7 +87,13 @@ describe('defersBreakage', () => {
         'Ownership rests with the module maintainer of `teams.ts`.',
         // "Change" the verb is work on an existing test, whatever the tense.
         'a later task should change test/migrate.test.ts',
-        'test/migrate.test.ts will be changed in a follow-up'
+        'test/migrate.test.ts will be changed in a follow-up',
+        // A relative "that" and an adverb "later" come before the verb, and a noun
+        // whose object is the test is still work on the test.
+        'A later task that updates the existing test will handle it.',
+        'The runner will later update the existing test in a follow-up.',
+        'I will defer the update of the existing snapshot test to a later task.',
+        'I will defer the fix for the existing test to a later task.'
     ])('catches: %s', text => {
         expect(defersBreakage(text)).toBe(true)
     })
@@ -118,6 +124,8 @@ describe('defersBreakage', () => {
         'Tests for the new endpoint belong in a separate change.',
         'Integration tests are out of scope for this change.',
         'The e2e tests are deferred to a later fix.',
+        'Integration tests are out of scope for that change.',
+        'Adding tests for the parser is deferred to the next update.',
         'Use option B, leave the existing seed data untouched, and update test/migrate.test.ts so the suite stays green',
         // Weighing an option is not choosing it.
         "IF NOT EXISTS is not in §4, and it would still leave the test's assertions failing",

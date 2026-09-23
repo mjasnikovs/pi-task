@@ -124,13 +124,34 @@ const PHRASES: readonly DeferralPhrase[] = [
     }
 ]
 
+/** Work on a test that already exists — what "a later task should update the test" defers. */
+const REPAIR_WORD =
+    /\b(?:updat(?:e|es|ed|ing)|fix(?:es|ed|ing)?|adjust(?:s|ed|ing)?|amend(?:s|ed|ing)?|correct(?:s|ed|ing)?|repair(?:s|ed|ing)?|chang(?:e|es|ed|ing))\b/gi
+
+const NOUN_FORM = /^(?:updates?|fix(?:es)?|changes?|repairs?)$/i
+
 /**
- * Work on a test that already exists — what "a later task should update the test"
- * defers. After a determiner the word is the noun, "a follow-up change", which
- * names the unit of work and not work on a test.
+ * "That" is a determiner only after a preposition. Elsewhere it is the relative
+ * pronoun of "a task that updates the test", and the verb follows it.
  */
-const REPAIR_VERB =
-    /(?<!\b(?:a|an|the|this|that|same|separate|later|future|subsequent|next|follow[- ]?up)\s+)\b(?:updat(?:e|es|ed|ing)|fix(?:es|ed|ing)?|adjust(?:s|ed|ing)?|amend(?:s|ed|ing)?|correct(?:s|ed|ing)?|repair(?:s|ed|ing)?|chang(?:e|es|ed|ing))\b/i
+const DETERMINER_BEFORE =
+    /(?:\b(?:a|an|the|this|these|those|another|some|same)|\b(?:for|in|into|to|with|of|from|by|on|until)\s+that)\s+(?:(?:same|separate|later|future|subsequent|next|follow[- ]?up)\s+)?$/i
+
+/** The noun still names work on the test when the test is its object: "the fix for the test". */
+const NOUN_OBJECT_AFTER = /^\s+(?:of|for|to|on)\b/i
+
+/** "A follow-up change" names the unit of work, not work on a test. */
+function namesRepair(clause: string): boolean {
+    for (const hit of clause.matchAll(REPAIR_WORD)) {
+        const end = hit.index + hit[0].length
+        const isUnitOfWork =
+            NOUN_FORM.test(hit[0])
+            && DETERMINER_BEFORE.test(clause.slice(0, hit.index))
+            && !NOUN_OBJECT_AFTER.test(clause.slice(end))
+        if (!isUnitOfWork) return true
+    }
+    return false
+}
 
 function aboutACheck(text: string): boolean {
     return TEST_NOUN.test(text) || (BUILD_NOUN.test(text) && FAILURE.test(text))
@@ -182,7 +203,7 @@ export function defersBreakage(answer: string): boolean {
                     if (needs === 'check' && !aboutACheck(clause)) continue
                     if (
                         needs === 'broken-check'
-                        && !(aboutACheck(clause) && (sentenceBreaks || REPAIR_VERB.test(clause)))
+                        && !(aboutACheck(clause) && (sentenceBreaks || namesRepair(clause)))
                     )
                         continue
                     if (needs === 'breakage' && !sentenceBreaks) continue
