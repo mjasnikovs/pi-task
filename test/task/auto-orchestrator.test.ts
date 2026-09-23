@@ -3726,7 +3726,7 @@ function lintHealth(red: boolean, cwd: string): HealthOutcome {
                 ok: true,
                 reason: 'node: static checks passed',
                 ecosystem: 'node',
-                commands: [],
+                commands: [{cmd: LINT, outcome: 'pass', exitCode: 0}],
                 output: ''
             }
 }
@@ -3769,7 +3769,9 @@ function healthRun(plan: {red: (title: string) => boolean | undefined}): {
         },
         verify: (_c, cwd) => {
             const after = lintHealth(treeRed, cwd)
-            if (after.ok) return Promise.resolve({ok: true})
+            if (after.ok) {
+                return Promise.resolve({ok: true, greenHealth: after.commands.map(c => c.cmd)})
+            }
             const delta = classifyHealthDelta(baselines.get(current) ?? null, after)
             if (delta === 'regressed') {
                 return Promise.resolve({
@@ -3980,7 +3982,9 @@ function suiteRun(
         },
         verify: () => {
             const after = suiteHealth(treeRed)
-            if (after.ok) return Promise.resolve({ok: true})
+            if (after.ok) {
+                return Promise.resolve({ok: true, greenHealth: after.commands.map(c => c.cmd)})
+            }
             if (classifyHealthDelta(baselines.get(current) ?? null, after) === 'regressed') {
                 return Promise.resolve({
                     ok: false,

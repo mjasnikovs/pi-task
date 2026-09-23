@@ -124,9 +124,13 @@ const PHRASES: readonly DeferralPhrase[] = [
     }
 ]
 
-/** Work on a test that already exists — what "a later task should update the test" defers. */
+/**
+ * Work on a test that already exists — what "a later task should update the test"
+ * defers. After a determiner the word is the noun, "a follow-up change", which
+ * names the unit of work and not work on a test.
+ */
 const REPAIR_VERB =
-    /\b(?:updat(?:e|es|ed|ing)|fix(?:es|ed|ing)?|adjust(?:s|ed|ing)?|amend(?:s|ed|ing)?|correct(?:s|ed|ing)?|repair(?:s|ed|ing)?|chang(?:e|es|ed|ing))\b/i
+    /(?<!\b(?:a|an|the|this|that|same|separate|later|future|subsequent|next|follow[- ]?up)\s+)\b(?:updat(?:e|es|ed|ing)|fix(?:es|ed|ing)?|adjust(?:s|ed|ing)?|amend(?:s|ed|ing)?|correct(?:s|ed|ing)?|repair(?:s|ed|ing)?|chang(?:e|es|ed|ing))\b/i
 
 function aboutACheck(text: string): boolean {
     return TEST_NOUN.test(text) || (BUILD_NOUN.test(text) && FAILURE.test(text))

@@ -2327,7 +2327,7 @@ describe('health repair — the gate half (health-repair.ts)', () => {
             const trail: string[] = []
             const closes: string[][] = []
             const deps = makeDeps({
-                verify: () => Promise.resolve({ok: true}),
+                verify: () => Promise.resolve({ok: true, greenHealth: ['bun run lint']}),
                 closeHealthDebts: (_c, command, resolvedBy) => {
                     closes.push([command, resolvedBy])
                     return Promise.resolve([{taskId: 'TASK_0006', reason: 'r'}])
@@ -2393,7 +2393,8 @@ describe('health repair — the gate half (health-repair.ts)', () => {
                     Promise.resolve({
                         ok: true,
                         inheritedHealth:
-                            'test suite: `bun run test` exited 1 — already failing before this task'
+                            'test suite: `bun run test` exited 1 — already failing before this task',
+                        greenHealth: ['bun run lint']
                     }),
                 closeHealthDebts: (_c, command) => {
                     closes.push(command)
@@ -2409,6 +2410,47 @@ describe('health repair — the gate half (health-repair.ts)', () => {
                 })
             )
             expect(closes).toEqual(['bun run lint'])
+        })
+    })
+
+    // Only a check seen passing is repaired. A suite still empty fails nothing
+    // and is named in no inherited red, and a verdict that ran no health check
+    // saw nothing at all.
+    test.each([
+        [
+            'a still-empty suite beside an inherited lint red',
+            {
+                ok: true as const,
+                inheritedHealth:
+                    'repo health: `bun run lint` exited 1 — already failing before this task',
+                greenHealth: ['tsc --noEmit']
+            }
+        ],
+        [
+            'a still-empty suite in an otherwise green repo',
+            {ok: true as const, greenHealth: ['bun run lint']}
+        ],
+        ['a verdict that ran no health check', {ok: true as const}]
+    ])('a repair whose own check was not seen passing closes nothing: %s', async (_name, pass) => {
+        await withTmpTaskDir(async dir => {
+            const {ctx} = makeFakeCtx(dir)
+            let closes = 0
+            const deps = makeDeps({
+                verify: () => Promise.resolve(pass),
+                closeHealthDebts: () => {
+                    closes += 1
+                    return Promise.resolve([])
+                }
+            })
+            await runGatesForTask(
+                ctx,
+                deps,
+                baseParams({
+                    cwd: dir,
+                    title: 'repair `bun run test`: exits ? (no task in this run owns it)'
+                })
+            )
+            expect(closes).toBe(0)
         })
     })
 

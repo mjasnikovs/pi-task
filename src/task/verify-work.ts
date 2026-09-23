@@ -93,6 +93,8 @@ export interface VerifyPass {
     unobserved?: undefined
     crossTaskDeletions?: undefined
     inheritedHealth?: string
+    /** The health commands this verdict saw pass. Absent when none ran. */
+    greenHealth?: string[]
     health?: undefined
     probes?: ProbeFindings
 }
@@ -123,6 +125,7 @@ export interface VerifyFail {
      *  then ships in the next commit and the final gate must re-check it. */
     crossTaskDeletions?: CrossTaskDeletion[]
     inheritedHealth?: string
+    greenHealth?: undefined
     /** The health result behind a `repo-health` FAIL: which command, and what its
      *  output named. What an ACCEPT of this FAIL hands to the repair channel.
      *  `reason` describes what REGRESSED, which is not what the check itself said:
@@ -1268,9 +1271,11 @@ export async function runWorkVerification(deps: VerificationDeps): Promise<Verif
     // finding about the task's OWN work.
     const pre: PrecomputedProbes = {repoHealth: []}
     let inheritedHealth: string | undefined
+    let greenHealth: string[] | undefined
     if (deps.repoHealth) {
         stage('repo health')
         const h = await deps.repoHealth()
+        greenHealth = (h.commands ?? []).filter(c => c.outcome === 'pass').map(c => c.cmd)
         // `ok` is not the whole verdict: a suite this tree no longer finds observes
         // nothing, so nothing fails, and only the differential sees it went away.
         // Establishing a baseline can cost a worktree health run, so it is asked for
@@ -1319,6 +1324,7 @@ export async function runWorkVerification(deps: VerificationDeps): Promise<Verif
         }
     }
     const inherited = inheritedHealth === undefined ? {} : {inheritedHealth}
+    const green = greenHealth === undefined ? {} : {greenHealth}
     if (!deps.spec || deps.spec.trim().length === 0) {
         return {ok: true, reason: 'no spec to verify', ...inherited}
     }
@@ -1425,7 +1431,7 @@ export async function runWorkVerification(deps: VerificationDeps): Promise<Verif
             }
         }
         const verdict = parseVerifyVerdict(text)
-        if (verdict.pass) return {ok: true, ...inherited, ...probed}
+        if (verdict.pass) return {ok: true, ...inherited, ...green, ...probed}
         if (verdict.detail === 'no verdict emitted' && attempt === 1) continue
         // Structured cross-task deletion findings ride on every FAIL outcome: if the
         // human ACCEPTs the failing artifact, the deletions ship in the next commit

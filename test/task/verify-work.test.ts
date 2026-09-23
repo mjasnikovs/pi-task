@@ -1151,6 +1151,76 @@ describe('runWorkVerification', () => {
             expect(out.ok).toBe(true)
         })
 
+        // A pass says which checks it saw pass. A skip observed nothing, so a
+        // suite still empty is not green, whatever the verdict.
+        test('a pass names the health commands it saw pass, never a skipped one', async () => {
+            const out = await runWorkVerification({
+                cwd: '/x',
+                spec: 'GOAL\nx',
+                repoHealth: async () => ({
+                    ok: false,
+                    reason: '`bun run lint` exited 1',
+                    ecosystem: 'package.json',
+                    output: '',
+                    commands: [
+                        {
+                            cmd: 'bun run lint',
+                            outcome: 'fail' as const,
+                            exitCode: 1,
+                            kind: 'static' as const
+                        },
+                        {
+                            cmd: 'tsc --noEmit',
+                            outcome: 'pass' as const,
+                            exitCode: 0,
+                            kind: 'static' as const
+                        },
+                        {
+                            cmd: 'bun run test',
+                            outcome: 'skip' as const,
+                            exitCode: null,
+                            kind: 'test' as const,
+                            gap: 'empty-suite' as const
+                        }
+                    ]
+                }),
+                healthBaseline: async () => ({
+                    at: '2026-09-23T00:00:00.000Z',
+                    treeHash: 'abc',
+                    outcome: {
+                        ok: false,
+                        reason: '`bun run lint` exited 1',
+                        ecosystem: 'package.json',
+                        output: '',
+                        commands: [
+                            {
+                                cmd: 'bun run lint',
+                                outcome: 'fail' as const,
+                                exitCode: 1,
+                                kind: 'static' as const
+                            },
+                            {
+                                cmd: 'tsc --noEmit',
+                                outcome: 'pass' as const,
+                                exitCode: 0,
+                                kind: 'static' as const
+                            },
+                            {
+                                cmd: 'bun run test',
+                                outcome: 'skip' as const,
+                                exitCode: null,
+                                kind: 'test' as const,
+                                gap: 'empty-suite' as const
+                            }
+                        ]
+                    }
+                }),
+                runChild: async () => 'WORK-VERIFIED: PASS'
+            })
+            expect(out.ok).toBe(true)
+            expect(out.greenHealth).toEqual(['tsc --noEmit'])
+        })
+
         test('inherited health rides on a FAIL outcome too', async () => {
             const out = await runWorkVerification({
                 cwd: '/x',
