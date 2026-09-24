@@ -43,7 +43,7 @@ describe('impl-widget controller', () => {
         const {handlers} = fakePi()
         const {ctx, widgets} = fakeCtx({tokens: 48_000, contextWindow: 200_000, percent: 24})
 
-        armImplWidget({taskId: 'TASK_0007', title: 'Add dark mode'}, {oneShot: true})
+        armImplWidget({taskId: 'TASK_0007', title: 'Add dark mode'})
         handlers.get('agent_start')!({}, ctx)
 
         const last = widgets.at(-1)!
@@ -58,7 +58,7 @@ describe('impl-widget controller', () => {
         const {handlers} = fakePi()
         const {ctx, widgets} = fakeCtx({tokens: 1, contextWindow: 200_000, percent: 0})
 
-        armImplWidget({taskId: 'TASK_0007', title: 'demo'}, {oneShot: true})
+        armImplWidget({taskId: 'TASK_0007', title: 'demo'})
         handlers.get('agent_start')!({}, ctx) // startTimer renders once immediately
         expect(widgets.at(-1)).toHaveLength(2)
         handlers.get('tool_execution_start')!(
@@ -71,26 +71,11 @@ describe('impl-widget controller', () => {
         expect(widgets.at(-1)).toContain('↳ read src/index.ts')
     })
 
-    test('one-shot: agent_end clears the widget and disarms (no re-show)', () => {
+    test('agent_end hides but stays armed, so a retry or recovery turn re-shows it', () => {
         const {handlers} = fakePi()
         const {ctx, widgets} = fakeCtx({tokens: 1, contextWindow: 200_000, percent: 0})
 
-        armImplWidget({taskId: 'TASK_0007', title: 'demo'}, {oneShot: true})
-        handlers.get('agent_start')!({}, ctx)
-        handlers.get('agent_end')!({}, ctx)
-        expect(widgets.at(-1)).toBeUndefined()
-
-        // A later, unrelated turn must NOT bring the impl widget back.
-        widgets.length = 0
-        handlers.get('agent_start')!({}, ctx)
-        expect(widgets).toHaveLength(0)
-    })
-
-    test('awaited (sticky): agent_end hides but stays armed so the next turn re-shows', () => {
-        const {handlers} = fakePi()
-        const {ctx, widgets} = fakeCtx({tokens: 1, contextWindow: 200_000, percent: 0})
-
-        armImplWidget({taskId: 'TASK_0007', title: 'demo'}, {oneShot: false})
+        armImplWidget({taskId: 'TASK_0007', title: 'demo'})
         handlers.get('agent_start')!({}, ctx)
         handlers.get('agent_end')!({}, ctx)
         expect(widgets.at(-1)).toBeUndefined()
@@ -100,7 +85,7 @@ describe('impl-widget controller', () => {
         handlers.get('agent_start')!({}, ctx)
         expect(widgets.at(-1)).toBeDefined()
 
-        // Only an explicit disarm tears it down for good.
+        // Only the bracket's disarm tears it down for good.
         disarmImplWidget()
         widgets.length = 0
         handlers.get('agent_start')!({}, ctx)
@@ -111,7 +96,7 @@ describe('impl-widget controller', () => {
         const {handlers} = fakePi()
         const {ctx, widgets} = fakeCtx({tokens: null, contextWindow: 200_000, percent: null})
 
-        armImplWidget({taskId: 'TASK_0007', title: 'demo'}, {oneShot: true})
+        armImplWidget({taskId: 'TASK_0007', title: 'demo'})
         handlers.get('agent_start')!({}, ctx)
 
         const last = widgets.at(-1)!

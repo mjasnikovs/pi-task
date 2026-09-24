@@ -40,7 +40,7 @@
  *                  blind re-send of a half-executed turn).
  */
 
-import type {TimerHandle} from './command-watchdog.js'
+import {WATCHDOG_CANCEL_MARKER, type TimerHandle} from './command-watchdog.js'
 
 export type {TimerHandle}
 
@@ -221,19 +221,17 @@ export function streamStallCause(idleMs: number): string {
 
 /**
  * MAIN-SESSION reminder, delivered as a follow-up turn after ctx.abort() ended the
- * hung turn. Carries the shared WATCHDOG_CANCEL_MARKER so steerUntilDone
- * recognises it as a watchdog recovery rather than a human ESC (see
- * task/command-watchdog.ts) — one marker, one abort channel.
+ * hung turn.
  *
  * Idempotent resume, not a re-send: the aborted turn's tool calls and their
  * results are already in the transcript, so the model is told to CONTINUE from
  * what is recorded. Re-issuing the turn wholesale would re-run tool calls that
  * already ran.
  */
-export function streamStallReminder(idleMs: number, marker: string): string {
+export function streamStallReminder(idleMs: number): string {
     return (
         `[SYSTEM] The model stream produced no events for ${minutes(idleMs)} — the response `
-        + `appeared to hang, so the turn ${marker} `
+        + `appeared to hang, so the turn ${WATCHDOG_CANCEL_MARKER} `
         + `Nothing was reported as failed and no error was raised: the stream simply went `
         + `silent, so any work the turn had ALREADY completed (tool calls and their results) `
         + `is still recorded above and must NOT be repeated. Continue from that recorded `

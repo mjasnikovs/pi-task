@@ -19,17 +19,16 @@ import {makeFakeCtx, assistantEntry, compactionEntry, userEntry} from '../test-u
 
 const e = (x: unknown): SessionEntryLike => x as SessionEntryLike
 
-/** Replay the run's `agent_end` through the tracker, as pi emits it. */
-function endRun(entry: unknown, signalAborted: boolean): void {
-    let onAgentEnd: ((event: unknown, ctx: unknown) => void) | undefined
+/** Replay a run's end through the tracker, as pi emits it. An aborted run breaks
+ *  out before `agent_before_settle`. */
+function endRun(entry: unknown, aborted: boolean): void {
+    const handlers = new Map<string, (event: unknown) => void>()
     registerRunAbortTracker({
-        on: (name: string, fn: (event: unknown, ctx: unknown) => void) => {
-            if (name === 'agent_end') onAgentEnd = fn
-        }
+        on: (name: string, fn: (event: unknown) => void) => handlers.set(name, fn)
     } as never)
-    const controller = new AbortController()
-    if (signalAborted) controller.abort()
-    onAgentEnd!({messages: [e(entry).message]}, {signal: controller.signal})
+    handlers.get('agent_end')!({messages: [e(entry).message]})
+    if (!aborted) handlers.get('agent_before_settle')!({})
+    handlers.get('agent_settled')!({})
 }
 
 describe('classifyTurnEnd', () => {
@@ -116,6 +115,21 @@ describe('an abort that pi recorded as an error', () => {
         endRun(entry, false)
         expect(classifyTurnEnd([e(entry)])).toBe('error')
         expect(turnErrorMessage([e(entry)])).toBe('This operation was aborted')
+    })
+
+    test('a run that went on to settle cleanly after a later loop is not an abort', () => {
+        const first = abortedDuringTool()
+        const handlers = new Map<string, (event: unknown) => void>()
+        registerRunAbortTracker({
+            on: (name: string, fn: (event: unknown) => void) => handlers.set(name, fn)
+        } as never)
+        handlers.get('agent_end')!({messages: [e(first).message]})
+        const retried = assistantEntry('stop')
+        handlers.get('agent_end')!({messages: [e(retried).message]})
+        handlers.get('agent_before_settle')!({})
+        handlers.get('agent_settled')!({})
+        expect(classifyTurnEnd([e(first)])).toBe('error')
+        expect(classifyTurnEnd([e(retried)])).toBe('stop')
     })
 
     test('a human ESC during a tool reaches the steer prompt, not a failure', async () => {

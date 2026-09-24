@@ -42,20 +42,33 @@ const isAssistant = (e: SessionEntryLike): boolean =>
  * Assistant messages that ended under an aborted run. stopReason cannot say so on
  * its own: an abort that lands during a tool or a pre-request compaction fails the
  * NEXT request's setup, and pi-ai records that as "error" ("This operation was
- * aborted"). The run's own signal is the fact.
+ * aborted"). An ESC during a retry backoff or a post-run compaction lands after
+ * the message was recorded and changes nothing in it.
  */
 const endedUnderAbort = new WeakSet<object>()
 
 /**
- * Read at `agent_end`, not `message_end`: a `message_end` handler sees the copy an
- * earlier extension returned, while pi copies that into the original object and
- * stores the original.
+ * An abort breaks out of pi's run before `agent_before_settle`, which every
+ * completed run reaches. A run that settles without it was aborted, wherever
+ * between its loops the abort landed.
+ *
+ * The message is taken at `agent_end`, not `message_end`: a `message_end` handler
+ * sees the copy an earlier extension returned, while pi copies that into the
+ * original object and stores the original.
  */
 export function registerRunAbortTracker(pi: ExtensionAPI): void {
-    pi.on('agent_end', (event, ctx) => {
-        if (ctx.signal?.aborted !== true) return
-        const last = event.messages.findLast(m => m.role === 'assistant')
-        if (last) endedUnderAbort.add(last)
+    let lastAssistant: object | undefined
+    let settlingClean = false
+    pi.on('agent_end', event => {
+        lastAssistant = event.messages.findLast(m => m.role === 'assistant')
+        settlingClean = false
+    })
+    pi.on('agent_before_settle', () => {
+        settlingClean = true
+    })
+    pi.on('agent_settled', () => {
+        if (!settlingClean && lastAssistant) endedUnderAbort.add(lastAssistant)
+        lastAssistant = undefined
     })
 }
 

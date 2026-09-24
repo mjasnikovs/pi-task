@@ -15,8 +15,6 @@
 import * as fsp from 'node:fs/promises'
 import * as path from 'node:path'
 import type {ExtensionAPI} from '@earendil-works/pi-coding-agent'
-import {notifyRun} from '../remote/bridge.js'
-import {recoveryTurnPending} from './recovery-turn.js'
 import {tasksDir} from './task-io.js'
 import {TASKS_DIR_NAME} from './task-types.js'
 
@@ -63,7 +61,6 @@ export function taskDirRestoredNotice(who: string, names: readonly string[]): st
 interface Custody {
     cwd: string
     snapshot: TaskDirSnapshot
-    oneShot: boolean
 }
 
 /** The implementation turn's custody. One slot: one task runs at a time. */
@@ -76,15 +73,11 @@ async function release(custody: Custody): Promise<string[]> {
 }
 
 /**
- * Snapshot before the turn can start, replacing any custody still held.
- * `oneShot` means the settle ends it; otherwise the returned release does, and
- * it never releases a custody taken since.
+ * Snapshot before the turn can start, replacing any custody still held. The
+ * returned release never releases a custody taken since.
  */
-export async function takeTaskDirCustody(
-    cwd: string,
-    opts: {oneShot: boolean}
-): Promise<() => Promise<string[]>> {
-    const custody: Custody = {cwd, snapshot: await snapshotTaskDir(cwd), oneShot: opts.oneShot}
+export async function takeTaskDirCustody(cwd: string): Promise<() => Promise<string[]>> {
+    const custody: Custody = {cwd, snapshot: await snapshotTaskDir(cwd)}
     held = custody
     return () => release(custody)
 }
@@ -98,17 +91,7 @@ export function taskDirCustodyHeld(): boolean {
     return held !== null
 }
 
-/**
- * pi awaits these handlers before it wakes a command waiting for idle, so a
- * one-shot restore finishes before the next run writes anything.
- */
 export function registerTaskDirCustody(pi: ExtensionAPI): void {
-    pi.on('agent_settled', async (_event, ctx) => {
-        if (!held?.oneShot || recoveryTurnPending()) return
-        const restored = await releaseTaskDirCustody()
-        if (restored.length === 0) return
-        notifyRun(ctx, taskDirRestoredNotice('The implementation turn', restored), 'warning')
-    })
     // Dropped, not restored: a snapshot this old would revert the next run's writes.
     pi.on('session_shutdown', () => {
         held = null

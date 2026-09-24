@@ -634,8 +634,8 @@ export class TaskRunner {
     private async _deliverSpec(spec: string): Promise<void> {
         // Keep the rich status block alive across the implementation turn (the phase
         // widget was disposed at handoff). Awaited (/task-auto) stays armed across all
-        // sub-turns and is disarmed here; fire-and-forget (/task) arms one-shot and its
-        // own agent_end disarms it after the single turn.
+        // sub-turns and is disarmed here; fire-and-forget (/task) arms one-shot and the
+        // bracket ends it once the turn and any recovery turn are over.
         const meta = {
             taskId: this._widgetState.taskId,
             title: this._widgetState.title,

@@ -200,14 +200,14 @@ describe('messages', () => {
     // that scan finds nothing, so an unattended run cannot tell a watchdog
     // recovery from a stall it should give up on.
     test('the main-session reminder carries the shared watchdog marker', () => {
-        const msg = streamStallReminder(600_000, WATCHDOG_CANCEL_MARKER)
+        const msg = streamStallReminder(600_000)
         expect(msg).toContain(WATCHDOG_CANCEL_MARKER)
         expect(msg).toContain('10 minutes')
     })
 
     // Idempotent resume: the dead turn's tool calls are already in the transcript.
     test('the reminder tells the model to continue, not to redo completed work', () => {
-        const msg = streamStallReminder(600_000, WATCHDOG_CANCEL_MARKER)
+        const msg = streamStallReminder(600_000)
         expect(msg).toMatch(/must NOT be repeated/)
         expect(msg).toMatch(/Continue from that recorded state/)
     })

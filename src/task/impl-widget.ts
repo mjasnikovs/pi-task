@@ -37,7 +37,6 @@ import {
     type ImplState
 } from './widget.js'
 import {setTaskWidget} from '../remote/session-state.js'
-import {recoveryTurnPending} from './recovery-turn.js'
 
 export interface ImplWidgetMeta {
     taskId: string
@@ -47,7 +46,6 @@ export interface ImplWidgetMeta {
 
 interface ArmedState {
     meta: ImplWidgetMeta
-    oneShot: boolean
     startedAt: number
 }
 
@@ -115,17 +113,14 @@ function formatToolLine(toolName: string, args: unknown): string {
     return `${toolName}${detail}`
 }
 
-/**
- * Arm the implementation widget just before the spec is handed off. `oneShot`
- * true (fire-and-forget /task) lets `agent_end` disarm it after the single turn;
- * false (awaited /task-auto) keeps it armed until `disarmImplWidget` is called.
- */
-export function armImplWidget(meta: ImplWidgetMeta, opts: {oneShot: boolean}): void {
-    armed = {meta, oneShot: opts.oneShot, startedAt: Date.now()}
+/** Arm the implementation widget just before the spec is handed off. The
+ *  implementation-scope bracket disarms it when the run is over. */
+export function armImplWidget(meta: ImplWidgetMeta): void {
+    armed = {meta, startedAt: Date.now()}
     lastLine = undefined
 }
 
-/** Tear down the widget and clear the armed slot (sticky/awaited path). */
+/** Tear down the widget and clear the armed slot. */
 export function disarmImplWidget(): void {
     stopTimer()
     clearWidget()
@@ -156,17 +151,11 @@ export function setupImplWidget(pi: ExtensionAPI): void {
         lastLine = formatToolLine(event.toolName, event.args)
     })
 
+    // Hidden, not disarmed: a retry, compaction or recovery turn of the same run
+    // starts again and shows it.
     pi.on('agent_end', (_event, _ctx) => {
         if (!armed) return
         stopTimer()
         clearWidget()
-        // Fire-and-forget /task: the single impl turn is over, so disarm. Awaited
-        // /task-auto leaves the slot armed so the next compaction-resume / steer
-        // turn re-shows it; the caller disarms when the phase truly settles.
-        if (armed.oneShot && !recoveryTurnPending()) {
-            armed = null
-            activeCtx = null
-            lastLine = undefined
-        }
     })
 }

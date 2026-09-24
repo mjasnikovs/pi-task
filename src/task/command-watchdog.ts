@@ -45,7 +45,6 @@ export {
     commandTimeoutHint,
     realTimerDeps,
     reminderMessage,
-    WATCHDOG_CANCEL_MARKER,
     type TimerHandle,
     type WatchdogDeps
 } from '../shared/command-watchdog.js'

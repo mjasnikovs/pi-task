@@ -28,21 +28,17 @@ function repo(): {cwd: string; dir: string; read: (name: string) => string} {
 
 function fakePi(): {
     pi: ExtensionAPI
-    emit: (name: string, ctx?: unknown) => Promise<unknown>
-    notices: string[]
+    emit: (name: string) => Promise<unknown>
 } {
-    const handlers = new Map<string, (e: unknown, ctx: unknown) => unknown>()
-    const notices: string[] = []
-    const ctx = {ui: {notify: (m: string) => notices.push(m)}}
+    const handlers = new Map<string, (e: unknown) => unknown>()
     const pi = {
-        on: (name: string, fn: (e: unknown, ctx: unknown) => unknown) => {
+        on: (name: string, fn: (e: unknown) => unknown) => {
             handlers.set(name, fn)
         }
     } as unknown as ExtensionAPI
     return {
         pi,
-        emit: async name => handlers.get(name)?.({type: name}, ctx),
-        notices
+        emit: async name => handlers.get(name)?.({type: name})
     }
 }
 
@@ -120,15 +116,10 @@ describe('restoreTaskDir', () => {
 })
 
 describe('implementation-turn custody', () => {
-    test('an awaited turn is restored on release, not on each settle', async () => {
+    test('a turn is restored on release, and only then', async () => {
         const r = repo()
-        const f = fakePi()
-        registerTaskDirCustody(f.pi)
-        await takeTaskDirCustody(r.cwd, {oneShot: false})
+        await takeTaskDirCustody(r.cwd)
         fs.writeFileSync(path.join(r.dir, AUTO), REPORT)
-
-        // A steer or resume turn settles inside an awaited run.
-        await f.emit('agent_settled')
         expect(r.read(AUTO)).toBe(REPORT)
         expect(taskDirCustodyHeld()).toBe(true)
 
@@ -137,47 +128,25 @@ describe('implementation-turn custody', () => {
         expect(taskDirCustodyHeld()).toBe(false)
     })
 
-    test('a one-shot turn is restored when it settles, and the user is told', async () => {
-        const r = repo()
-        const f = fakePi()
-        registerTaskDirCustody(f.pi)
-        await takeTaskDirCustody(r.cwd, {oneShot: true})
-        fs.writeFileSync(path.join(r.dir, AUTO), REPORT)
-
-        await f.emit('agent_settled')
-        expect(r.read(AUTO)).toBe(HOST)
-        expect(taskDirCustodyHeld()).toBe(false)
-        expect(f.notices.join('\n')).toContain(`.pi-tasks/${AUTO}`)
-    })
-
-    test('a settle with nothing changed says nothing', async () => {
-        const r = repo()
-        const f = fakePi()
-        registerTaskDirCustody(f.pi)
-        await takeTaskDirCustody(r.cwd, {oneShot: true})
-        await f.emit('agent_settled')
-        expect(f.notices).toEqual([])
-    })
-
     test('a shutdown drops custody and touches no file', async () => {
         // A custody that outlived its turn would revert the next run's writes.
         const r = repo()
         const f = fakePi()
         registerTaskDirCustody(f.pi)
-        await takeTaskDirCustody(r.cwd, {oneShot: true})
+        await takeTaskDirCustody(r.cwd)
         fs.writeFileSync(path.join(r.dir, AUTO), REPORT)
 
         await f.emit('session_shutdown')
         expect(taskDirCustodyHeld()).toBe(false)
-        await f.emit('agent_settled')
+        expect(await releaseTaskDirCustody()).toEqual([])
         expect(r.read(AUTO)).toBe(REPORT)
     })
 
     test('taking custody again replaces the earlier snapshot', async () => {
         const r = repo()
-        await takeTaskDirCustody(r.cwd, {oneShot: false})
+        await takeTaskDirCustody(r.cwd)
         fs.writeFileSync(path.join(r.dir, AUTO), REPORT)
-        await takeTaskDirCustody(r.cwd, {oneShot: false})
+        await takeTaskDirCustody(r.cwd)
 
         expect(await releaseTaskDirCustody()).toEqual([])
         expect(r.read(AUTO)).toBe(REPORT)

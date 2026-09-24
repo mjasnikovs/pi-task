@@ -296,7 +296,7 @@ describe('registerCommandWatchdog', () => {
         // Sent while the aborted run winds down, pi strands it in the follow-up queue.
         expect(sent).toEqual([])
         const recovery = recoveryTurns()
-        recovery.settle()
+        await recovery.settle()
         expect(recovery.sent).toEqual([reminderMessage('bash', CEILING_MS)])
     })
 

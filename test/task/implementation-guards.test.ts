@@ -7,6 +7,8 @@ import {
     registerImplementationGuards
 } from '../../src/task/implementation-guards.js'
 import {LOOP_THRESHOLD, MAX_LOOP_RESTARTS} from '../../src/task/loop-detector.js'
+import {queueRecoveryTurn} from '../../src/task/recovery-turn.js'
+import {recoveryTurns} from '../test-utils/recovery-turns.js'
 
 interface Block {
     block?: boolean
@@ -43,10 +45,10 @@ const write = (path: string, content: string): unknown => ({
     input: {path, content}
 })
 
-const armed = (oneShot = true): ReturnType<typeof fakePi> => {
+const armed = (): ReturnType<typeof fakePi> => {
     const f = fakePi()
     registerImplementationGuards(f.pi)
-    armImplementationGuard({oneShot})
+    armImplementationGuard()
     return f
 }
 
@@ -60,13 +62,16 @@ function verdictsFor(f: ReturnType<typeof fakePi>, call: unknown, times: number)
     return out
 }
 
-afterEach(() => disarmImplementationGuard())
+afterEach(() => {
+    disarmImplementationGuard()
+    recoveryTurns().shutdown()
+})
 
 describe('registerImplementationGuards', () => {
     test('subscribes to exactly the events it acts on', () => {
         const f = fakePi()
         registerImplementationGuards(f.pi)
-        expect(f.names()).toEqual(['agent_settled', 'session_shutdown', 'tool_call'])
+        expect(f.names()).toEqual(['session_shutdown', 'tool_call'])
     })
 
     test('is inert until armed — an unarmed session is untouched', () => {
@@ -283,37 +288,54 @@ describe('lifecycle', () => {
     /**
      * `agent_end` also fires for every auto-retry and every threshold compaction —
      * pi drives those with agent.continue(), each a fresh agent loop. The measured
-     * runaway compacted 18 times inside its turn, so disarming there would have
-     * retired the guard after the first ~375 of its 6,760 calls.
+     * runaway compacted 18 times inside its turn, so a reset there would have
+     * wiped its counts after the first ~375 of its 6,760 calls.
      */
-    test('agent_end is not the boundary — only agent_settled disarms', () => {
+    test('agent_end is not the boundary: the counts carry across it', () => {
         const f = armed()
-        expect(f.emit('agent_end')).toBeUndefined()
-        expect(implementationGuardArmed()).toBe(true)
-    })
-
-    test('a one-shot turn disarms itself once the run settles', () => {
-        const f = armed()
-        expect(implementationGuardArmed()).toBe(true)
-        f.emit('agent_settled')
-        expect(implementationGuardArmed()).toBe(false)
-    })
-
-    test('an awaited run stays armed across turns but starts each one clean', () => {
-        const f = armed(false)
         const cmd = bash('bun test')
         for (let i = 0; i < LOOP_THRESHOLD - 1; i++) f.emit('tool_call', cmd)
-        f.emit('agent_settled')
+        f.emit('agent_end')
+        expect(f.emit('tool_call', cmd)?.block).toBe(true)
+    })
+
+    test('an armed guard starts each turn clean once the turn is over', async () => {
+        const f = armed()
+        const r = recoveryTurns()
+        const cmd = bash('bun test')
+        for (let i = 0; i < LOOP_THRESHOLD - 1; i++) f.emit('tool_call', cmd)
+        await r.settle()
         expect(implementationGuardArmed()).toBe(true)
         // The previous turn's strikes must not carry: this is call 1 of a new turn.
         expect(f.emit('tool_call', cmd)).toBeUndefined()
     })
 
-    test('an awaited run clears a spent termination when it settles', () => {
-        const f = armed(false)
+    test('a spent termination is cleared once the turn is over', async () => {
+        const f = armed()
+        const r = recoveryTurns()
         verdictsFor(f, bash('bun test'), LOOP_THRESHOLD + MAX_LOOP_RESTARTS + 2)
-        f.emit('agent_settled')
+        await r.settle()
         expect(f.emit('tool_call', bash('anything at all'))).toBeUndefined()
+    })
+
+    test("a watchdog's recovery turn keeps the counts of the turn it continues", async () => {
+        const f = armed()
+        const r = recoveryTurns()
+        const cmd = bash('bun test')
+        for (let i = 0; i < LOOP_THRESHOLD - 1; i++) f.emit('tool_call', cmd)
+        queueRecoveryTurn('bash was cancelled')
+        await r.settle()
+        r.start()
+        expect(f.emit('tool_call', cmd)?.block).toBe(true)
+    })
+
+    test('a terminated turn gets no recovery turn', async () => {
+        const f = armed()
+        const r = recoveryTurns()
+        verdictsFor(f, bash('bun test'), LOOP_THRESHOLD + MAX_LOOP_RESTARTS + 1)
+        queueRecoveryTurn('bash was cancelled')
+        await r.settle()
+        expect(r.sent).toEqual([])
     })
 
     test('session_shutdown disarms', () => {

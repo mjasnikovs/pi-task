@@ -1,7 +1,7 @@
 import {describe, expect, jest, test} from 'bun:test'
 import type {ExtensionAPI} from '@earendil-works/pi-coding-agent'
 import {registerStreamWatchdog} from '../../src/task/stream-watchdog.js'
-import {WATCHDOG_CANCEL_MARKER} from '../../src/task/command-watchdog.js'
+import {WATCHDOG_CANCEL_MARKER} from '../../src/shared/command-watchdog.js'
 import {recoveryTurnPending} from '../../src/task/recovery-turn.js'
 import {recoveryTurns} from '../test-utils/recovery-turns.js'
 import {getConfig} from '../../src/config/config.js'
@@ -58,7 +58,7 @@ describe('registerStreamWatchdog', () => {
             expect(f.aborts()).toBe(1)
             expect(f.messages).toEqual([])
             const recovery = recoveryTurns()
-            recovery.settle()
+            await recovery.settle()
             expect(recovery.sent).toHaveLength(1)
             expect(recovery.sent[0]).toContain(WATCHDOG_CANCEL_MARKER)
             f.emit('agent_end')

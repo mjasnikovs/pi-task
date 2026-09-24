@@ -12,24 +12,30 @@ import {
 import {
     fauxAssistantMessage,
     fauxProvider,
+    fauxText,
     fauxToolCall,
-    type FauxResponseStep
+    type FauxResponseStep,
+    type RegisterFauxProviderOptions
 } from '@earendil-works/pi-ai/providers/faux'
 import {Type} from 'typebox'
 import {getConfig} from '../../src/config/config.js'
-import {WATCHDOG_CANCEL_MARKER} from '../../src/task/command-watchdog.js'
-import {recoveryTurnPending, registerRecoveryTurns} from '../../src/task/recovery-turn.js'
+import {WATCHDOG_CANCEL_MARKER} from '../../src/shared/command-watchdog.js'
+import {
+    inRecoveryTurn,
+    recoveryTurnPending,
+    registerRecoveryTurns
+} from '../../src/task/recovery-turn.js'
 import {registerCommandWatchdog} from '../../src/task/command-watchdog.js'
 import {registerStreamWatchdog} from '../../src/task/stream-watchdog.js'
 import {implWidgetArmed, setupImplWidget} from '../../src/task/impl-widget.js'
 import {
+    consumeGuardTermination,
     implementationGuardArmed,
     registerImplementationGuards
 } from '../../src/task/implementation-guards.js'
 import {enterImplementationTurn} from '../../src/task/implementation-scope.js'
 import {registerTaskDirCustody, taskDirCustodyHeld} from '../../src/task/task-dir-custody.js'
 import {
-    GUARD_TERMINATED,
     registerRunAbortTracker,
     superviseImplementation,
     type SteerCtx
@@ -85,9 +91,13 @@ async function harness(opts: {
     before?: (pi: ExtensionAPI) => void
     /** Wire the one-shot `/task` scope: widget, runaway guard, task-dir custody. */
     scope?: boolean
+    /** Pace the faux stream instead of emitting each response at once. */
+    stream?: Pick<RegisterFauxProviderOptions, 'tokensPerSecond' | 'tokenSize'>
+    retry?: {baseDelayMs: number}
 }): Promise<Harness> {
     const dir = tmpDir('pi-task-abort-')
     const faux = fauxProvider({
+        ...opts.stream,
         models: [{id: 'faux-1', contextWindow: opts.contextWindow ?? 100_000, maxTokens: 1000}]
     })
     faux.setResponses(opts.responses)
@@ -99,7 +109,7 @@ async function harness(opts: {
     modelRuntime.registerNativeProvider(faux.provider)
     const settingsManager = SettingsManager.inMemory({
         compaction: opts.compaction ?? {enabled: false},
-        retry: {enabled: false}
+        retry: opts.retry ? {enabled: true, maxRetries: 1, ...opts.retry} : {enabled: false}
     })
     let executions = 0
     const extension = (pi: ExtensionAPI): void => {
@@ -112,6 +122,13 @@ async function harness(opts: {
             registerImplementationGuards(pi)
             registerTaskDirCustody(pi)
         }
+        pi.registerTool({
+            name: 'probe',
+            label: 'probe',
+            description: 'A command that returns at once.',
+            parameters: Type.Object({}),
+            execute: () => Promise.resolve({content: [{type: 'text', text: 'ok'}], details: {}})
+        })
         pi.registerTool({
             name: 'hang',
             label: 'hang',
@@ -149,7 +166,7 @@ async function harness(opts: {
     })
     sessions.push(session)
     await session.bindExtensions({mode: 'json'})
-    session.setActiveToolsByName(['hang'])
+    session.setActiveToolsByName(['hang', 'probe'])
     let asks = 0
     return {
         dir,
@@ -205,6 +222,7 @@ describe('an abort is recovered wherever in the loop it lands', () => {
     })
     afterEach(() => {
         for (const session of sessions.splice(0)) session.dispose()
+        consumeGuardTermination()
         getConfig().requestTimeoutMs = savedRequest
         getConfig().streamInactivityMs = savedStream
         if (savedOffline === undefined) delete process.env.PI_OFFLINE
@@ -373,12 +391,28 @@ describe('an abort is recovered wherever in the loop it lands', () => {
         expect(await h.supervise()).toEqual({interrupted: true, error: undefined, resumes: 0})
     })
 
-    test('a model that re-runs the killed command every recovery turn is stopped by the runaway guard', async () => {
+    test('a model that re-runs the killed command gets one recovery turn, then a human', async () => {
         getConfig().requestTimeoutMs = COMMAND_CEILING_MS
-        const sameHangingCall = Array.from({length: 30}, () =>
+        const sameHangingCall = Array.from({length: 5}, () =>
             fauxAssistantMessage([fauxToolCall('hang', {})], {stopReason: 'toolUse'})
         )
-        const h = await harness({scope: true, responses: sameHangingCall})
+        const h = await harness({responses: sameHangingCall})
+        await h.session.prompt('implement')
+        await h.session.waitForIdle()
+
+        expect(await h.supervise()).toEqual({interrupted: true, error: undefined, resumes: 0})
+        expect(h.executions()).toBe(2)
+        expect(h.transcript().filter(t => t === 'user:reminder')).toHaveLength(1)
+    })
+
+    test('the runaway guard keeps its counts across recovery turns that each make progress', async () => {
+        getConfig().requestTimeoutMs = COMMAND_CEILING_MS
+        const probeThenHang = Array.from({length: 40}, (_, i) =>
+            fauxAssistantMessage([fauxToolCall(i % 2 === 0 ? 'probe' : 'hang', {})], {
+                stopReason: 'toolUse'
+            })
+        )
+        const h = await harness({scope: true, responses: probeThenHang})
         const leave = await enterImplementationTurn(
             {taskId: 'TASK_0001', title: 't'},
             {oneShot: false, cwd: h.dir}
@@ -386,13 +420,125 @@ describe('an abort is recovered wherever in the loop it lands', () => {
         try {
             await h.session.prompt('implement')
             await h.session.waitForIdle()
-            const outcome = await h.supervise()
+            await h.supervise()
 
-            expect(outcome.error).toBe(GUARD_TERMINATED)
-            expect(h.executions()).toBeLessThan(sameHangingCall.length)
+            expect(h.executions()).toBeLessThan(probeThenHang.length / 2)
         } finally {
             await leave()
         }
+    })
+
+    test('a turn the runaway guard ended gets no recovery turn', async () => {
+        getConfig().requestTimeoutMs = COMMAND_CEILING_MS
+        const probe = (): FauxResponseStep =>
+            fauxAssistantMessage([fauxToolCall('probe', {})], {stopReason: 'toolUse'})
+        // The last probe is the one past every warning. The hang in its batch
+        // was prepared first, so it runs, and the command watchdog kills it.
+        const h = await harness({
+            scope: true,
+            responses: [
+                ...Array.from({length: 6}, probe),
+                fauxAssistantMessage([fauxToolCall('hang', {}), fauxToolCall('probe', {})], {
+                    stopReason: 'toolUse'
+                }),
+                probe(),
+                fauxAssistantMessage('done')
+            ]
+        })
+        const leave = await enterImplementationTurn(
+            {taskId: 'TASK_0001', title: 't'},
+            {oneShot: false, cwd: h.dir}
+        )
+        try {
+            await h.session.prompt('implement')
+            await h.session.waitForIdle()
+
+            expect(h.executions()).toBe(1)
+            expect(h.transcript()).not.toContain('user:reminder')
+        } finally {
+            await leave()
+        }
+    })
+
+    test('a recovery turn that never starts holds nothing into the next prompt', async () => {
+        getConfig().requestTimeoutMs = COMMAND_CEILING_MS
+        let duringNext: Record<string, boolean> | undefined
+        const h = await harness({
+            scope: true,
+            before: pi => {
+                pi.on('input', event =>
+                    event.text.includes(WATCHDOG_CANCEL_MARKER) ? {action: 'handled'} : undefined
+                )
+            },
+            responses: [
+                fauxAssistantMessage([fauxToolCall('hang', {})], {stopReason: 'toolUse'}),
+                () => {
+                    duringNext = {
+                        guard: implementationGuardArmed(),
+                        custody: taskDirCustodyHeld(),
+                        widget: implWidgetArmed(),
+                        recovering: inRecoveryTurn()
+                    }
+                    return fauxAssistantMessage('answered')
+                }
+            ]
+        })
+        await enterImplementationTurn(
+            {taskId: 'TASK_0001', title: 't'},
+            {oneShot: true, cwd: h.dir}
+        )
+        await h.session.prompt('implement')
+        await h.session.waitForIdle()
+        await h.session.prompt('an unrelated question')
+
+        expect(duringNext).toEqual({guard: false, custody: false, widget: false, recovering: false})
+        expect(recoveryTurnPending()).toBe(false)
+    })
+
+    test('a human ESC during a retry backoff asks to steer instead of failing the task', async () => {
+        const h = await harness({
+            // Longer than the test may run: only the ESC ends this backoff.
+            retry: {baseDelayMs: 60_000},
+            responses: [
+                fauxAssistantMessage('', {
+                    stopReason: 'error',
+                    errorMessage: '503 service unavailable'
+                })
+            ]
+        })
+        const backoff = new Promise<void>(resolve => {
+            const off = h.session.subscribe(event => {
+                if (event.type === 'auto_retry_start') {
+                    off()
+                    resolve()
+                }
+            })
+        })
+        const run = h.session.prompt('implement')
+        await backoff
+        await h.session.abort()
+        await run
+
+        expect(await h.supervise()).toEqual({interrupted: true, error: undefined, resumes: 0})
+    })
+
+    test('a model server that says one word and stalls gets one recovery turn, then a human', async () => {
+        getConfig().streamInactivityMs = STREAM_SILENCE_MS
+        // At 1000 tokens a second a token takes 1 ms. The one-word delta lands at
+        // once, the next chunk five silence windows later.
+        const chunkTokens = STREAM_SILENCE_MS * 5
+        const oneWordThenSilence = Array.from({length: 5}, () =>
+            fauxAssistantMessage([fauxText('a'), fauxText('x'.repeat(chunkTokens * 4))])
+        )
+        const h = await harness({
+            stream: {tokensPerSecond: 1000, tokenSize: {min: chunkTokens, max: chunkTokens}},
+            responses: oneWordThenSilence
+        })
+        await h.session.prompt('implement')
+        await h.session.waitForIdle()
+
+        expect(await h.supervise()).toEqual({interrupted: true, error: undefined, resumes: 0})
+        expect(h.transcript().filter(t => t === 'user:reminder')).toHaveLength(1)
     })
 
     test('a model server that stays silent gets one recovery turn, then a human', async () => {

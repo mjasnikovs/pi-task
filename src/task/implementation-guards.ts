@@ -6,7 +6,7 @@ import {
     LOOP_WINDOW,
     MAX_LOOP_RESTARTS
 } from './loop-detector.js'
-import {recoveryTurnPending} from './recovery-turn.js'
+import {onTurnOver, vetoRecoveryTurn} from './recovery-turn.js'
 
 /**
  * Runaway guard for the IMPLEMENTATION TURN — the one model surface with none.
@@ -53,7 +53,6 @@ interface ArmedState {
      *  sum into a termination neither of them earned. */
     strikes: Map<string, number>
     terminating: boolean
-    oneShot: boolean
 }
 
 /**
@@ -74,20 +73,18 @@ let armed: ArmedState | null = null
 
 /** Built, never spread from the previous state: a leaked `terminating` would
  *  block every call for the rest of an awaited run. */
-function freshArmedState(oneShot: boolean): ArmedState {
+function freshArmedState(): ArmedState {
     return {
         loop: freshDetector(),
         edits: freshDetector(),
         strikes: new Map(),
-        terminating: false,
-        oneShot
+        terminating: false
     }
 }
 
-/** `oneShot` mirrors the impl widget's split: fire-and-forget lets the settle
- *  event disarm; an awaited run spans resume/steer turns and disarms in its finally. */
-export function armImplementationGuard(opts: {oneShot: boolean}): void {
-    armed = freshArmedState(opts.oneShot)
+/** Disarmed by the implementation-scope bracket, which decides when the run ends. */
+export function armImplementationGuard(): void {
+    armed = freshArmedState()
 }
 
 export function disarmImplementationGuard(): void {
@@ -183,6 +180,7 @@ export function registerImplementationGuards(pi: ExtensionAPI): void {
             if (strikes > MAX_LOOP_RESTARTS) {
                 state.terminating = true
                 terminatedTurn = true
+                vetoRecoveryTurn()
                 return {block: true, terminate: true, reason: terminalCallReason()}
             }
             return {block: true, reason: blockedCallReason(event.toolName, hit.count)}
@@ -193,21 +191,11 @@ export function registerImplementationGuards(pi: ExtensionAPI): void {
         }
     })
 
-    // NOT `agent_end`, which fires again for every auto-retry, every threshold
-    // compaction and every queued message — pi drives those with `agent.continue()`,
-    // each a fresh agent loop. The measured runaway compacted 18 times INSIDE its
-    // turn, so a one-shot disarm on agent_end would have retired the guard after the
-    // first ~375 of its 6,760 calls. `agent_settled` is the boundary that means what
-    // this needs: no retry, compaction or queued continuation left to run.
-    pi.on('agent_settled', () => {
-        if (!armed) return
-        // A watchdog's recovery turn continues the turn it aborted. Keeping the
-        // counts is what stops a model that re-runs the killed command every time.
-        if (recoveryTurnPending()) return
-        if (armed.oneShot) disarmImplementationGuard()
-        // An awaited run spans resume and steer turns. Counters are per TURN, so a
-        // fresh one starts clean rather than inheriting the last one's strikes.
-        else armed = freshArmedState(false)
+    // Per turn, not per `agent_end`: pi fires that for every retry and compaction
+    // inside a turn, and the measured runaway compacted 18 times inside one. A
+    // recovery turn continues the turn it follows, so the counts carry into it.
+    onTurnOver('implementation-guard', () => {
+        if (armed) armed = freshArmedState()
     })
     pi.on('session_shutdown', disarmImplementationGuard)
 }
