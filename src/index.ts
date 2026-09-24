@@ -7,6 +7,8 @@ import {registerWorkers} from './workers/index.js'
 import {registerRemote} from './remote/register.js'
 import {registerCommandWatchdog} from './task/command-watchdog.js'
 import {registerStreamWatchdog} from './task/stream-watchdog.js'
+import {registerRunAbortTracker} from './task/implementation-turn.js'
+import {registerRecoveryTurns} from './task/recovery-turn.js'
 import {registerImplementationGuards} from './task/implementation-guards.js'
 import {registerTaskDirCustody} from './task/task-dir-custody.js'
 import {registerModelHoldRestore} from './task/model-hold-stash.js'
@@ -20,6 +22,8 @@ export default function (pi: ExtensionAPI): void {
     registerRemote(pi)
     registerCommandWatchdog(pi)
     registerStreamWatchdog(pi)
+    registerRunAbortTracker(pi)
+    registerRecoveryTurns(pi)
     registerImplementationGuards(pi)
     registerTaskDirCustody(pi)
     registerModelHoldRestore(pi)

@@ -6,6 +6,7 @@ import {
     LOOP_WINDOW,
     MAX_LOOP_RESTARTS
 } from './loop-detector.js'
+import {recoveryTurnPending} from './recovery-turn.js'
 
 /**
  * Runaway guard for the IMPLEMENTATION TURN — the one model surface with none.
@@ -127,9 +128,8 @@ export function terminalCallReason(): string {
  * `terminate` lets the agent loop finish normally — the last assistant message
  * keeps `stopReason: "toolUse"`, so `classifyTurnEnd` reads `'stop'` and the run
  * reports a clean finish over work that was cut off mid-task. Verified against a
- * live model: a real guard-terminated turn ends exactly that way. Same shape as
- * `consumeWatchdogAbort`, and consumed for the same reason — one reader, then it
- * is gone.
+ * live model: a real guard-terminated turn ends exactly that way. One reader, then
+ * it is gone.
  */
 let terminatedTurn = false
 
@@ -201,6 +201,9 @@ export function registerImplementationGuards(pi: ExtensionAPI): void {
     // this needs: no retry, compaction or queued continuation left to run.
     pi.on('agent_settled', () => {
         if (!armed) return
+        // A watchdog's recovery turn continues the turn it aborted. Keeping the
+        // counts is what stops a model that re-runs the killed command every time.
+        if (recoveryTurnPending()) return
         if (armed.oneShot) disarmImplementationGuard()
         // An awaited run spans resume and steer turns. Counters are per TURN, so a
         // fresh one starts clean rather than inheriting the last one's strikes.

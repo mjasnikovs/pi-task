@@ -2,14 +2,14 @@ import {afterEach, beforeEach, describe, expect, test} from 'bun:test'
 import type {ExtensionAPI} from '@earendil-works/pi-coding-agent'
 import {
     CommandWatchdog,
-    consumeWatchdogAbort,
-    noteWatchdogAbort,
     registerCommandWatchdog,
     reminderMessage,
     type WatchdogDeps
 } from '../../src/task/command-watchdog.js'
 import {getConfig} from '../../src/config/config.js'
 import {realTimerDeps} from '../../src/shared/command-watchdog.js'
+import {recoveryTurnPending} from '../../src/task/recovery-turn.js'
+import {recoveryTurns} from '../test-utils/recovery-turns.js'
 
 /**
  * A synchronous fake scheduler: records armed timers and lets the test fire one
@@ -262,12 +262,12 @@ describe('registerCommandWatchdog', () => {
         originalExempt = getConfig().commandTimeoutExemptTools
         getConfig().requestTimeoutMs = CEILING_MS
         getConfig().commandTimeoutExemptTools = []
-        consumeWatchdogAbort() // never inherit another test's one-shot flag
+        recoveryTurns().shutdown() // never inherit another test's queued reminder
     })
     afterEach(() => {
         getConfig().requestTimeoutMs = originalTimeout
         getConfig().commandTimeoutExemptTools = originalExempt
-        consumeWatchdogAbort()
+        recoveryTurns().shutdown()
     })
 
     test('hooks the four events it needs and nothing else', () => {
@@ -281,7 +281,7 @@ describe('registerCommandWatchdog', () => {
         ])
     })
 
-    test('an overrun aborts the owning ctx and follows up with the reminder', async () => {
+    test('an overrun aborts the owning ctx and follows up with the reminder once the run settles', async () => {
         const {pi, handlers, sent} = fakePi()
         const owner = fakeCtx()
         registerCommandWatchdog(pi)
@@ -293,23 +293,11 @@ describe('registerCommandWatchdog', () => {
         await settle()
 
         expect(owner.aborts).toBe(1)
-        expect(sent).toHaveLength(1)
-        expect(sent[0].msg).toBe(reminderMessage('bash', CEILING_MS))
-        expect(sent[0].opts).toEqual({deliverAs: 'followUp'})
-    })
-
-    test('flags the abort as the watchdog’s, one shot only', async () => {
-        const {pi, handlers} = fakePi()
-        registerCommandWatchdog(pi)
-
-        handlers.get('tool_execution_start')!(
-            {toolCallId: 'c1', toolName: 'bash'} as never,
-            fakeCtx().ctx as never
-        )
-        await settle()
-
-        expect(consumeWatchdogAbort()).toBe(true)
-        expect(consumeWatchdogAbort()).toBe(false)
+        // Sent while the aborted run winds down, pi strands it in the follow-up queue.
+        expect(sent).toEqual([])
+        const recovery = recoveryTurns()
+        recovery.settle()
+        expect(recovery.sent).toEqual([reminderMessage('bash', CEILING_MS)])
     })
 
     test('aborts the ctx that owns the stuck call, not a later one', async () => {
@@ -347,7 +335,7 @@ describe('registerCommandWatchdog', () => {
 
         expect(owner.aborts).toBe(0)
         expect(sent).toEqual([])
-        expect(consumeWatchdogAbort()).toBe(false)
+        expect(recoveryTurnPending()).toBe(false)
     })
 
     test('an exempt tool never arms', async () => {
@@ -417,27 +405,7 @@ describe('registerCommandWatchdog', () => {
         // inside the callback and fails the run as an unhandled error.
         await settle()
         expect(sent).toEqual([])
-        expect(consumeWatchdogAbort()).toBe(false)
-    })
-
-    test('a stale fire leaves a pending abort flag raised elsewhere alone', async () => {
-        const {pi, handlers, sent} = fakePi()
-        const staleCtx = {
-            abort: (): void => {
-                throw new Error('This extension ctx is stale after session replacement or reload.')
-            }
-        }
-        registerCommandWatchdog(pi)
-        handlers.get('tool_execution_start')!(
-            {toolCallId: 'c1', toolName: 'bash'} as never,
-            staleCtx as never
-        )
-        // A LIVE abort raised the shared flag first, and the steer loop has not
-        // read it yet. The stale fire must not consume it on its way out.
-        noteWatchdogAbort()
-        await settle()
-        expect(sent).toEqual([])
-        expect(consumeWatchdogAbort()).toBe(true)
+        expect(recoveryTurnPending()).toBe(false)
     })
 
     for (const event of ['turn_end', 'session_shutdown'] as const) {

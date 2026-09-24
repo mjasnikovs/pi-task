@@ -84,11 +84,8 @@ function correction(): string {
 }
 
 /**
- * Stable substring of {@link reminderMessage}, used by the steer loop
- * (implementation-turn steerUntilDone) to recognise the watchdog's follow-up turn in
- * the session entries — the artifact that distinguishes a watchdog abort from a
- * human ESC. Interpolated into the message so the detector and the text cannot
- * drift apart.
+ * The phrase both watchdogs' reminders share, so a transcript names a watchdog
+ * cancel the same way whichever one fired.
  */
 export const WATCHDOG_CANCEL_MARKER = 'was automatically cancelled — it looked stuck.'
 

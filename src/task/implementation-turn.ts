@@ -16,9 +16,8 @@
  * from one place, inside the `sendSpec` closure.
  */
 
-import type {ExtensionCommandContext} from '@earendil-works/pi-coding-agent'
+import type {ExtensionAPI, ExtensionCommandContext} from '@earendil-works/pi-coding-agent'
 import {SessionUI} from '../remote/bridge.js'
-import {consumeWatchdogAbort, WATCHDOG_CANCEL_MARKER} from './command-watchdog.js'
 import {consumeGuardTermination} from './implementation-guards.js'
 
 // ─── Turn-end classification ─────────────────────────────────────────────────
@@ -39,6 +38,31 @@ export type SessionEntryLike = {
 const isAssistant = (e: SessionEntryLike): boolean =>
     e.message !== undefined && e.message.role === 'assistant'
 
+/**
+ * Assistant messages that ended under an aborted run. stopReason cannot say so on
+ * its own: an abort that lands during a tool or a pre-request compaction fails the
+ * NEXT request's setup, and pi-ai records that as "error" ("This operation was
+ * aborted"). The run's own signal is the fact.
+ */
+const endedUnderAbort = new WeakSet<object>()
+
+/**
+ * Read at `agent_end`, not `message_end`: a `message_end` handler sees the copy an
+ * earlier extension returned, while pi copies that into the original object and
+ * stores the original.
+ */
+export function registerRunAbortTracker(pi: ExtensionAPI): void {
+    pi.on('agent_end', (event, ctx) => {
+        if (ctx.signal?.aborted !== true) return
+        const last = event.messages.findLast(m => m.role === 'assistant')
+        if (last) endedUnderAbort.add(last)
+    })
+}
+
+function wasAborted(message: NonNullable<SessionEntryLike['message']>): boolean {
+    return message.stopReason === 'aborted' || endedUnderAbort.has(message)
+}
+
 /** Index of the last assistant message and of the last compaction boundary. */
 function tailPositions(entries: ReadonlyArray<SessionEntryLike>): {
     lastAssistant: number
@@ -58,9 +82,10 @@ function tailPositions(entries: ReadonlyArray<SessionEntryLike>): {
  * Classify how the most recent turn ended, from the session entries alone.
  *
  * Precedence, when several signals are present at once:
- *   1. `aborted`    — the last assistant message has stopReason "aborted". A user
- *                     ESC (or watchdog abort) wins over everything: it is not a
- *                     compaction pause, and the steer loop owns it.
+ *   1. `aborted`    — the last assistant message ended under an aborted run
+ *                     ({@link registerRunAbortTracker}), whatever its stopReason.
+ *                     A user ESC (or watchdog abort) wins over everything: it is
+ *                     not a compaction pause, and the steer loop owns it.
  *   2. `compaction` — a `compaction` entry sits AFTER the last assistant message.
  *                     Position-based, not timestamp-based: `appendCompaction`
  *                     pushes the boundary onto the tail of the entry list, and
@@ -76,7 +101,7 @@ function tailPositions(entries: ReadonlyArray<SessionEntryLike>): {
 export function classifyTurnEnd(entries: ReadonlyArray<SessionEntryLike>): TurnEnd {
     const {lastAssistant, lastCompaction} = tailPositions(entries)
     const last = lastAssistant >= 0 ? entries[lastAssistant].message : undefined
-    if (last?.stopReason === 'aborted') return 'aborted'
+    if (last && wasAborted(last)) return 'aborted'
     if (lastCompaction > lastAssistant) return 'compaction'
     if (last?.stopReason === 'error') return 'error'
     return 'stop'
@@ -90,42 +115,13 @@ export function classifyTurnEnd(entries: ReadonlyArray<SessionEntryLike>): TurnE
 export function turnErrorMessage(entries: ReadonlyArray<SessionEntryLike>): string | undefined {
     const {lastAssistant} = tailPositions(entries)
     const last = lastAssistant >= 0 ? entries[lastAssistant].message : undefined
-    if (last?.stopReason !== 'error') return undefined
+    if (last?.stopReason !== 'error' || wasAborted(last)) return undefined
     return last.errorMessage ?? 'model error'
 }
 
 /** True when the last assistant turn was aborted (ESC / watchdog). */
 const wasInterrupted = (entries: ReadonlyArray<SessionEntryLike>): boolean =>
     classifyTurnEnd(entries) === 'aborted'
-
-/**
- * True when the watchdog's reminder follow-up has been DELIVERED into the session
- * after the aborted assistant turn but its own turn has not finished yet — the
- * artifact that confirms a pending watchdog recovery. Scoped after the LAST
- * assistant entry so an earlier fire's reminder (already answered by its own
- * turn) never matches.
- */
-export function watchdogReminderDelivered(entries: ReadonlyArray<SessionEntryLike>): boolean {
-    const {lastAssistant} = tailPositions(entries)
-    for (let i = lastAssistant + 1; i < entries.length; i++) {
-        const m = entries[i].message
-        if (m === undefined || m.role !== 'user') continue
-        const content = m.content
-        const text =
-            typeof content === 'string' ? content
-            : Array.isArray(content) ?
-                content
-                    .map(b =>
-                        b !== null && typeof b === 'object' && 'text' in b ?
-                            String((b as {text: unknown}).text)
-                        :   ''
-                    )
-                    .join(' ')
-            :   ''
-        if (text.includes(WATCHDOG_CANCEL_MARKER)) return true
-    }
-    return false
-}
 
 // ─── Session seam ────────────────────────────────────────────────────────────
 
@@ -136,26 +132,6 @@ export function watchdogReminderDelivered(entries: ReadonlyArray<SessionEntryLik
  */
 export type SteerCtx = ExtensionCommandContext & {
     sendUserMessage(content: string, options?: {deliverAs?: 'steer' | 'followUp'}): Promise<void>
-}
-
-/**
- * Timing knobs for the watchdog-abort guard in {@link steerUntilDone}, injectable
- * so a test can exercise the grace expiry without waiting it out. `graceMs`
- * bounds how long the loop waits for the watchdog's follow-up to be DELIVERED,
- * not to finish: once it lands, the wait for its turn is unbounded. `onFire`
- * sends the follow-up in the same block that raised the flag, so the grace
- * expires only when the flag was already stale.
- */
-export interface SteerWatchdogDeps {
-    consume: () => boolean
-    graceMs: number
-    pollMs: number
-}
-
-const STEER_WATCHDOG_DEFAULTS: SteerWatchdogDeps = {
-    consume: consumeWatchdogAbort,
-    graceMs: 10_000,
-    pollMs: 100
 }
 
 /**
@@ -173,8 +149,6 @@ export interface ImplementationTurnDeps {
     waitForIdle: () => Promise<void>
     /** Solicit steering text after an interrupt; undefined/empty = pause the run. */
     ask: () => Promise<string | undefined>
-    /** The watchdog one-shot flag and the bounded wait for its follow-up. */
-    watchdog: SteerWatchdogDeps
     /** Optional trail for the decisions taken; absent → silent. */
     log?: (msg: string) => void
 }
@@ -198,8 +172,6 @@ export interface SuperviseOptions {
      * steer loop is testable without a real dialog.
      */
     promptSteer?: (ctx: ExtensionCommandContext) => Promise<string | undefined>
-    /** Watchdog-guard timing overrides (tests); absent → production defaults. */
-    watchdog?: Partial<SteerWatchdogDeps>
     log?: (msg: string) => void
 }
 
@@ -225,7 +197,6 @@ export function turnDepsFor(ctx: SteerCtx, opts: SuperviseOptions = {}): Impleme
         send: text => ctx.sendUserMessage(text, {deliverAs: 'followUp'}),
         waitForIdle: () => ctx.waitForIdle(),
         ask: () => ask(ctx),
-        watchdog: {...STEER_WATCHDOG_DEFAULTS, ...opts.watchdog},
         log: opts.log
     }
 }
@@ -283,28 +254,6 @@ export async function resumeAcrossCompactions(deps: ImplementationTurnDeps): Pro
 // ─── Steer until done ────────────────────────────────────────────────────────
 
 /**
- * Wait for a watchdog abort's queued follow-up turn instead of prompting. The
- * abort and the reminder follow-up are two separate steps in the watchdog's
- * onFire, so the steer loop can observe the aborted turn before the reminder is
- * delivered — poll (bounded) until it lands or the follow-up turn has already
- * completed. True = recovery observed, re-check the loop; false = grace expired
- * with no reminder (stale flag) — fall back to the human prompt.
- */
-async function awaitWatchdogFollowUp(deps: ImplementationTurnDeps): Promise<boolean> {
-    const wd = deps.watchdog
-    const deadline = Date.now() + wd.graceMs
-    for (;;) {
-        if (!wasInterrupted(deps.entries())) return true // follow-up turn already completed
-        if (watchdogReminderDelivered(deps.entries())) {
-            await deps.waitForIdle() // let the follow-up turn run to completion
-            return true
-        }
-        if (Date.now() >= deadline) return false
-        await new Promise<void>(r => setTimeout(r, wd.pollMs))
-    }
-}
-
-/**
  * After the implementation turn settles, honour a user ESC by letting them steer.
  *
  * `waitForIdle` resolves both on natural completion AND on an ESC (which aborts
@@ -317,23 +266,15 @@ async function awaitWatchdogFollowUp(deps: ImplementationTurnDeps): Promise<bool
  * via `sendUserMessage`, which forwards to `prompt()` and, on an idle session, runs
  * the turn rather than queueing it. Repeat until a turn finishes uninterrupted.
  *
- * A WATCHDOG abort also ends the turn with stopReason 'aborted' — indistinguishable
- * from a human ESC by the session entries alone at that instant. The watchdog
- * queues its own recovery follow-up, so prompting there would show a steering
- * dialog to an empty room and wedge an unattended run on the race. The one-shot
- * flag (set synchronously before the abort) routes that case to
- * {@link awaitWatchdogFollowUp} instead; a stale flag degrades to a bounded wait
- * followed by the ordinary prompt, never to a suppressed one.
+ * A WATCHDOG abort never reaches this prompt: its recovery turn is posted from
+ * `agent_settled` (recovery-turn.ts), and pi runs it before `waitForIdle`
+ * resolves, so the turn read here is the recovery's own.
  *
  * Returns true when the user declined to steer (empty/cancelled) and the run
  * should pause; false when the implementation completed (steered or not).
  */
 export async function steerUntilDone(deps: ImplementationTurnDeps): Promise<boolean> {
     while (wasInterrupted(deps.entries())) {
-        if (deps.watchdog.consume() && (await awaitWatchdogFollowUp(deps))) {
-            deps.log?.('implementation: watchdog abort recovered by its own follow-up')
-            continue
-        }
         const steer = await deps.ask()
         if (steer === undefined || steer.trim().length === 0) {
             deps.log?.('implementation: interrupted, user declined to steer — pausing')

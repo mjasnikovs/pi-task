@@ -1,7 +1,9 @@
 import {describe, expect, jest, test} from 'bun:test'
 import type {ExtensionAPI} from '@earendil-works/pi-coding-agent'
 import {registerStreamWatchdog} from '../../src/task/stream-watchdog.js'
-import {consumeWatchdogAbort, WATCHDOG_CANCEL_MARKER} from '../../src/task/command-watchdog.js'
+import {WATCHDOG_CANCEL_MARKER} from '../../src/task/command-watchdog.js'
+import {recoveryTurnPending} from '../../src/task/recovery-turn.js'
+import {recoveryTurns} from '../test-utils/recovery-turns.js'
 import {getConfig} from '../../src/config/config.js'
 
 /**
@@ -37,7 +39,7 @@ async function withWindow(ms: number, fn: () => Promise<void>): Promise<void> {
         await fn()
     } finally {
         cfg.streamInactivityMs = prev
-        consumeWatchdogAbort() // never leak the one-shot flag into another test
+        recoveryTurns().shutdown() // never leak a queued reminder into another test
     }
 }
 
@@ -54,11 +56,11 @@ describe('registerStreamWatchdog', () => {
             // …then silence.
             await sleep(400)
             expect(f.aborts()).toBe(1)
-            expect(f.messages.length).toBe(1)
-            // Same abort channel as the command watchdog — steerUntilDone reads
-            // BOTH the flag and this marker to tell a watchdog abort from an ESC.
-            expect(consumeWatchdogAbort()).toBe(true)
-            expect(f.messages[0]).toContain(WATCHDOG_CANCEL_MARKER)
+            expect(f.messages).toEqual([])
+            const recovery = recoveryTurns()
+            recovery.settle()
+            expect(recovery.sent).toHaveLength(1)
+            expect(recovery.sent[0]).toContain(WATCHDOG_CANCEL_MARKER)
             f.emit('agent_end')
         })
     })
@@ -203,7 +205,7 @@ describe('registerStreamWatchdog', () => {
             // inside the timer and fails the run as an unhandled error.
             await sleep(300)
             expect(messages).toEqual([])
-            expect(consumeWatchdogAbort()).toBe(false)
+            expect(recoveryTurnPending()).toBe(false)
         })
     })
 

@@ -5,11 +5,8 @@ import {
     StreamWatchdog,
     streamStallReminder
 } from '../shared/stream-watchdog.js'
-import {
-    noteWatchdogAbort,
-    restoreWatchdogAbort,
-    WATCHDOG_CANCEL_MARKER
-} from './command-watchdog.js'
+import {WATCHDOG_CANCEL_MARKER} from './command-watchdog.js'
+import {inRecoveryTurn, queueRecoveryTurn} from './recovery-turn.js'
 import {isStaleCtxError} from './stale-ctx.js'
 
 /**
@@ -25,14 +22,12 @@ import {isStaleCtxError} from './stale-ctx.js'
  * HOW: pi's extension events ARE the stream. Any of them — a token delta, a
  * thinking delta, a tool-call delta, the provider's response headers — resets the
  * idle clock; only total silence for the configured window fires. On fire the turn
- * is aborted and a follow-up user turn tells the model to CONTINUE from the
- * transcript (its completed tool calls and results are already recorded, so a
- * blind re-send would re-run them).
+ * is aborted and, once it settles, a follow-up user turn tells the model to
+ * CONTINUE from the transcript (its completed tool calls and results are already
+ * recorded, so a blind re-send would re-run them).
  *
- * ONE ABORT CHANNEL: the fire path goes through the command watchdog's existing
- * {@link noteWatchdogAbort} flag and its WATCHDOG_CANCEL_MARKER, so the abort/steer
- * race steerUntilDone already handles covers this watchdog too, instead of racing a
- * second, parallel abort mechanism.
+ * ONE RECOVERY CHANNEL: the reminder joins the command watchdog's in
+ * recovery-turn.ts, so both are posted as one turn once the aborted run settles.
  *
  * SUSPENDED DURING TOOLS: while a tool executes the model stream is legitimately
  * idle — a long build emits nothing on it. That window belongs to the command
@@ -48,6 +43,7 @@ export function registerStreamWatchdog(pi: ExtensionAPI): void {
     // The ctx whose abort() ends the in-flight turn, refreshed on every event so
     // the fire (which happens outside any handler) aborts the CURRENT operation.
     let liveCtx: ExtensionContext | undefined
+    let spokeSinceSettle = false
 
     const watchdog = new StreamWatchdog({
         getTimeoutMs: () => getConfig().streamInactivityMs,
@@ -55,15 +51,10 @@ export function registerStreamWatchdog(pi: ExtensionAPI): void {
         onFire: idleMs => {
             const ctx = liveCtx
             liveCtx = undefined
-            // Flag BEFORE the abort, exactly as the command watchdog does: the
-            // steer loop can otherwise observe the 'aborted' turn first and show
-            // a steering prompt to an empty room, wedging an unattended run.
             if (ctx) {
-                const wasPending = noteWatchdogAbort()
                 try {
                     ctx.abort()
                 } catch (err) {
-                    restoreWatchdogAbort(wasPending) // no turn was aborted
                     // Timer fired after session replacement/reload: the captured ctx
                     // is stale by design (Pi invalidates it in AgentSession.dispose).
                     // Swallow only that guard; anything else keeps throwing, and no
@@ -72,13 +63,8 @@ export function registerStreamWatchdog(pi: ExtensionAPI): void {
                     return
                 }
             }
-            try {
-                pi.sendUserMessage(streamStallReminder(idleMs, WATCHDOG_CANCEL_MARKER), {
-                    deliverAs: 'followUp'
-                })
-            } catch (err) {
-                if (!isStaleCtxError(err)) throw err
-            }
+            if (inRecoveryTurn() && !spokeSinceSettle) return
+            queueRecoveryTurn(streamStallReminder(idleMs, WATCHDOG_CANCEL_MARKER))
         }
     })
 
@@ -95,7 +81,10 @@ export function registerStreamWatchdog(pi: ExtensionAPI): void {
     pi.on('after_provider_response', (_e, ctx) => arm(ctx))
     pi.on('turn_start', (_e, ctx) => arm(ctx))
     pi.on('message_start', (_e, ctx) => arm(ctx))
-    pi.on('message_update', (_e, ctx) => arm(ctx))
+    pi.on('message_update', (_e, ctx) => {
+        spokeSinceSettle = true
+        arm(ctx)
+    })
     pi.on('message_end', (_e, ctx) => arm(ctx))
 
     // Keyed by toolCallId: a tool BATCH runs in parallel, so the clock must stay
@@ -124,5 +113,8 @@ export function registerStreamWatchdog(pi: ExtensionAPI): void {
         liveCtx = undefined
     }
     pi.on('agent_end', stop)
+    pi.on('agent_settled', () => {
+        spokeSinceSettle = false
+    })
     pi.on('session_shutdown', stop)
 }

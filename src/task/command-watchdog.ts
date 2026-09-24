@@ -2,6 +2,7 @@ import type {ExtensionAPI, ExtensionContext} from '@earendil-works/pi-coding-age
 import {getConfig} from '../config/config.js'
 import {SELF_BOUNDED_TOOLS} from '../config/tool-list.js'
 import {CommandWatchdog, realTimerDeps, reminderMessage} from '../shared/command-watchdog.js'
+import {queueRecoveryTurn} from './recovery-turn.js'
 import {isStaleCtxError} from './stale-ctx.js'
 
 /**
@@ -19,9 +20,9 @@ import {isStaleCtxError} from './stale-ctx.js'
  * `tool_execution_end` — both real pi events. If it elapses, `ctx.abort()`
  * cancels the in-flight operation, which fires the tool's AbortSignal; pi's bash
  * executor imports `killProcessTree` and its own comment on that listener reads
- * "Handle abort signal by killing the entire process tree". A follow-up user turn
- * then tells the model what happened so it retries with a timeout instead of
- * hanging again.
+ * "Handle abort signal by killing the entire process tree". Once the aborted run
+ * settles, a follow-up user turn tells the model what happened so it retries with a
+ * timeout instead of hanging again (see recovery-turn.ts).
  *
  * Tool-agnostic by default: it arms on every tool except exact names listed in
  * `commandTimeoutExemptTools`, which /task-config fills from the live tool list
@@ -50,48 +51,6 @@ export {
 } from '../shared/command-watchdog.js'
 
 /**
- * One-shot marker: the most recent turn abort was issued BY THE WATCHDOG, not by
- * a human ESC. Both end the assistant turn the same way, and `classifyTurnEnd`
- * has nothing else to go on — it decides with `last?.stopReason === 'aborted'`.
- * Without this flag the steer loop can win the race against the watchdog's queued
- * follow-up turn and show a steering prompt to an empty room, wedging an
- * unattended run.
- *
- * Set synchronously in onFire BEFORE ctx.abort(), so it is observable by the time
- * any waitForIdle resolves; consumed by the first reader. Run: it reads false
- * before any abort, true once after a note, false again immediately after — and
- * two notes still yield exactly one true. A stale flag (the aborted turn was not
- * one the steer loop was watching) only costs the consumer a bounded wait before
- * it falls back to prompting; it can never permanently suppress a human's steer
- * prompt.
- */
-let watchdogAbortPending = false
-
-/**
- * @internal Set by onFire when it aborts a turn. Exported for the adapter and tests.
- * Returns the previous value, which an abort that then fails must put back — the
- * flag is shared by both watchdogs, so clearing it unconditionally would swallow a
- * genuine abort's pending flag and leave the steer loop prompting an empty room.
- */
-export function noteWatchdogAbort(): boolean {
-    const was = watchdogAbortPending
-    watchdogAbortPending = true
-    return was
-}
-
-/** @internal Put the flag back after a noted abort did not happen. */
-export function restoreWatchdogAbort(was: boolean): void {
-    watchdogAbortPending = was
-}
-
-/** True exactly once per watchdog abort; clears the flag. */
-export function consumeWatchdogAbort(): boolean {
-    const was = watchdogAbortPending
-    watchdogAbortPending = false
-    return was
-}
-
-/**
  * Wire the watchdog into the main session. Only ever active in the host session
  * (children run `--no-extensions`), which is exactly where the observed hangs
  * happen.
@@ -112,15 +71,12 @@ export function registerCommandWatchdog(pi: ExtensionAPI): void {
             const ctx = ctxByCall.get(toolCallId)
             ctxByCall.delete(toolCallId)
             // Cancel the stuck command (kills the tool's whole process tree via
-            // the turn's AbortSignal), then start a fresh turn telling the model
-            // to bound its next attempt. The flag must precede the abort so the
-            // steer loop can never observe the 'aborted' turn before the flag.
+            // the turn's AbortSignal), then, once that run settles, start a fresh
+            // turn telling the model to bound its next attempt.
             if (ctx) {
-                const wasPending = noteWatchdogAbort()
                 try {
                     ctx.abort()
                 } catch (err) {
-                    restoreWatchdogAbort(wasPending) // no turn was aborted
                     // Timer fired after session replacement/reload: the captured ctx
                     // is stale by design (Pi invalidates it in AgentSession.dispose).
                     // Swallow only that guard; anything else keeps throwing, and no
@@ -129,11 +85,7 @@ export function registerCommandWatchdog(pi: ExtensionAPI): void {
                     return
                 }
             }
-            try {
-                pi.sendUserMessage(reminderMessage(toolName, timeoutMs), {deliverAs: 'followUp'})
-            } catch (err) {
-                if (!isStaleCtxError(err)) throw err
-            }
+            queueRecoveryTurn(reminderMessage(toolName, timeoutMs))
         }
     })
 

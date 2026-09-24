@@ -1,8 +1,8 @@
 import {describe, expect, test} from 'bun:test'
 import {
     classifyTurnEnd,
+    registerRunAbortTracker,
     turnErrorMessage,
-    watchdogReminderDelivered,
     resumeAcrossCompactions,
     steerUntilDone,
     superviseWith,
@@ -15,14 +15,22 @@ import {
     type SteerCtx,
     type TurnEnd
 } from '../../src/task/implementation-turn.js'
-import {
-    consumeWatchdogAbort,
-    noteWatchdogAbort,
-    reminderMessage
-} from '../../src/task/command-watchdog.js'
 import {makeFakeCtx, assistantEntry, compactionEntry, userEntry} from '../test-utils/fake-ctx.js'
 
 const e = (x: unknown): SessionEntryLike => x as SessionEntryLike
+
+/** Replay the run's `agent_end` through the tracker, as pi emits it. */
+function endRun(entry: unknown, signalAborted: boolean): void {
+    let onAgentEnd: ((event: unknown, ctx: unknown) => void) | undefined
+    registerRunAbortTracker({
+        on: (name: string, fn: (event: unknown, ctx: unknown) => void) => {
+            if (name === 'agent_end') onAgentEnd = fn
+        }
+    } as never)
+    const controller = new AbortController()
+    if (signalAborted) controller.abort()
+    onAgentEnd!({messages: [e(entry).message]}, {signal: controller.signal})
+}
 
 describe('classifyTurnEnd', () => {
     // Each outcome on its own.
@@ -91,6 +99,38 @@ describe('classifyTurnEnd', () => {
     }
 })
 
+describe('an abort that pi recorded as an error', () => {
+    // Where the abort lands in pi's loop decides the stopReason: during a tool or a
+    // pre-request compaction, the next request's setup fails and records "error".
+    const abortedDuringTool = (): unknown => assistantEntry('error', 'This operation was aborted')
+
+    test('classifies as aborted when its run was aborted', () => {
+        const entry = abortedDuringTool()
+        endRun(entry, true)
+        expect(classifyTurnEnd([e(entry)])).toBe('aborted')
+        expect(turnErrorMessage([e(entry)])).toBeUndefined()
+    })
+
+    test('a genuine provider error, run not aborted, stays an error', () => {
+        const entry = assistantEntry('error', 'This operation was aborted')
+        endRun(entry, false)
+        expect(classifyTurnEnd([e(entry)])).toBe('error')
+        expect(turnErrorMessage([e(entry)])).toBe('This operation was aborted')
+    })
+
+    test('a human ESC during a tool reaches the steer prompt, not a failure', async () => {
+        const entry = abortedDuringTool()
+        endRun(entry, true)
+        const f = fakeDeps({turns: [[entry]]})
+        expect(await superviseWith(f.deps)).toEqual({
+            interrupted: true,
+            error: undefined,
+            resumes: 0
+        })
+        expect(f.asks()).toBe(1)
+    })
+})
+
 describe('turnErrorMessage', () => {
     test('quotes the provider message for an error turn', () => {
         expect(turnErrorMessage([e(assistantEntry('error', '400 exceeds context'))])).toBe(
@@ -112,35 +152,6 @@ describe('turnErrorMessage', () => {
     })
 })
 
-describe('watchdogReminderDelivered', () => {
-    const REMINDER = reminderMessage('bash', 15 * 60_000)
-    test('true when the reminder follows the last assistant message', () => {
-        expect(
-            watchdogReminderDelivered([e(assistantEntry('aborted')), e(userEntry(REMINDER))])
-        ).toBe(true)
-    })
-    test('an earlier fire’s reminder, already answered, does not count', () => {
-        expect(
-            watchdogReminderDelivered([
-                e(assistantEntry('aborted')),
-                e(userEntry(REMINDER)),
-                e(assistantEntry('aborted'))
-            ])
-        ).toBe(false)
-    })
-    test('reads block-array content too', () => {
-        expect(
-            watchdogReminderDelivered([
-                e(assistantEntry('aborted')),
-                e({
-                    type: 'message',
-                    message: {role: 'user', content: [{type: 'text', text: REMINDER}]}
-                })
-            ])
-        ).toBe(true)
-    })
-})
-
 // ─── Fake deps: a scripted session, one entries snapshot per settled turn ────
 
 interface Script {
@@ -148,7 +159,6 @@ interface Script {
     turns: unknown[][]
     /** Answers to successive steer prompts. */
     answers?: Array<string | undefined>
-    consume?: () => boolean
     /** The runaway guard ended this turn. */
     guardTerminated?: () => boolean
 }
@@ -175,7 +185,6 @@ function fakeDeps(script: Script) {
             asks++
             return Promise.resolve(answers.shift())
         },
-        watchdog: {consume: script.consume ?? (() => false), graceMs: 50, pollMs: 5},
         consumeGuardTermination: script.guardTerminated ?? (() => false)
     }
     return {deps, sent, idles: () => idles, asks: () => asks}
@@ -230,8 +239,6 @@ describe('resumeAcrossCompactions', () => {
 })
 
 describe('steerUntilDone', () => {
-    const REMINDER = reminderMessage('bash', 15 * 60_000)
-
     test('a natural completion never prompts', async () => {
         const f = fakeDeps({turns: [[assistantEntry('stop')]]})
         expect(await steerUntilDone(f.deps)).toBe(false)
@@ -252,53 +259,6 @@ describe('steerUntilDone', () => {
         const f = fakeDeps({turns: [[assistantEntry('aborted')]], answers: ['   ']})
         expect(await steerUntilDone(f.deps)).toBe(true)
         expect(f.sent).toEqual([])
-    })
-
-    test('watchdog abort with a delivered reminder never prompts the user', async () => {
-        // Turn 1: aborted by the watchdog, its follow-up already queued.
-        // Turn 2 (after the follow-up runs): a clean stop.
-        const f = fakeDeps({
-            turns: [
-                [assistantEntry('aborted'), userEntry(REMINDER)],
-                [assistantEntry('aborted'), userEntry(REMINDER), assistantEntry('stop')]
-            ],
-            consume: () => true
-        })
-        expect(await steerUntilDone(f.deps)).toBe(false)
-        expect(f.asks()).toBe(0)
-    })
-
-    test('human ESC (no watchdog flag) still prompts to steer', async () => {
-        const f = fakeDeps({
-            turns: [[assistantEntry('aborted')]],
-            answers: [''],
-            consume: () => false
-        })
-        expect(await steerUntilDone(f.deps)).toBe(true)
-        expect(f.asks()).toBe(1)
-    })
-
-    test('stale watchdog flag falls back to the prompt after the grace expires', async () => {
-        // Aborted, but no reminder ever lands — the flag was left over.
-        let consumed = 0
-        const f = fakeDeps({
-            turns: [[assistantEntry('aborted')]],
-            answers: [''],
-            consume: () => {
-                consumed++
-                return consumed === 1 // one-shot, like the real flag
-            }
-        })
-        expect(await steerUntilDone(f.deps)).toBe(true)
-        expect(f.asks()).toBe(1)
-    })
-
-    test('watchdog abort flag is one-shot', () => {
-        consumeWatchdogAbort() // clear any residue from other tests
-        expect(consumeWatchdogAbort()).toBe(false)
-        noteWatchdogAbort()
-        expect(consumeWatchdogAbort()).toBe(true)
-        expect(consumeWatchdogAbort()).toBe(false)
     })
 })
 

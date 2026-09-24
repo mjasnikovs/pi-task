@@ -16,6 +16,7 @@ import * as fsp from 'node:fs/promises'
 import * as path from 'node:path'
 import type {ExtensionAPI} from '@earendil-works/pi-coding-agent'
 import {notifyRun} from '../remote/bridge.js'
+import {recoveryTurnPending} from './recovery-turn.js'
 import {tasksDir} from './task-io.js'
 import {TASKS_DIR_NAME} from './task-types.js'
 
@@ -103,7 +104,7 @@ export function taskDirCustodyHeld(): boolean {
  */
 export function registerTaskDirCustody(pi: ExtensionAPI): void {
     pi.on('agent_settled', async (_event, ctx) => {
-        if (!held?.oneShot) return
+        if (!held?.oneShot || recoveryTurnPending()) return
         const restored = await releaseTaskDirCustody()
         if (restored.length === 0) return
         notifyRun(ctx, taskDirRestoredNotice('The implementation turn', restored), 'warning')

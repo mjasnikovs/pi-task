@@ -29,10 +29,9 @@
  * DEFAULT_STREAM_INACTIVITY_MS.
  *
  * TWO SURFACES, one machine (same split as command-watchdog.ts):
- *   MAIN SESSION — task/stream-watchdog.ts arms it from pi's extension events and
- *                  fires ctx.abort() through the SAME abort plumbing the command
- *                  watchdog uses (noteWatchdogAbort → steerUntilDone), so there is
- *                  exactly one abort channel, not two racing ones.
+ *   MAIN SESSION — task/stream-watchdog.ts arms it from pi's extension events,
+ *                  fires ctx.abort(), and queues its reminder into the same
+ *                  recovery turn the command watchdog uses (task/recovery-turn.ts).
  *   CHILDREN     — shared/child-process.ts arms it on the child's stdout/stderr
  *                  chunks; a fire kills the child and the result carries
  *                  `streamStalled`, which child-runner turns into a

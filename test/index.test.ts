@@ -98,11 +98,13 @@ describe('the pi-task extension entry point', () => {
         }
     })
 
-    test('wires both settle-bound turn modules', () => {
-        // The guard disarms there, and the task-dir custody restores a one-shot turn.
+    test('wires every settle-bound turn module', () => {
+        // The guard disarms there, the task-dir custody restores a one-shot turn, a
+        // watchdog's recovery turn is posted, and the stream watchdog forgets the
+        // settled run's output.
         const r = recorder()
         registerExtension(r.pi)
-        expect(r.events.filter(e => e === 'agent_settled')).toHaveLength(2)
+        expect(r.events.filter(e => e === 'agent_settled')).toHaveLength(4)
     })
 
     test('registers nothing twice — no command or tool name collides', () => {

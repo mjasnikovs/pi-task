@@ -37,6 +37,7 @@ import {
     type ImplState
 } from './widget.js'
 import {setTaskWidget} from '../remote/session-state.js'
+import {recoveryTurnPending} from './recovery-turn.js'
 
 export interface ImplWidgetMeta {
     taskId: string
@@ -162,7 +163,7 @@ export function setupImplWidget(pi: ExtensionAPI): void {
         // Fire-and-forget /task: the single impl turn is over, so disarm. Awaited
         // /task-auto leaves the slot armed so the next compaction-resume / steer
         // turn re-shows it; the caller disarms when the phase truly settles.
-        if (armed.oneShot) {
+        if (armed.oneShot && !recoveryTurnPending()) {
             armed = null
             activeCtx = null
             lastLine = undefined
