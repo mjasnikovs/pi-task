@@ -702,38 +702,49 @@ async function untrackedFiles(cwd: string, signal?: AbortSignal): Promise<Set<st
     return r.exitCode === 0 ? new Set(r.stdout.split('\u0000').filter(f => f.length > 0)) : null
 }
 
+/** Remove what appeared since `before`, except what the suite wrote as the repo's
+ *  own record (see isSuiteRecord). */
+async function removeCreated(
+    cwd: string,
+    before: Set<string>,
+    signal?: AbortSignal
+): Promise<void> {
+    for (const rel of (await untrackedFiles(cwd, signal)) ?? []) {
+        if (!before.has(rel) && !isSuiteRecord(rel)) {
+            await fsp.rm(path.join(cwd, rel), {recursive: true, force: true}).catch(() => {})
+        }
+    }
+}
+
 /**
  * The project's own checks, suite included, once per tree for the run — what the
  * verify gate, the enforce gate and the pre-task baseline all measure. A suite
  * writes coverage, reports and databases into the tree; left there, they ride into
- * the task's commit and read as enforce edits, so what the check created is removed
- * before the tree is hashed again — except what it wrote as the repo's own record
- * (see isSuiteRecord).
+ * the task's commit and read as enforce edits. So what each check created is
+ * removed before the next one runs, which also keeps every check on the tree the
+ * evidence will ask about.
  */
 export function gateRepoHealth(
     cwd: string,
     opts: {signal?: AbortSignal; onCommand?: HealthProgress; run?: CommandRunner} = {}
 ): Promise<HealthOutcome> {
     const {signal, onCommand, run} = opts
-    return currentRunContext(cwd).healthFor(async () => {
+    const rc = currentRunContext(cwd)
+    return rc.healthFor(async tree => {
         const before = await untrackedFiles(cwd, signal)
-        try {
-            return await runRepoHealthCheck(cwd, {
-                withTests: true,
-                run: currentRunContext(cwd).checkRunner(run),
-                ...(signal === undefined ? {} : {signal}),
-                ...(onCommand === undefined ? {} : {onCommand})
-            })
-        } finally {
-            const after = before ? await untrackedFiles(cwd, signal) : null
-            for (const rel of after ?? []) {
-                if (!before?.has(rel) && !isSuiteRecord(rel)) {
-                    await fsp
-                        .rm(path.join(cwd, rel), {recursive: true, force: true})
-                        .catch(() => {})
+        const checks = rc.checkRunner(run, tree)
+        return runRepoHealthCheck(cwd, {
+            withTests: true,
+            run: async spec => {
+                try {
+                    return await checks(spec)
+                } finally {
+                    if (before) await removeCreated(cwd, before, signal)
                 }
-            }
-        }
+            },
+            ...(signal === undefined ? {} : {signal}),
+            ...(onCommand === undefined ? {} : {onCommand})
+        })
     })
 }
 
@@ -784,7 +795,7 @@ export function buildVerifyProbes(params: {
                         commands,
                         treeHash: tree,
                         timeoutMs: getConfig().requestTimeoutMs,
-                        run: rc.checkRunner(run),
+                        run: rc.checkRunner(run, tree),
                         ...(signal === undefined ? {} : {signal}),
                         ...(onCommand === undefined ? {} : {onCommand})
                     })

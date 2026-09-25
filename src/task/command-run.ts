@@ -50,6 +50,9 @@ export interface CommandRun {
     status: number | null
     stdout: string
     stderr: string
+    /** The line that ran, when this run answers a spec that named the check
+     *  another way (see `RunContext.checkRunner`). */
+    ranAs?: string
 }
 
 /** Everything a runner needs to spawn one command. */

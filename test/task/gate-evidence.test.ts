@@ -30,6 +30,7 @@ import {
     type RunContext,
     type ToolingVerdict
 } from '../../src/task/run-context.js'
+import {phaseVerifyTooling} from '../../src/task/phases.js'
 import {buildVerifyPrompt} from '../../src/task/verify-work.js'
 import {tmpDir} from '../test-utils/tmp-dir.js'
 import {withTmpTaskDir} from '../test-utils/tmp-task-dir.js'
@@ -263,14 +264,86 @@ describe('one execution per check per tree', () => {
     })
 })
 
+describe('what a gate runs, and what it reads back', () => {
+    test("a task the run never verified tooling for gets the run's checks", async () => {
+        // A resumed task skips research, so this run never heard its TOOLING.
+        await withProject(async (cwd, rc) => {
+            await verifyFor(rc, [LINT], 'TASK_0001')
+            const {lines, run} = lineSpy()
+            await buildVerifyProbes({cwd, taskId: 'TASK_0002', spec: null, run}).evidence!()
+            expect(lines).toEqual(['bun run lint'])
+        })
+    })
+
+    test('a task whose research named no tooling runs none', async () => {
+        await withProject(async (cwd, rc) => {
+            await verifyFor(rc, [LINT], 'TASK_0001')
+            await phaseVerifyTooling(
+                {
+                    cwd,
+                    taskId: 'TASK_0001',
+                    signal: new AbortController().signal,
+                    runContext: rc,
+                    runChild: () => Promise.resolve('')
+                },
+                'FILES\nsrc.ts\n'
+            )
+            const {lines, run} = lineSpy()
+            await evidenceOf(cwd, run)
+            expect(lines).toEqual([])
+        })
+    })
+
+    test('a report a check leaves in the tree does not cost the next check its reuse', async () => {
+        await withProject(async (cwd, rc) => {
+            await verifyFor(rc, [LINT, TEST])
+            const {lines, run} = lineSpy(line => {
+                if (line === 'bun run lint')
+                    fs.writeFileSync(path.join(cwd, 'lint-report.txt'), 'ok\n')
+                return {}
+            })
+            await gateRepoHealth(cwd, {run})
+            await evidenceOf(cwd, run)
+            expect(lines).toEqual(['bun run lint', 'bun run test'])
+        })
+    })
+
+    test('a check answered by another spelling names the line that ran', async () => {
+        await withProject(async (cwd, rc) => {
+            await verifyFor(rc, [{cmd: 'AGENT=1 bun test', class: 'check'}])
+            const {run} = lineSpy()
+            await gateRepoHealth(cwd, {run})
+            await evidenceOf(cwd, run)
+            const out = fs.readFileSync(path.join(evidenceDir(cwd, rc.runId), '1.out'), 'utf8')
+            expect(out.split('\n')[0]).toBe('$ bun run test')
+        })
+    })
+})
+
 describe('checkIdentity', () => {
     test('a script run by any package manager is its body', () => {
         for (const line of ['bun run test', 'npm run test', 'pnpm test', 'yarn  test'])
             expect(checkIdentity(line, SCRIPTS)).toBe('AGENT=1 bun test')
     })
 
-    test('trailing arguments follow the body', () => {
-        expect(checkIdentity('bun run test --bail', SCRIPTS)).toBe('AGENT=1 bun test --bail')
+    test('a line with arguments is its own check', () => {
+        // npm keeps `--bail` as its own config and bun hands it to the script.
+        expect(checkIdentity('npm run test --bail', SCRIPTS)).not.toBe(
+            checkIdentity('bun run test --bail', SCRIPTS)
+        )
+    })
+
+    test('a script with a pre or post hook is not its body', () => {
+        expect(checkIdentity('bun run test', {...SCRIPTS, pretest: 'bun run build'})).toBe(
+            'bun run test'
+        )
+        expect(checkIdentity('npm test', {...SCRIPTS, posttest: 'rm -rf out'})).toBe('npm test')
+    })
+
+    test('whitespace inside quotes is part of the check', () => {
+        expect(checkIdentity('grep -rq "a  b" src', {})).not.toBe(
+            checkIdentity('grep -rq "a b" src', {})
+        )
     })
 
     test("`bun test` is bun's runner, not the test script", () => {
@@ -279,7 +352,7 @@ describe('checkIdentity', () => {
 
     test('a line naming no script is its own identity', () => {
         expect(checkIdentity('bun run tsc --noEmit', SCRIPTS)).toBe('bun run tsc --noEmit')
-        expect(checkIdentity('npx  tsc --noEmit', SCRIPTS)).toBe('npx tsc --noEmit')
+        expect(checkIdentity(' npx tsc --noEmit ', SCRIPTS)).toBe('npx tsc --noEmit')
     })
 })
 

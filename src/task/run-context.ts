@@ -114,22 +114,34 @@ export type EvidenceRunner = (
 const SCRIPT_RUNNERS = new Set(['npm', 'pnpm', 'yarn', 'bun'])
 
 /**
+ * The package script a line runs: `<pm> run <name>`, or the `test` shorthand of
+ * npm, pnpm and yarn. `bun test` is bun's own runner. A line with more words is
+ * none: npm keeps a trailing `--bail` as its own config, bun hands it to the script.
+ */
+function scriptNamed([runner = '', verb, name, ...rest]: string[]): string | undefined {
+    if (!SCRIPT_RUNNERS.has(runner) || rest.length > 0) return undefined
+    if (verb === 'run') return name
+    return verb === 'test' && name === undefined && runner !== 'bun' ? 'test' : undefined
+}
+
+/**
  * What a check line RUNS, so two names for one package script share an identity:
- * `<pm> run <script>`, and the `test` shorthand of npm, pnpm and yarn, become the
- * script's body plus any trailing arguments. `bun test` is bun's own runner, not
- * the `test` script. Anything else is its own identity, whitespace collapsed.
+ * a line naming a script is the script's body. A script with a `pre` or `post`
+ * hook is not, since only the name runs the hook. Anything else is the line as
+ * written.
  */
 export function checkIdentity(line: string, scripts: Record<string, string>): string {
-    const words = line.trim().split(/\s+/)
-    const [runner = '', verb, name] = words
-    const scriptArgs =
-        !SCRIPT_RUNNERS.has(runner) ? null
-        : verb === 'run' && name !== undefined ? {name, args: words.slice(3)}
-        : verb === 'test' && runner !== 'bun' ? {name: 'test', args: words.slice(2)}
-        : null
-    const body = scriptArgs === null ? undefined : scripts[scriptArgs.name]
-    if (body === undefined || scriptArgs === null) return words.join(' ')
-    return [...body.trim().split(/\s+/), ...scriptArgs.args].join(' ')
+    const own = line.trim()
+    const name = scriptNamed(own.split(/\s+/))
+    const script = (key: string): string | undefined =>
+        Object.hasOwn(scripts, key) && typeof scripts[key] === 'string' ? scripts[key] : undefined
+    if (
+        name === undefined
+        || script(`pre${name}`) !== undefined
+        || script(`post${name}`) !== undefined
+    )
+        return own
+    return script(name)?.trim() ?? own
 }
 
 /** Did the run observe the tree? A gap (nothing spawned, 127, killed) did not, so
@@ -178,7 +190,8 @@ export class RunContext {
     private readonly _taskTooling = new Map<string, string[]>()
     private _evidence: {key: string; value: GateEvidence} | undefined
     /** Check runs on the one tree last asked about; see {@link checkRunner}. */
-    private _checkRuns: {tree: string; runs: Map<string, Promise<CommandRun>>} | undefined
+    private _checkRuns:
+        {tree: string; runs: Map<string, {label: string; run: Promise<CommandRun>}>} | undefined
     private _evidenceQueue: Promise<unknown> = Promise.resolve()
     private _health: {hash: string; value: HealthOutcome} | undefined
     private _healthQueue: Promise<unknown> = Promise.resolve()
@@ -330,8 +343,8 @@ export class RunContext {
     /**
      * This gate session's evidence: the check and build commands `taskId`'s own
      * TOOLING verified, run against the CURRENT tree, at most once per tree (see
-     * gate-evidence.ts). A task this run never verified tooling for gets none, and
-     * its verify child runs the commands itself.
+     * gate-evidence.ts). A task this run never verified tooling for, one resumed
+     * past research, gets every check the run verified.
      *
      * The TREE HASH is the key, so a lint-fix or an autofix that changes the tree
      * costs exactly one re-run and a second gate child on the same tree costs none.
@@ -348,9 +361,9 @@ export class RunContext {
 
     private async freshEvidence(taskId: string, produce: EvidenceRunner): Promise<GateEvidence> {
         const hash = await treeHash(this.cwd, this._signal ? {signal: this._signal} : {})
-        const named = new Set(this._taskTooling.get(taskId))
+        const named = this._taskTooling.get(taskId)
         const commands = this._verifiedTooling.filter(
-            v => named.has(v.cmd) && EVIDENCE_CLASSES.has(v.class)
+            v => (named?.includes(v.cmd) ?? true) && EVIDENCE_CLASSES.has(v.class)
         )
         const key = hash === null ? null : [hash, ...commands.map(c => c.cmd)].join('\n')
         if (key !== null && this._evidence?.key === key) return this._evidence.value
@@ -369,29 +382,40 @@ export class RunContext {
      * `base`, answering a labelled check from an earlier run of the same check on
      * the same tree. The verify gate's health check and its evidence ask for the
      * same suite back to back, often under two names (`bun run test`, `AGENT=1 bun
-     * test`); {@link checkIdentity} makes them one ask.
+     * test`); {@link checkIdentity} makes them one ask. An answer from another
+     * spelling carries the line that ran as `ranAs`.
+     *
+     * `tree` is the caller's hash of the tree in front of it. It stands until this
+     * runner spawns something, which may move the tree.
      *
      * Only the latest tree's runs are held: every gate works on the tree in front
      * of it, so older ones are never asked for again.
      */
-    checkRunner(base: CommandRunner = spawnCommand): CommandRunner {
+    checkRunner(base: CommandRunner = spawnCommand, tree: string | null = null): CommandRunner {
+        let known = tree
         return async spec => {
-            if (spec.label === undefined) return base(spec)
+            const label = spec.label
+            const knownHere = spec.cwd === this.cwd ? known : null
+            known = null
+            if (label === undefined) return base(spec)
             const signal = spec.signal ?? this._signal
-            const hash = await treeHash(spec.cwd, signal ? {signal} : {})
+            const hash = knownHere ?? (await treeHash(spec.cwd, signal ? {signal} : {}))
             if (hash === null) return base(spec)
-            const tree = `${spec.cwd}\n${hash}`
-            if (this._checkRuns?.tree !== tree) this._checkRuns = {tree, runs: new Map()}
+            const at = `${spec.cwd}\n${hash}`
+            if (this._checkRuns?.tree !== at) this._checkRuns = {tree: at, runs: new Map()}
             const runs = this._checkRuns.runs
-            const key = checkIdentity(spec.label, packageScripts(spec.cwd))
+            const key = checkIdentity(label, packageScripts(spec.cwd))
             const earlier = runs.get(key)
             if (earlier) {
-                const run = await earlier.catch(() => null)
-                if (run && observedTree(run)) return run
+                const run = await earlier.run.catch(() => null)
+                if (run && observedTree(run)) {
+                    if (spec.cwd === this.cwd) known = hash
+                    return earlier.label === label ? run : {...run, ranAs: earlier.label}
+                }
             }
-            const fresh = base(spec)
+            const fresh = {label, run: base(spec)}
             runs.set(key, fresh)
-            const run = await fresh.catch((e: unknown) => {
+            const run = await fresh.run.catch((e: unknown) => {
                 runs.delete(key)
                 throw e
             })
@@ -409,17 +433,19 @@ export class RunContext {
      * Stored under the tree the check LEFT, not the one it found: a `--fix` lint
      * moves the tree, and the result describes the fixed one.
      */
-    healthFor(produce: () => Promise<HealthOutcome>): Promise<HealthOutcome> {
+    healthFor(produce: (tree: string | null) => Promise<HealthOutcome>): Promise<HealthOutcome> {
         const next = this._healthQueue.then(() => this.freshHealth(produce))
         this._healthQueue = next.catch(() => {})
         return next
     }
 
-    private async freshHealth(produce: () => Promise<HealthOutcome>): Promise<HealthOutcome> {
+    private async freshHealth(
+        produce: (tree: string | null) => Promise<HealthOutcome>
+    ): Promise<HealthOutcome> {
         const opts = this._signal ? {signal: this._signal} : {}
         const found = await treeHash(this.cwd, opts)
         if (found !== null && this._health?.hash === found) return this._health.value
-        const value = await produce()
+        const value = await produce(found)
         const left = await treeHash(this.cwd, opts)
         if (left !== null) this._health = {hash: left, value}
         return value

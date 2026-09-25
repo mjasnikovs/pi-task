@@ -456,6 +456,10 @@ export const phaseRefine = async (deps: PhaseDeps, raw: string, planContext?: st
 export async function phaseVerifyTooling(deps: PhaseDeps, research: string): Promise<string> {
     const commands = extractToolingCommands(research)
     if (!commands || commands.length === 0) {
+        // Recorded even when empty, or this task's gate runs a list it never named.
+        await runContextFor(deps).verifiedToolingFor(deps.taskId, [], () =>
+            Promise.resolve({verified: [], rejected: []})
+        )
         return replaceToolingWithVerified(research, [])
     }
 

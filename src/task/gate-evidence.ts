@@ -115,7 +115,7 @@ export async function runGateEvidence(deps: EvidenceRunDeps): Promise<GateEviden
         await fsp.writeFile(
             outputPath,
             evidenceFile(
-                v.cmd,
+                r.ranAs ?? v.cmd,
                 gap === undefined ? `exit ${r.status}` : `skipped — ${gap}`,
                 r.stdout,
                 r.stderr
