@@ -66,6 +66,9 @@ export interface CommandSpec {
     env?: Record<string, string | undefined>
     /** The caller's cancel. Kills a running child, whose run then reads as `status: null`. */
     signal?: AbortSignal
+    /** The line as the project would type it (`bun run test`). Only a spec that
+     *  carries one may be answered from another run (see `RunContext.checkRunner`). */
+    label?: string
 }
 
 /**

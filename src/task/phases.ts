@@ -464,32 +464,36 @@ export async function phaseVerifyTooling(deps: PhaseDeps, research: string): Pro
     // verdict: the next task asks again.
     let unverified = false
     let inconclusive = false
-    const verified = await runContextFor(deps).verifiedToolingFor(commands, async unknown => {
-        let output: string
-        try {
-            output = await runPhaseChild(
-                deps,
-                'verify-tooling',
-                'read,bash',
-                VERIFY_TOOLING_PROMPT(unknown.join('\n'))
-            )
-        } catch (e) {
-            if (isFatalChildCause(e)) throw e
-            // A hung command is the one cause worth a trail line: it cost the
-            // ceiling on every strike and says the SPEC named something unbounded.
-            if (e instanceof ChildFailureError && e.failure.kind === 'command-timeout') {
-                deps.logDebug?.(`verify-tooling: ${e.message} — shipping the list unverified`)
+    const verified = await runContextFor(deps).verifiedToolingFor(
+        deps.taskId,
+        commands,
+        async unknown => {
+            let output: string
+            try {
+                output = await runPhaseChild(
+                    deps,
+                    'verify-tooling',
+                    'read,bash',
+                    VERIFY_TOOLING_PROMPT(unknown.join('\n'))
+                )
+            } catch (e) {
+                if (isFatalChildCause(e)) throw e
+                // A hung command is the one cause worth a trail line: it cost the
+                // ceiling on every strike and says the SPEC named something unbounded.
+                if (e instanceof ChildFailureError && e.failure.kind === 'command-timeout') {
+                    deps.logDebug?.(`verify-tooling: ${e.message} — shipping the list unverified`)
+                }
+                unverified = true
+                return {verified: [], rejected: []}
             }
-            unverified = true
-            return {verified: [], rejected: []}
+            const parsed = parseVerifyToolingOutput(output)
+            inconclusive = parsed.verified.length === 0 && parsed.rejected.length === 0
+            return {
+                verified: parsed.verified.map(v => ({cmd: v.cmd, class: v.class})),
+                rejected: parsed.rejected.map(r => r.cmd)
+            }
         }
-        const parsed = parseVerifyToolingOutput(output)
-        inconclusive = parsed.verified.length === 0 && parsed.rejected.length === 0
-        return {
-            verified: parsed.verified.map(v => ({cmd: v.cmd, class: v.class})),
-            rejected: parsed.rejected.map(r => r.cmd)
-        }
-    })
+    )
 
     if (unverified) return replaceToolingWithVerified(research, commands)
 

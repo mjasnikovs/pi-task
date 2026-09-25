@@ -19,10 +19,11 @@ import {spawnSync} from 'node:child_process'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 import {getConfig} from '../../src/config/config.js'
-import {buildVerifyProbes} from '../../src/task/gate-deps.js'
+import {buildVerifyProbes, gateRepoHealth} from '../../src/task/gate-deps.js'
 import {evidenceDir, runGateEvidence} from '../../src/task/gate-evidence.js'
 import type {CommandRun, CommandRunner, CommandSpec} from '../../src/task/command-run.js'
 import {
+    checkIdentity,
     closeRunContext,
     openRunContext,
     NOT_RUN,
@@ -72,6 +73,7 @@ async function withRun(
         const rc = openRunContext(cwd)
         try {
             await rc.verifiedToolingFor(
+                'TASK_0001',
                 verdicts.map(v => v.cmd),
                 () => Promise.resolve({verified: verdicts, rejected: []})
             )
@@ -152,6 +154,132 @@ describe('one run per tree', () => {
             await evidenceOf(cwd, spyRunner(() => ({status: 2})).run)
             expect(rc.verifiedTooling[0].exitCode).toBe(2)
         })
+    })
+})
+
+/**
+ * The line a spec would run, whichever runner spawned it: evidence hands `sh` the
+ * line, the health check hands the resolved runner its argv.
+ */
+const spawnedLine = (spec: CommandSpec): string =>
+    spec.bin === 'sh' ? (spec.args[1] ?? '') : [path.basename(spec.bin), ...spec.args].join(' ')
+
+/** {@link spyRunner}, recording lines from both runners the gate uses. */
+function lineSpy(reply: (line: string) => Partial<CommandRun> = () => ({})): {
+    lines: string[]
+    run: CommandRunner
+} {
+    const lines: string[] = []
+    const run = (spec: CommandSpec): Promise<CommandRun> => {
+        const line = spawnedLine(spec)
+        lines.push(line)
+        return Promise.resolve({
+            failedToStart: false,
+            status: 0,
+            stdout: ' 3 pass\n',
+            stderr: '',
+            ...reply(line)
+        })
+    }
+    return {lines, run}
+}
+
+/** Record `verdicts` as the TOOLING `taskId`'s research verified. */
+const verifyFor = (rc: RunContext, verdicts: ToolingVerdict[], taskId = 'TASK_0001') =>
+    rc.verifiedToolingFor(
+        taskId,
+        verdicts.map(v => v.cmd),
+        () => Promise.resolve({verified: verdicts, rejected: []})
+    )
+
+const SCRIPTS = {lint: 'eslint .', test: 'AGENT=1 bun test'}
+
+/** A run over a project whose manifest declares {@link SCRIPTS}. */
+async function withProject(fn: (cwd: string, rc: RunContext) => Promise<void>): Promise<void> {
+    await withRun([], async (cwd, rc) => {
+        fs.writeFileSync(path.join(cwd, 'package.json'), JSON.stringify({scripts: SCRIPTS}))
+        await fn(cwd, rc)
+    })
+}
+
+const TEST: ToolingVerdict = {cmd: 'bun run test', class: 'check'}
+
+describe('one execution per check per tree', () => {
+    test('a gate runs the checks its own task named, not every spelling the run has seen', async () => {
+        await withProject(async (cwd, rc) => {
+            await verifyFor(rc, [{cmd: 'bun test', class: 'check'}], 'TASK_0001')
+            await verifyFor(rc, [LINT], 'TASK_0002')
+            const {lines, run} = lineSpy()
+            await buildVerifyProbes({cwd, taskId: 'TASK_0002', spec: null, run}).evidence!()
+            expect(lines).toEqual(['bun run lint'])
+        })
+    })
+
+    test('a check the health gate just ran on this tree is read, not run again', async () => {
+        await withProject(async (cwd, rc) => {
+            await verifyFor(rc, [LINT, TEST])
+            const {lines, run} = lineSpy()
+            await gateRepoHealth(cwd, {run})
+            const findings = await evidenceOf(cwd, run)
+            expect(lines).toEqual(['bun run lint', 'bun run test'])
+            expect(findings).toHaveLength(2)
+            expect(findings.every(f => f.includes('exit 0'))).toBe(true)
+        })
+    })
+
+    test('a script named by its body is the same check', async () => {
+        await withProject(async (cwd, rc) => {
+            await verifyFor(rc, [{cmd: 'AGENT=1 bun test', class: 'check'}])
+            const {lines, run} = lineSpy()
+            await gateRepoHealth(cwd, {run})
+            await evidenceOf(cwd, run)
+            expect(lines).toEqual(['bun run lint', 'bun run test'])
+        })
+    })
+
+    test('a check that could not run is not handed on as a result', async () => {
+        await withProject(async (cwd, rc) => {
+            await verifyFor(rc, [TEST])
+            const {lines, run} = lineSpy(line =>
+                lines.length === 2 ?
+                    {status: 127, stdout: '', stderr: `sh: 1: ${line}: not found\n`}
+                :   {}
+            )
+            await gateRepoHealth(cwd, {run})
+            await evidenceOf(cwd, run)
+            expect(lines).toEqual(['bun run lint', 'bun run test', 'bun run test'])
+        })
+    })
+
+    test('a tree the health gate did not see is checked again', async () => {
+        await withProject(async (cwd, rc) => {
+            await verifyFor(rc, [TEST])
+            const {lines, run} = lineSpy()
+            await gateRepoHealth(cwd, {run})
+            fs.writeFileSync(path.join(cwd, 'src.ts'), 'export const a = 2\n')
+            await evidenceOf(cwd, run)
+            expect(lines).toEqual(['bun run lint', 'bun run test', 'bun run test'])
+        })
+    })
+})
+
+describe('checkIdentity', () => {
+    test('a script run by any package manager is its body', () => {
+        for (const line of ['bun run test', 'npm run test', 'pnpm test', 'yarn  test'])
+            expect(checkIdentity(line, SCRIPTS)).toBe('AGENT=1 bun test')
+    })
+
+    test('trailing arguments follow the body', () => {
+        expect(checkIdentity('bun run test --bail', SCRIPTS)).toBe('AGENT=1 bun test --bail')
+    })
+
+    test("`bun test` is bun's runner, not the test script", () => {
+        expect(checkIdentity('bun test', SCRIPTS)).toBe('bun test')
+    })
+
+    test('a line naming no script is its own identity', () => {
+        expect(checkIdentity('bun run tsc --noEmit', SCRIPTS)).toBe('bun run tsc --noEmit')
+        expect(checkIdentity('npx  tsc --noEmit', SCRIPTS)).toBe('npx tsc --noEmit')
     })
 })
 

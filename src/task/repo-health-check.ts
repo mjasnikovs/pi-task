@@ -318,6 +318,7 @@ export async function runRepoHealthCheck(
             cwd,
             bin: runner.bin,
             args,
+            label: cmd,
             timeoutMs: opts.timeoutMs ?? 600_000,
             env: runnerEnv(runner),
             ...(opts.signal === undefined ? {} : {signal: opts.signal})

@@ -105,6 +105,7 @@ export async function runGateEvidence(deps: EvidenceRunDeps): Promise<GateEviden
             cwd: v.cwd,
             bin: 'sh',
             args: ['-c', v.cmd],
+            label: v.cmd,
             timeoutMs: deps.timeoutMs,
             env: runner ? runnerEnv(runner) : {...process.env},
             ...(deps.signal === undefined ? {} : {signal: deps.signal})

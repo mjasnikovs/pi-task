@@ -27,9 +27,16 @@ import * as fsp from 'node:fs/promises'
 import * as path from 'node:path'
 import type {SpawnFn} from '../shared/child-process.js'
 import {makeGit} from '../shared/git-runner.js'
+import {
+    classifyCommandRun,
+    spawnCommand,
+    type CommandRun,
+    type CommandRunner
+} from './command-run.js'
 import {declaredDepNames, detectEcosystems, type EcosystemId} from '../workers/docs-ecosystems.js'
 import {newRunToken} from '../workers/research-cache.js'
 import {getFileInventory} from './file-inventory.js'
+import {packageScripts} from './launch-manifest.js'
 import type {GateEvidence} from './gate-evidence.js'
 import {getConfig} from '../config/config.js'
 import {buildOrientation, parseIgnorePatterns, type OrientationResult} from './orientation.js'
@@ -104,6 +111,31 @@ export type EvidenceRunner = (
     treeHash: string | null
 ) => Promise<GateEvidence>
 
+const SCRIPT_RUNNERS = new Set(['npm', 'pnpm', 'yarn', 'bun'])
+
+/**
+ * What a check line RUNS, so two names for one package script share an identity:
+ * `<pm> run <script>`, and the `test` shorthand of npm, pnpm and yarn, become the
+ * script's body plus any trailing arguments. `bun test` is bun's own runner, not
+ * the `test` script. Anything else is its own identity, whitespace collapsed.
+ */
+export function checkIdentity(line: string, scripts: Record<string, string>): string {
+    const words = line.trim().split(/\s+/)
+    const [runner = '', verb, name] = words
+    const scriptArgs =
+        !SCRIPT_RUNNERS.has(runner) ? null
+        : verb === 'run' && name !== undefined ? {name, args: words.slice(3)}
+        : verb === 'test' && runner !== 'bun' ? {name: 'test', args: words.slice(2)}
+        : null
+    const body = scriptArgs === null ? undefined : scripts[scriptArgs.name]
+    if (body === undefined || scriptArgs === null) return words.join(' ')
+    return [...body.trim().split(/\s+/), ...scriptArgs.args].join(' ')
+}
+
+/** Did the run observe the tree? A gap (nothing spawned, 127, killed) did not, so
+ *  it is never handed to a second caller in place of that caller's own run. */
+const observedTree = (run: CommandRun): boolean => classifyCommandRun(run).outcome !== 'gap'
+
 /** A verify-tooling verdict as the child reported it, before it is dated and stored. */
 export interface ToolingVerdict {
     cmd: string
@@ -142,7 +174,11 @@ export class RunContext {
     /** Commands verify-tooling has already refused under `_toolingHash`. */
     private _rejectedTooling = new Set<string>()
     private _toolingHash: string | undefined
-    private _evidence: {hash: string; value: GateEvidence} | undefined
+    /** The verified commands each task's own TOOLING named. */
+    private readonly _taskTooling = new Map<string, string[]>()
+    private _evidence: {key: string; value: GateEvidence} | undefined
+    /** Check runs on the one tree last asked about; see {@link checkRunner}. */
+    private _checkRuns: {tree: string; runs: Map<string, Promise<CommandRun>>} | undefined
     private _evidenceQueue: Promise<unknown> = Promise.resolve()
     private _health: {hash: string; value: HealthOutcome} | undefined
     private _healthQueue: Promise<unknown> = Promise.resolve()
@@ -246,8 +282,13 @@ export class RunContext {
      * can change which commands the project has, so it is the only thing that drops
      * the verdicts. Short of that, the second task's identical TOOLING list is
      * answered from the first task's child.
+     *
+     * The answer is also remembered as `taskId`'s own, because the run's verdicts
+     * are not a command list: each task's TOOLING names the same check its own way,
+     * and a gate that ran them all would run one suite under every spelling.
      */
     async verifiedToolingFor(
+        taskId: string,
         commands: string[],
         verify: VerifyToolingFn
     ): Promise<VerifiedCommand[]> {
@@ -278,41 +319,85 @@ export class RunContext {
             for (const c of r.rejected) this._rejectedTooling.add(c)
         }
         const wanted = new Set(commands)
-        return this._verifiedTooling.filter(v => wanted.has(v.cmd))
+        const named = this._verifiedTooling.filter(v => wanted.has(v.cmd))
+        this._taskTooling.set(
+            taskId,
+            named.map(v => v.cmd)
+        )
+        return named
     }
 
     /**
-     * This gate session's evidence: the run's verified check and build commands,
-     * run against the CURRENT tree, at most once per tree (see gate-evidence.ts).
+     * This gate session's evidence: the check and build commands `taskId`'s own
+     * TOOLING verified, run against the CURRENT tree, at most once per tree (see
+     * gate-evidence.ts). A task this run never verified tooling for gets none, and
+     * its verify child runs the commands itself.
      *
      * The TREE HASH is the key, so a lint-fix or an autofix that changes the tree
      * costs exactly one re-run and a second gate child on the same tree costs none.
      * A tree git cannot hash is never cached: "unchanged" is not something we could
      * claim about it.
      */
-    gateEvidenceFor(produce: EvidenceRunner): Promise<GateEvidence> {
+    gateEvidenceFor(taskId: string, produce: EvidenceRunner): Promise<GateEvidence> {
         // Serialised rather than merely memoised: two gate children asking at once
         // is exactly the duplicate suite run this cache exists to kill.
-        const next = this._evidenceQueue.then(() => this.freshEvidence(produce))
+        const next = this._evidenceQueue.then(() => this.freshEvidence(taskId, produce))
         this._evidenceQueue = next.catch(() => {})
         return next
     }
 
-    private async freshEvidence(produce: EvidenceRunner): Promise<GateEvidence> {
+    private async freshEvidence(taskId: string, produce: EvidenceRunner): Promise<GateEvidence> {
         const hash = await treeHash(this.cwd, this._signal ? {signal: this._signal} : {})
-        if (hash !== null && this._evidence?.hash === hash) return this._evidence.value
-        const value = await produce(
-            this._verifiedTooling.filter(v => EVIDENCE_CLASSES.has(v.class)),
-            hash
+        const named = new Set(this._taskTooling.get(taskId))
+        const commands = this._verifiedTooling.filter(
+            v => named.has(v.cmd) && EVIDENCE_CLASSES.has(v.class)
         )
+        const key = hash === null ? null : [hash, ...commands.map(c => c.cmd)].join('\n')
+        if (key !== null && this._evidence?.key === key) return this._evidence.value
+        const value = await produce(commands, hash)
         // {@link NOT_RUN} stands until something runs the command. This is that
         // something, so the verdicts stop claiming nobody has.
         for (const c of value.commands) {
             const verified = this._verifiedTooling.find(v => v.cmd === c.cmd)
             if (verified) verified.exitCode = c.exitCode
         }
-        if (hash !== null) this._evidence = {hash, value}
+        if (key !== null) this._evidence = {key, value}
         return value
+    }
+
+    /**
+     * `base`, answering a labelled check from an earlier run of the same check on
+     * the same tree. The verify gate's health check and its evidence ask for the
+     * same suite back to back, often under two names (`bun run test`, `AGENT=1 bun
+     * test`); {@link checkIdentity} makes them one ask.
+     *
+     * Only the latest tree's runs are held: every gate works on the tree in front
+     * of it, so older ones are never asked for again.
+     */
+    checkRunner(base: CommandRunner = spawnCommand): CommandRunner {
+        return async spec => {
+            if (spec.label === undefined) return base(spec)
+            const signal = spec.signal ?? this._signal
+            const hash = await treeHash(spec.cwd, signal ? {signal} : {})
+            if (hash === null) return base(spec)
+            const tree = `${spec.cwd}\n${hash}`
+            if (this._checkRuns?.tree !== tree) this._checkRuns = {tree, runs: new Map()}
+            const runs = this._checkRuns.runs
+            const key = checkIdentity(spec.label, packageScripts(spec.cwd))
+            const earlier = runs.get(key)
+            if (earlier) {
+                const run = await earlier.catch(() => null)
+                if (run && observedTree(run)) return run
+            }
+            const fresh = base(spec)
+            runs.set(key, fresh)
+            const run = await fresh.catch((e: unknown) => {
+                runs.delete(key)
+                throw e
+            })
+            if (!observedTree(run) && runs.get(key) === fresh) runs.delete(key)
+            return run
+        }
     }
 
     /**

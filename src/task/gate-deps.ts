@@ -693,6 +693,50 @@ export async function healthBaselineFor(
     }
 }
 
+async function untrackedFiles(cwd: string, signal?: AbortSignal): Promise<Set<string> | null> {
+    const r = await git(
+        cwd,
+        ['ls-files', '--others', '--exclude-standard', '-z', '--', '.', EXCLUDE_TASKS_DIR],
+        signal
+    )
+    return r.exitCode === 0 ? new Set(r.stdout.split('\u0000').filter(f => f.length > 0)) : null
+}
+
+/**
+ * The project's own checks, suite included, once per tree for the run — what the
+ * verify gate, the enforce gate and the pre-task baseline all measure. A suite
+ * writes coverage, reports and databases into the tree; left there, they ride into
+ * the task's commit and read as enforce edits, so what the check created is removed
+ * before the tree is hashed again — except what it wrote as the repo's own record
+ * (see isSuiteRecord).
+ */
+export function gateRepoHealth(
+    cwd: string,
+    opts: {signal?: AbortSignal; onCommand?: HealthProgress; run?: CommandRunner} = {}
+): Promise<HealthOutcome> {
+    const {signal, onCommand, run} = opts
+    return currentRunContext(cwd).healthFor(async () => {
+        const before = await untrackedFiles(cwd, signal)
+        try {
+            return await runRepoHealthCheck(cwd, {
+                withTests: true,
+                run: currentRunContext(cwd).checkRunner(run),
+                ...(signal === undefined ? {} : {signal}),
+                ...(onCommand === undefined ? {} : {onCommand})
+            })
+        } finally {
+            const after = before ? await untrackedFiles(cwd, signal) : null
+            for (const rel of after ?? []) {
+                if (!before?.has(rel) && !isSuiteRecord(rel)) {
+                    await fsp
+                        .rm(path.join(cwd, rel), {recursive: true, force: true})
+                        .catch(() => {})
+                }
+            }
+        }
+    })
+}
+
 /**
  * Bind the deterministic verify probes — THE one place the collectors above meet
  * the probe table in verify-work.ts. One entry per `BoundProbeKey`; the table row
@@ -733,16 +777,16 @@ export function buildVerifyProbes(params: {
         evidence: () => {
             const rc = currentRunContext(cwd)
             return rc
-                .gateEvidenceFor((commands, tree) =>
+                .gateEvidenceFor(taskId, (commands, tree) =>
                     runGateEvidence({
                         cwd,
                         runId: rc.runId,
                         commands,
                         treeHash: tree,
                         timeoutMs: getConfig().requestTimeoutMs,
+                        run: rc.checkRunner(run),
                         ...(signal === undefined ? {} : {signal}),
-                        ...(onCommand === undefined ? {} : {onCommand}),
-                        ...(run === undefined ? {} : {run})
+                        ...(onCommand === undefined ? {} : {onCommand})
                     })
                 )
                 .then(evidenceVerifyFindings)
@@ -901,36 +945,8 @@ export function buildGateDeps(params: {
         await git(cwd2, ['clean', '-fd', '-e', '.pi-tasks'], signal)
     }
 
-    const untrackedFiles = async (cwd2: string): Promise<Set<string> | null> => {
-        const r = await git(
-            cwd2,
-            ['ls-files', '--others', '--exclude-standard', '-z', '--', '.', EXCLUDE_TASKS_DIR],
-            signal
-        )
-        return r.exitCode === 0 ? new Set(r.stdout.split('\u0000').filter(f => f.length > 0)) : null
-    }
-
-    // The project's own checks, suite included, once per tree for the run. A suite
-    // writes coverage, reports and databases into the tree; left there, they ride
-    // into the task's commit and read as enforce edits, so what the check created
-    // is removed before the tree is hashed again — except what it wrote as the
-    // repo's own record (see isSuiteRecord).
     const gateHealth = (cwd2: string, onCommand: HealthProgress): Promise<HealthOutcome> =>
-        currentRunContext(cwd2).healthFor(async () => {
-            const before = await untrackedFiles(cwd2)
-            try {
-                return await runRepoHealthCheck(cwd2, {signal, withTests: true, onCommand})
-            } finally {
-                const after = before ? await untrackedFiles(cwd2) : null
-                for (const rel of after ?? []) {
-                    if (!before?.has(rel) && !isSuiteRecord(rel)) {
-                        await fsp
-                            .rm(path.join(cwd2, rel), {recursive: true, force: true})
-                            .catch(() => {})
-                    }
-                }
-            }
-        })
+        gateRepoHealth(cwd2, {onCommand, ...(signal === undefined ? {} : {signal})})
 
     // The project's own checks, under a live loader naming the running command.
     // Each run is as long as that command, and a gate step that long with no widget
