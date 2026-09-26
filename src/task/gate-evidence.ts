@@ -26,7 +26,13 @@
  */
 import * as fsp from 'node:fs/promises'
 import * as path from 'node:path'
-import {classifyCommandRun, leadingBin, spawnCommand, type CommandRunner} from './command-run.js'
+import {
+    classifyCommandRun,
+    leadingBin,
+    reportedSuffix,
+    spawnCommand,
+    type CommandRunner
+} from './command-run.js'
 import {resolveRunner, runnerEnv} from './runner-resolve.js'
 import {NOT_RUN, type VerifiedCommand} from './run-context.js'
 import {stateDir} from './state-dir.js'
@@ -43,6 +49,8 @@ export interface EvidenceCommand {
     treeHash: string | null
     /** The env-gap ladder's reason nothing was observed. Absent ⇒ the command ran. */
     gap?: string
+    /** The runner's failure summary, when it overruled an exit 0. */
+    report?: string
 }
 
 /** What one gate session hands its children in place of a command to run. */
@@ -112,11 +120,14 @@ export async function runGateEvidence(deps: EvidenceRunDeps): Promise<GateEviden
         })
         const verdict = classifyCommandRun(r)
         const gap = verdict.outcome === 'gap' ? verdict.detail : undefined
+        const report = verdict.outcome === 'fail' ? verdict.report : undefined
         await fsp.writeFile(
             outputPath,
             evidenceFile(
                 r.ranAs ?? v.cmd,
-                gap === undefined ? `exit ${r.status}` : `skipped — ${gap}`,
+                gap === undefined ?
+                    `exit ${r.status}${reportedSuffix({report})}`
+                :   `skipped — ${gap}`,
                 r.stdout,
                 r.stderr
             ),
@@ -128,7 +139,8 @@ export async function runGateEvidence(deps: EvidenceRunDeps): Promise<GateEviden
             exitCode: gap === undefined ? (r.status ?? NOT_RUN) : NOT_RUN,
             outputPath,
             treeHash: deps.treeHash,
-            ...(gap === undefined ? {} : {gap})
+            ...(gap === undefined ? {} : {gap}),
+            ...(report === undefined ? {} : {report})
         })
     }
     return {commands}
@@ -139,7 +151,7 @@ export async function runGateEvidence(deps: EvidenceRunDeps): Promise<GateEviden
 export function evidenceVerifyFindings(evidence: GateEvidence): string[] {
     return evidence.commands.map(
         c =>
-            `\`${c.cmd}\` — ${c.gap === undefined ? `exit ${c.exitCode}` : `SKIPPED (${c.gap})`}`
+            `\`${c.cmd}\` — ${c.gap === undefined ? `exit ${c.exitCode}${reportedSuffix(c)}` : `SKIPPED (${c.gap})`}`
             + ` — full output: ${c.outputPath}`
     )
 }

@@ -27,6 +27,7 @@ import * as os from 'node:os'
 import * as path from 'node:path'
 import type {GitRunner} from '../shared/git-runner.js'
 import type {HealthCommandResult, HealthOutcome} from './repo-health-check.js'
+import {reportedSuffix} from './command-run.js'
 import {commitTreeHash} from './tree-hash.js'
 
 /**
@@ -135,8 +136,8 @@ export function regressedCommands(
 export function inheritedHealthFindings(after: HealthSignal): string[] {
     return failures(after).map(c =>
         c.kind === 'test' ?
-            `\`${c.cmd}\` exits ${c.exitCode}, as it did before this task — the same exit code, not proof the same tests fail`
-        :   `\`${c.cmd}\` exits ${c.exitCode} (and did before this task)`
+            `\`${c.cmd}\` exits ${c.exitCode}${reportedSuffix(c)}, as it did before this task — the same exit code, not proof the same tests fail`
+        :   `\`${c.cmd}\` exits ${c.exitCode}${reportedSuffix(c)} (and did before this task)`
     )
 }
 

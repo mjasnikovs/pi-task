@@ -235,6 +235,16 @@ describe('inheritedHealthFindings', () => {
     })
 })
 
+test('a suite red by its own report under exit 0 names the report', () => {
+    const [line] = inheritedHealthFindings({
+        ok: false,
+        commands: [
+            {cmd: 'bun run test', outcome: 'fail', exitCode: 0, kind: 'test', report: '1 fail'}
+        ]
+    })
+    expect(line).toContain('`bun run test` exits 0 but reported "1 fail", as it did before')
+})
+
 describe('the task-file section', () => {
     const baseline: HealthBaseline = {
         at: '2026-09-16T00:00:00.000Z',

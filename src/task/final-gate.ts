@@ -84,6 +84,7 @@ import {readEnvNotes, parseEnvNotes, isExcuseNote} from './env-notes.js'
 import {resolveRunner, runnerEnv} from './runner-resolve.js'
 import {
     classifyCommandRun,
+    reportedSuffix,
     spawnCommand,
     INFRA_GAP_OUTPUT_RE,
     type CommandRunner
@@ -357,7 +358,7 @@ async function runGateCommand(
           spawnFailed: boolean
       }
     | {outcome: 'pass'}
-    | {outcome: 'fail'; status: number; tail: string}
+    | {outcome: 'fail'; status: number; tail: string; report?: string}
 > {
     // Runner resolution: a login-shell-stripped PATH left `bun`
     // unspawnable, so every dynamic check skipped and the gate went blind. The
@@ -697,7 +698,7 @@ export async function runFinalIntegrationGate(
             tally.observed()
             if (r.outcome === 'fail') {
                 tally.fail(
-                    `${prefix}\`${label}\` exited ${r.status}${r.tail ? ` — ${r.tail}` : ''}`
+                    `${prefix}\`${label}\` exited ${r.status}${reportedSuffix(r)}${r.tail ? ` — ${r.tail}` : ''}`
                 )
                 continue
             }
@@ -794,7 +795,7 @@ export async function runFinalIntegrationGate(
                     }
                 }
                 tally.fail(
-                    `launch script: \`${label}\` exited ${r.status}${r.tail ? ` — ${r.tail}` : ''}`
+                    `launch script: \`${label}\` exited ${r.status}${reportedSuffix(r)}${r.tail ? ` — ${r.tail}` : ''}`
                 )
                 continue
             }

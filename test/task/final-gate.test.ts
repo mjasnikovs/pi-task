@@ -212,6 +212,24 @@ describe('runFinalIntegrationGate', () => {
         expect(out.reason).toContain('photos upload limit')
     })
 
+    // mx5-n's `test` script exited 0 over a failing bun suite.
+    test('a test script that exits 0 over a failing report FAILS, quoting the report', async () => {
+        const dir = makeDir({scripts: {test: "printf ' 3 pass\\n 1 fail\\n'"}})
+        const out = await runFinalIntegrationGate(dir)
+        expect(out.ok).toBe(false)
+        expect(out.reason).toContain('`bun run test` exited 0 but reported "1 fail"')
+    })
+
+    test('a launch script that exits 0 over a failing report FAILS, quoting the report', async () => {
+        const dir = makeDir({scripts: {migrate: "printf ' 1 fail\\n'"}})
+        await appendDeclaredScripts(dir, ['migrate'])
+        const out = await runFinalIntegrationGate(dir)
+        expect(out.ok).toBe(false)
+        expect(out.reason).toContain(
+            'launch script: `bun run migrate` exited 0 but reported "1 fail"'
+        )
+    })
+
     test('build failure surfaces after a passing test', async () => {
         const dir = makeDir({scripts: {test: 'exit 0', build: 'exit 2'}})
         const out = await runFinalIntegrationGate(dir)
@@ -1755,6 +1773,16 @@ test('rerunDebtVerifyCommand: a FAILING command never reaches the tracked-state 
     expect(r.detail).toContain('exit 1')
     // One git read (the "before"), never the second.
     expect(seen.filter(c => c.startsWith('git')).length).toBe(1)
+})
+
+// mx5-n: `bun run test` was `AGENT=1 bun test; test $? -le 1 && …`. Re-run over a
+// failing suite it exits 0, and "only exit 0 closes a debt" closed a red one.
+test('rerunDebtVerifyCommand: an exit 0 over a failing test report keeps the debt open', async () => {
+    const swallowed = ok('(fail) hashPassword round-trips [110.22ms]\n\n 30 pass\n 1 fail\n')
+    const {run} = scriptedRunner({git: ok(''), sh: swallowed})
+    const r = await rerunDebtVerifyCommand('/repo', 'bun run test', run)
+    expect(r.outcome).toBe('fail')
+    expect(r.detail).toContain('exit 0 but reported "1 fail"')
 })
 
 // ─── The config-gap demotion, reachable at last ──────────────────────────────

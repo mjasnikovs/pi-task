@@ -34,7 +34,12 @@
 import {existsSync} from 'node:fs'
 import * as path from 'node:path'
 import * as fsp from 'node:fs/promises'
-import {runVerifyCommandLine, spawnCommand, type CommandRunner} from './command-run.js'
+import {
+    reportedSuffix,
+    runVerifyCommandLine,
+    spawnCommand,
+    type CommandRunner
+} from './command-run.js'
 import {failClassOfReason, isHealthClass, isStaticClass} from './verify-work.js'
 import {discoverTestCommands} from './repo-health-check.js'
 import {taskThatIntroduced} from './task-provenance.js'
@@ -889,7 +894,9 @@ export async function rerunDebtVerifyCommand(
         run,
         signal
     )
-    if (r.outcome === 'fail') return {outcome: 'fail', detail: `exit ${r.status} — ${r.tail}`}
+    if (r.outcome === 'fail') {
+        return {outcome: 'fail', detail: `exit ${r.status}${reportedSuffix(r)} — ${r.tail}`}
+    }
     if (r.outcome === 'gap') return {outcome: 'gap', detail: r.detail}
     const after = await tracked()
     if (before === null || after === null) {

@@ -196,6 +196,25 @@ describe('runRepoHealthCheck — withTests', () => {
         expect(out.commands[0].output).not.toContain('1234')
     })
 
+    // mx5-n TASK_0012's script shape: `test $? -le 1` swallows the runner's exit 1.
+    test('a suite whose script swallows the runner exit is still red', async () => {
+        const dir = tmpRepo({
+            'package.json': JSON.stringify({
+                scripts: {lint: 'true', test: 'bun test; test $? -le 1 && echo done'}
+            }),
+            'a.test.ts':
+                "import {test, expect} from 'bun:test'\ntest('bad', () => expect(1).toBe(2))\n"
+        })
+        const out = await runRepoHealthCheck(dir, {withTests: true})
+        expect(out.ok).toBe(false)
+        expect(out.commands.find(c => c.cmd === 'bun run test')).toMatchObject({
+            outcome: 'fail',
+            exitCode: 0,
+            report: '1 fail'
+        })
+        expect(out.reason).toBe('`bun run test` exited 0 but reported "1 fail"')
+    })
+
     test('a test script with no tests to run is a SKIP, not a FAIL', async () => {
         const dir = tmpRepo({
             'package.json': JSON.stringify({scripts: {lint: 'true', test: 'bun test'}})

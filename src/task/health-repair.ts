@@ -23,6 +23,7 @@
  */
 import type {HealthSignal} from './health-baseline.js'
 import {isHealthRed, type HealthCommandResult} from './repo-health-check.js'
+import {reportedSuffix} from './command-run.js'
 import {parseRepairTitleFile} from './root-cause-repair.js'
 import {failClassOfReason} from './verify-work.js'
 
@@ -33,6 +34,8 @@ const PATH_TOKEN_RE = /(?:[\w.@-]+[\\/])+[\w.@-]+\.\w+/g
 export interface HealthRed {
     command: string
     exitCode: number | null
+    /** The runner's failure summary, when it overruled an exit 0. */
+    report?: string
     /** Repo-relative tracked paths the output named, in first-seen order. */
     files: string[]
 }
@@ -88,7 +91,12 @@ export function healthReds(
                     if (rel !== null && !files.includes(rel)) files.push(rel)
                 }
             }
-            return {command: failing.cmd, exitCode: failing.exitCode, files}
+            return {
+                command: failing.cmd,
+                exitCode: failing.exitCode,
+                files,
+                ...(failing.report === undefined ? {} : {report: failing.report})
+            }
         })
 }
 
@@ -130,7 +138,7 @@ export function suiteRegressionOwed(
  * the scope fence pins.
  */
 export function buildHealthRepairTitle(red: HealthRed & HealthRedOwners): string {
-    const exits = `exits ${red.exitCode ?? '?'}`
+    const exits = `exits ${red.exitCode ?? '?'}${reportedSuffix(red)}`
     const owner =
         red.owners.length > 0 ?
             `introduced by ${red.owners.join(', ')}`
@@ -221,6 +229,9 @@ export function buildHealthRepairFence(subject: HealthRepairSubject): string {
         '  - Do NOT suppress, disable, ignore or weaken the check to make it pass: no',
         '    disable comments, no ignore entries, no relaxed rules, no deleted or skipped',
         '    tests. A finding is fixed in the code it reports.',
+        '  - Put the fix in files the repository tracks. A check made green by a file git',
+        '    ignores (installed dependencies, build output, a local env file) is still',
+        '    red on a fresh checkout.',
         `  - The VERIFY block MUST be exactly: \`${subject.command}\` — the check that was`,
         '    red. It passing is the whole acceptance criterion.'
     ].join('\n')

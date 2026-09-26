@@ -1,4 +1,6 @@
 import {test, expect, describe} from 'bun:test'
+import {readFileSync} from 'node:fs'
+import * as path from 'node:path'
 import {
     classifyCommandRun,
     outputTail,
@@ -129,6 +131,59 @@ describe('an empty-suite phrase beside tests that ran is not a gap', () => {
             classifyCommandRun(ran({status: 1, stdout: out}), [], {emptySuite: true})
         ).toMatchObject({
             outcome: 'fail'
+        })
+    })
+})
+
+// Real runs of eleven runners, one passing and one failing test each, and three
+// green runs that exit 0 while mentioning failure (see the fixture's header).
+const reports = JSON.parse(
+    readFileSync(path.join(import.meta.dir, '__fixtures__/runner-reports.json'), 'utf8')
+) as {
+    runners: Array<{runner: string; failing: RunnerRun; passing: RunnerRun}>
+    greenExitZero: Array<RunnerRun & {what: string}>
+}
+interface RunnerRun {
+    status: number
+    stdout: string
+    stderr: string
+}
+
+// mx5-n TASK_0012: `"test": "AGENT=1 bun test; test $? -le 1 && …"` exits 0 over a
+// failing bun suite, and the gate called the suite green.
+describe("a clean exit is not a pass when the runner's own report says tests failed", () => {
+    test.each(reports.runners.map(r => [r.runner, r] as const))('%s', (_runner, r) => {
+        expect(r.failing.status).not.toBe(0)
+        const swallowed = ran({stdout: r.failing.stdout, stderr: r.failing.stderr})
+        expect(classifyCommandRun(swallowed)).toMatchObject({outcome: 'fail', status: 0})
+        const green = ran({stdout: r.passing.stdout, stderr: r.passing.stderr})
+        expect(classifyCommandRun(green)).toEqual({outcome: 'pass'})
+    })
+
+    test.each(reports.greenExitZero.map(g => [g.what, g] as const))(
+        '%s stays a pass',
+        (_what, g) => {
+            expect(g.status).toBe(0)
+            expect(classifyCommandRun(ran({stdout: g.stdout, stderr: g.stderr}))).toEqual({
+                outcome: 'pass'
+            })
+        }
+    )
+
+    test('the verdict quotes the report line, so the reason is not "exited 0"', () => {
+        const bun = reports.runners.find(r => r.runner === 'bun')!.failing
+        expect(classifyCommandRun(ran({stdout: bun.stdout, stderr: bun.stderr}))).toMatchObject({
+            outcome: 'fail',
+            status: 0,
+            report: '1 fail'
+        })
+    })
+
+    test('a non-zero exit keeps its own status', () => {
+        const bun = reports.runners.find(r => r.runner === 'bun')!.failing
+        expect(classifyCommandRun(ran({status: 1, stderr: bun.stderr}))).toMatchObject({
+            outcome: 'fail',
+            status: 1
         })
     })
 })

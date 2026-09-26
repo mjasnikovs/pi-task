@@ -376,6 +376,22 @@ describe('what the child is handed', () => {
         })
     })
 
+    // mx5-n TASK_0012: the child was handed "`bun run test` — exit 0" for a suite
+    // whose own summary said "1 fail".
+    test('an exit 0 over a failing test report says so, in the line and the file', async () => {
+        await withRun([{cmd: 'bun run test', class: 'check'}], async (cwd, rc) => {
+            const {run} = spyRunner(() => ({stderr: '(fail) bad [0.11ms]\n\n 1 pass\n 1 fail\n'}))
+            const findings = await evidenceOf(cwd, run)
+            const out = path.join(evidenceDir(cwd, rc.runId), '1.out')
+            expect(findings).toEqual([
+                `\`bun run test\` — exit 0 but reported "1 fail" — full output: ${out}`
+            ])
+            expect(fs.readFileSync(out, 'utf8')).toStartWith(
+                '$ bun run test\nexit 0 but reported "1 fail"\n'
+            )
+        })
+    })
+
     test('a command absent on this machine renders as skipped, not failed', async () => {
         await withRun([{cmd: 'cargo clippy', class: 'check'}], async cwd => {
             const {run} = spyRunner(() => ({

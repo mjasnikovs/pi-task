@@ -222,6 +222,21 @@ describe('title grammar', () => {
         })
     })
 
+    // A repair titled "exits 0" tells its child the check already passes.
+    test('a suite red by its own report says so, and still round-trips', () => {
+        const title = buildHealthRepairTitle({
+            command: 'bun run test',
+            exitCode: 0,
+            report: '1 fail',
+            files: [],
+            owners: ['TASK_0012']
+        })
+        expect(title).toBe(
+            'repair `bun run test`: exits 0 but reported "1 fail" (introduced by TASK_0012)'
+        )
+        expect(parseHealthRepairTitle(title)).toEqual({command: 'bun run test', files: []})
+    })
+
     test('a root-cause repair title and a feature title are not health repairs', () => {
         expect(parseHealthRepairTitle('repair test/teardown.ts: TRUNCATE bug')).toBeNull()
         expect(parseHealthRepairTitle('Implement `src/client/api.ts` — typed client')).toBeNull()
@@ -279,5 +294,12 @@ describe('buildHealthRepairFence', () => {
     test('command form pins only what the command reports', () => {
         const fence = buildHealthRepairFence({command: 'go vet ./...', files: []})
         expect(fence).toContain('Modify only the files the command reports')
+    })
+
+    // mx5-n TASK_0006 greened `bun run test` with a shim in gitignored node_modules/,
+    // and the gate closed two debts on a check that is red on a fresh checkout.
+    test('the fix must live in tracked files', () => {
+        const fence = buildHealthRepairFence({command: 'bun run test', files: []})
+        expect(fence).toContain('Put the fix in files the repository tracks')
     })
 })

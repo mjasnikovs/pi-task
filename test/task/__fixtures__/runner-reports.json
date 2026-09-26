@@ -1,0 +1,196 @@
+{
+  "captured": "2026-09-26, one real run per entry; the scratch path is rewritten to /work",
+  "runners": [
+    {
+      "runner": "bun",
+      "version": "bun 1.4.2",
+      "command": "AGENT=1 bun test",
+      "failing": {
+        "status": 1,
+        "stdout": "bun test v1.4.2 (744846f84)\n",
+        "stderr": "\na.test.ts:\nerror: expect(received).toBe(expected)\n\nExpected: 2\nReceived: 1\n\n(fail) bad [0.11ms]\n\n 1 pass\n 1 fail\n 2 expect() calls\nRan 2 tests across 1 file. [3.00ms]\n"
+      },
+      "passing": {
+        "status": 0,
+        "stdout": "bun test v1.4.2 (744846f84)\n",
+        "stderr": "\n 2 pass\n 0 fail\n 2 expect() calls\nRan 2 tests across 1 file. [2.00ms]\n"
+      }
+    },
+    {
+      "runner": "node:test spec",
+      "version": "node 24.19.0",
+      "command": "node --test",
+      "failing": {
+        "status": 1,
+        "stdout": "✔ ok (0.722232ms)\n✖ bad (0.590381ms)\nℹ tests 2\nℹ suites 0\nℹ pass 1\nℹ fail 1\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 57.05687\n\n✖ failing tests:\n\ntest at a.test.mjs:4:1\n✖ bad (0.590381ms)\n  AssertionError [ERR_ASSERTION]: 1 == 2\n      at TestContext.<anonymous> (file:///work/node-fail/a.test.mjs:4:26)\n      at Test.runInAsyncScope (node:async_hooks:227:14)\n      at Test.run (node:internal/test_runner/test:1382:25)\n      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)\n      at Test.postRun (node:internal/test_runner/test:1522:19)\n      at Test.run (node:internal/test_runner/test:1447:12)\n      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {\n    generatedMessage: true,\n    code: 'ERR_ASSERTION',\n    actual: 1,\n    expected: 2,\n    operator: '==',\n    diff: 'simple'\n  }\n",
+        "stderr": ""
+      },
+      "passing": {
+        "status": 0,
+        "stdout": "✔ ok (0.708001ms)\n✔ ok2 (0.12341ms)\nℹ tests 2\nℹ suites 0\nℹ pass 2\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 50.981158\n",
+        "stderr": ""
+      }
+    },
+    {
+      "runner": "node:test tap",
+      "version": "node 24.19.0",
+      "command": "node --test --test-reporter=tap",
+      "failing": {
+        "status": 1,
+        "stdout": "TAP version 13\n# Subtest: ok\nok 1 - ok\n  ---\n  duration_ms: 0.672951\n  type: 'test'\n  ...\n# Subtest: bad\nnot ok 2 - bad\n  ---\n  duration_ms: 0.620131\n  type: 'test'\n  location: '/work/node-fail/a.test.mjs:4:1'\n  failureType: 'testCodeFailure'\n  error: '1 == 2'\n  code: 'ERR_ASSERTION'\n  name: 'AssertionError'\n  expected: 2\n  actual: 1\n  operator: '=='\n  stack: |-\n    TestContext.<anonymous> (file:///work/node-fail/a.test.mjs:4:26)\n    Test.runInAsyncScope (node:async_hooks:227:14)\n    Test.run (node:internal/test_runner/test:1382:25)\n    Test.processPendingSubtests (node:internal/test_runner/test:960:18)\n    Test.postRun (node:internal/test_runner/test:1522:19)\n    Test.run (node:internal/test_runner/test:1447:12)\n    async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3)\n  ...\n1..2\n# tests 2\n# suites 0\n# pass 1\n# fail 1\n# cancelled 0\n# skipped 0\n# todo 0\n# duration_ms 50.457096\n",
+        "stderr": ""
+      },
+      "passing": {
+        "status": 0,
+        "stdout": "TAP version 13\n# Subtest: ok\nok 1 - ok\n  ---\n  duration_ms: 0.611871\n  type: 'test'\n  ...\n# Subtest: ok2\nok 2 - ok2\n  ---\n  duration_ms: 0.13048\n  type: 'test'\n  ...\n1..2\n# tests 2\n# suites 0\n# pass 2\n# fail 0\n# cancelled 0\n# skipped 0\n# todo 0\n# duration_ms 52.270001\n",
+        "stderr": ""
+      }
+    },
+    {
+      "runner": "deno",
+      "version": "deno 2.9.6",
+      "command": "deno test",
+      "failing": {
+        "status": 1,
+        "stdout": "\u001b[0m\u001b[38;5;245mrunning 2 tests from ./a_test.ts\u001b[0m\nok ... \u001b[0m\u001b[32mok\u001b[0m \u001b[0m\u001b[38;5;245m(275µs)\u001b[0m\nbad ... \u001b[0m\u001b[31mFAILED\u001b[0m \u001b[0m\u001b[38;5;245m(337µs)\u001b[0m\n\n\u001b[0m\u001b[1m\u001b[37m\u001b[41m ERRORS \u001b[0m\n\nbad \u001b[0m\u001b[38;5;245m=> ./a_test.ts:2:6\u001b[0m\n\u001b[0m\u001b[1m\u001b[31merror\u001b[0m: Error: boom\nDeno.test('bad', () => { throw new Error('boom') })\n\u001b[0m\u001b[31m                               ^\u001b[0m\n    at \u001b[0m\u001b[2m\u001b[38;5;245mfile:///work/deno-fail/\u001b[0m\u001b[0m\u001b[36ma_test.ts\u001b[0m:\u001b[0m\u001b[33m2\u001b[0m:\u001b[0m\u001b[33m32\u001b[0m\n\n\u001b[0m\u001b[1m\u001b[37m\u001b[41m FAILURES \u001b[0m\n\nbad \u001b[0m\u001b[38;5;245m=> ./a_test.ts:2:6\u001b[0m\n\n\u001b[0m\u001b[31mFAILED\u001b[0m | 1 passed | 1 failed \u001b[0m\u001b[38;5;245m(2ms)\u001b[0m\n\n",
+        "stderr": "\u001b[0m\u001b[32mCheck\u001b[0m a_test.ts\n\u001b[0m\u001b[1m\u001b[31merror\u001b[0m: Test failed\n"
+      },
+      "passing": {
+        "status": 0,
+        "stdout": "\u001b[0m\u001b[38;5;245mrunning 2 tests from ./a_test.ts\u001b[0m\nok ... \u001b[0m\u001b[32mok\u001b[0m \u001b[0m\u001b[38;5;245m(282µs)\u001b[0m\nok2 ... \u001b[0m\u001b[32mok\u001b[0m \u001b[0m\u001b[38;5;245m(41µs)\u001b[0m\n\n\u001b[0m\u001b[32mok\u001b[0m | 2 passed | 0 failed \u001b[0m\u001b[38;5;245m(1ms)\u001b[0m\n\n",
+        "stderr": "\u001b[0m\u001b[32mCheck\u001b[0m a_test.ts\n"
+      }
+    },
+    {
+      "runner": "jest",
+      "version": "jest 30",
+      "command": "jest",
+      "failing": {
+        "status": 1,
+        "stdout": "",
+        "stderr": "FAIL ./a.test.js\n  ● bad\n\n    expect(received).toBe(expected) // Object.is equality\n\n    Expected: 2\n    Received: 1\n\n      1 | test('ok', () => expect(1).toBe(1))\n    > 2 | test('bad', () => expect(1).toBe(2))\n        |                             ^\n      3 |\n\n      at Object.toBe (a.test.js:2:29)\n\nTest Suites: 1 failed, 1 total\nTests:       1 failed, 1 passed, 2 total\nSnapshots:   0 total\nTime:        0.253 s\nRan all test suites.\n"
+      },
+      "passing": {
+        "status": 0,
+        "stdout": "",
+        "stderr": "Test Suites: 1 passed, 1 total\nTests:       2 passed, 2 total\nSnapshots:   0 total\nTime:        0.236 s\nRan all test suites.\n"
+      }
+    },
+    {
+      "runner": "vitest",
+      "version": "vitest 4.1.10",
+      "command": "vitest run",
+      "failing": {
+        "status": 1,
+        "stdout": "\n RUN  v4.1.10 /work/vitest-fail\n\n ❯ a.test.ts (2 tests | 1 failed) 6ms\n   × bad 4ms\n\n Test Files  1 failed (1)\n      Tests  1 failed | 1 passed (2)\n   Start at  10:06:24\n   Duration  124ms (transform 12ms, setup 0ms, import 21ms, tests 6ms, environment 0ms)\n\n",
+        "stderr": "\n⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯\n\n FAIL  a.test.ts > bad\nAssertionError: expected 1 to be 2 // Object.is equality\n\n- Expected\n+ Received\n\n- 2\n+ 1\n\n ❯ a.test.ts:3:29\n      1| import {test, expect} from 'vitest'\n      2| test('ok', () => expect(1).toBe(1))\n      3| test('bad', () => expect(1).toBe(2))\n       |                             ^\n      4|\n\n⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯\n\n"
+      },
+      "passing": {
+        "status": 0,
+        "stdout": "\n RUN  v4.1.10 /work/vitest-pass\n\n\n Test Files  1 passed (1)\n      Tests  2 passed (2)\n   Start at  10:06:24\n   Duration  121ms (transform 13ms, setup 0ms, import 21ms, tests 2ms, environment 0ms)\n\n",
+        "stderr": ""
+      }
+    },
+    {
+      "runner": "mocha",
+      "version": "mocha (gofer)",
+      "command": "mocha a.test.cjs",
+      "failing": {
+        "status": 1,
+        "stdout": "\n\n  ✔ ok\n  1) bad\n\n  1 passing (2ms)\n  1 failing\n\n  1) bad:\n\n      AssertionError [ERR_ASSERTION]: 1 == 2\n      + expected - actual\n\n      -1\n      +2\n      \n      at Context.<anonymous> (a.test.cjs:3:24)\n      at process.processImmediate (node:internal/timers:534:21)\n\n\n\n",
+        "stderr": ""
+      },
+      "passing": {
+        "status": 0,
+        "stdout": "\n\n  ✔ ok\n  ✔ ok2\n\n  2 passing (2ms)\n\n",
+        "stderr": ""
+      }
+    },
+    {
+      "runner": "playwright",
+      "version": "@playwright/test 1.61.1",
+      "command": "playwright test",
+      "failing": {
+        "status": 1,
+        "stdout": "\nRunning 2 tests using 1 worker\n\n  ✓  1 a.spec.ts:2:5 › ok (4ms)\n  ✘  2 a.spec.ts:3:5 › bad (2ms)\n\n\n  1) a.spec.ts:3:5 › bad ───────────────────────────────────────────────────────────────────────────\n\n    Error: expect(received).toBe(expected) // Object.is equality\n\n    Expected: 2\n    Received: 1\n\n      1 | import {test, expect} from '@playwright/test'\n      2 | test('ok', () => expect(1).toBe(1))\n    > 3 | test('bad', () => expect(1).toBe(2))\n        |                             ^\n      4 |\n        at /work/pw-fail/a.spec.ts:3:29\n\n    Error Context: test-results/a-bad/error-context.md\n\n  1 failed\n    a.spec.ts:3:5 › bad ────────────────────────────────────────────────────────────────────────────\n  1 passed (452ms)\n",
+        "stderr": ""
+      },
+      "passing": {
+        "status": 0,
+        "stdout": "\nRunning 2 tests using 1 worker\n\n  ✓  1 a.spec.ts:2:5 › ok (4ms)\n  ✓  2 a.spec.ts:3:5 › ok2 (1ms)\n\n  2 passed (443ms)\n",
+        "stderr": ""
+      }
+    },
+    {
+      "runner": "pytest",
+      "version": "pytest 9.1.1",
+      "command": "pytest",
+      "failing": {
+        "status": 1,
+        "stdout": "============================= test session starts ==============================\nplatform linux -- Python 3.13.14, pytest-9.1.1, pluggy-1.6.0\nrootdir: /work/pt-fail\ncollected 2 items\n\ntest_a.py .F                                                             [100%]\n\n=================================== FAILURES ===================================\n___________________________________ test_bad ___________________________________\n\n    def test_bad():\n>       assert 1 == 2\nE       assert 1 == 2\n\ntest_a.py:4: AssertionError\n=========================== short test summary info ============================\nFAILED test_a.py::test_bad - assert 1 == 2\n========================= 1 failed, 1 passed in 0.01s ==========================\n",
+        "stderr": ""
+      },
+      "passing": {
+        "status": 0,
+        "stdout": "============================= test session starts ==============================\nplatform linux -- Python 3.13.14, pytest-9.1.1, pluggy-1.6.0\nrootdir: /work/pt-pass\ncollected 2 items\n\ntest_a.py ..                                                             [100%]\n\n============================== 2 passed in 0.00s ===============================\n",
+        "stderr": ""
+      }
+    },
+    {
+      "runner": "cargo",
+      "version": "cargo 1.98.1",
+      "command": "cargo test",
+      "failing": {
+        "status": 101,
+        "stdout": "\nrunning 2 tests\ntest tests::ok ... ok\ntest tests::bad ... FAILED\n\nfailures:\n\n---- tests::bad stdout ----\n\nthread 'tests::bad' (2889945) panicked at src/lib.rs:2:70:\nassertion `left == right` failed\n  left: 1\n right: 2\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n\n\nfailures:\n    tests::bad\n\ntest result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n",
+        "stderr": "   Compiling cargo-fail v0.1.0 (/work/cargo-fail)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.13s\n     Running unittests src/lib.rs (target/debug/deps/cargo_fail-728d1396084cb590)\nerror: test failed, to rerun pass `--lib`\n"
+      },
+      "passing": {
+        "status": 0,
+        "stdout": "\nrunning 2 tests\ntest tests::ok ... ok\ntest tests::ok2 ... ok\n\ntest result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n\nrunning 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n",
+        "stderr": "   Compiling cargo-pass v0.1.0 (/work/cargo-pass)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.24s\n     Running unittests src/lib.rs (target/debug/deps/cargo_pass-d5cd290b8b35179e)\n   Doc-tests cargo_pass\n"
+      }
+    },
+    {
+      "runner": "go",
+      "version": "go 1.25.1",
+      "command": "go test ./...",
+      "failing": {
+        "status": 1,
+        "stdout": "--- FAIL: TestBad (0.00s)\n    a_test.go:4: boom\nFAIL\nFAIL\tx\t0.002s\nFAIL\n",
+        "stderr": ""
+      },
+      "passing": {
+        "status": 0,
+        "stdout": "ok  \tx\t0.002s\n",
+        "stderr": ""
+      }
+    }
+  ],
+  "greenExitZero": [
+    {
+      "what": "pytest xfail",
+      "version": "pytest 9.1.1",
+      "command": "pytest",
+      "status": 0,
+      "stdout": "============================= test session starts ==============================\nplatform linux -- Python 3.13.14, pytest-9.1.1, pluggy-1.6.0\nrootdir: /work/pt-xfail\ncollected 2 items\n\ntest_a.py .x                                                             [100%]\n\n========================= 1 passed, 1 xfailed in 0.01s =========================\n",
+      "stderr": ""
+    },
+    {
+      "what": "bun test.failing, todo and skip",
+      "version": "bun 1.4.2",
+      "command": "AGENT=1 bun test",
+      "status": 0,
+      "stdout": "bun test v1.4.2 (744846f84)\n",
+      "stderr": "\n 2 pass\n 1 skip\n 1 todo\n 0 fail\n 2 expect() calls\nRan 4 tests across 1 file. [3.00ms]\n"
+    },
+    {
+      "what": "playwright retry that passed",
+      "version": "@playwright/test 1.61.1",
+      "command": "playwright test --retries=1",
+      "status": 0,
+      "stdout": "\nRunning 2 tests using 1 worker\n\n  ✓  1 a.spec.ts:2:5 › ok (5ms)\n  ✘  2 a.spec.ts:3:5 › flaky (2ms)\n  ✓  3 a.spec.ts:3:5 › flaky (retry #1) (4ms)\n\n\n  1) a.spec.ts:3:5 › flaky ─────────────────────────────────────────────────────────────────────────\n\n    Error: expect(received).toBe(expected) // Object.is equality\n\n    Expected: 1\n    Received: 0\n\n      1 | import {test, expect} from '@playwright/test'\n      2 | test('ok', () => expect(1).toBe(1))\n    > 3 | test('flaky', ({}, info) => expect(info.retry).toBe(1))\n        |                                                ^\n      4 |\n        at /work/pw-flaky/a.spec.ts:3:48\n\n    Error Context: test-results/a-flaky/error-context.md\n\n  1 flaky\n    a.spec.ts:3:5 › flaky ──────────────────────────────────────────────────────────────────────────\n  1 passed (811ms)\n",
+      "stderr": ""
+    }
+  ]
+}

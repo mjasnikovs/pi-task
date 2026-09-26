@@ -38,6 +38,7 @@ import * as path from 'node:path'
 import {resolveRunner, runnerEnv} from './runner-resolve.js'
 import {
     classifyCommandRun,
+    reportedSuffix,
     spawnCommand,
     type CommandGapId,
     type CommandRunner
@@ -67,6 +68,8 @@ export interface HealthCommandResult {
     gap?: CommandGapId
     /** This command's own captured output, on a `fail` only. */
     output?: string
+    /** The runner's failure summary, on a `fail` that exited 0 (see classifyCommandRun). */
+    report?: string
 }
 
 export interface HealthOutcome {
@@ -350,7 +353,8 @@ export async function runRepoHealthCheck(
             outcome: 'fail',
             exitCode: verdict.status,
             kind,
-            output: captureHealthOutput(r.stdout, r.stderr)
+            output: captureHealthOutput(r.stdout, r.stderr),
+            ...(verdict.report === undefined ? {} : {report: verdict.report})
         })
     }
     const firstFail = commands.find(c => c.outcome === 'fail')
@@ -383,7 +387,7 @@ export function describeHealthFailures(commands: readonly HealthCommandResult[])
         .filter(isHealthRed)
         .map(c =>
             c.outcome === 'fail' ?
-                `\`${c.cmd}\` exited ${c.exitCode}`
+                `\`${c.cmd}\` exited ${c.exitCode}${reportedSuffix(c)}`
             :   `\`${c.cmd}\` found no tests to run`
         )
         .join('; ')

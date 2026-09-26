@@ -311,6 +311,44 @@ export const EMPTY_SUITE_OUTPUT_RE =
  */
 const TESTS_RAN_OUTPUT_RE = /\b[1-9]\d*\s+(?:pass(?:ed|ing)?|fail(?:ed|ing|ures?)?)\b|^--- FAIL:/im
 
+/**
+ * A test runner's own summary saying tests FAILED, one row per runner, each checked
+ * against a real run of it (test/task/__fixtures__/runner-reports.json). The summary
+ * is what the exit status exists to encode, so where they disagree the summary is
+ * the observation and the status is the script around it: mx5-n's
+ * `bun test; test $? -le 1 && …` exits 0 over a failing suite.
+ *
+ * Whole summary lines, never a count of zero: an expected failure (`1 xfailed`), a
+ * retry that passed (`1 flaky`) and a test's own log line are not reports. Read for
+ * every command, not opted into like the gap rows: these only ever turn a pass into
+ * a fail, never hide one.
+ */
+const FAILED_TESTS_REPORTS: readonly RegExp[] = [
+    /^\s*[1-9]\d* fail$/m, // bun
+    /^ℹ fail [1-9]\d*$/m, // node:test, spec reporter
+    /^# fail [1-9]\d*$/m, // node:test, tap reporter
+    /^FAILED \| \d+ passed \| [1-9]\d* failed\b/m, // deno
+    /^\s*Tests:?\s+(?:.*\s)?[1-9]\d* failed\b.*$/m, // jest, vitest
+    /^\s*[1-9]\d* failing$/m, // mocha
+    /^\s*[1-9]\d* failed$/m, // playwright
+    /^=+ ((?:.*\s)?[1-9]\d* failed\b.* in [\d.]+s)\b/m, // pytest
+    /^test result: FAILED\. \d+ passed; [1-9]\d* failed/m, // cargo
+    /^--- FAIL: \S+/m // go
+]
+
+/** deno colours its summary with no TTY attached; the rows above read plain text. */
+// eslint-disable-next-line no-control-regex -- ESC is the byte an SGR sequence starts with
+const SGR_RE = /\x1b\[[\d;]*m/g
+
+function reportedTestFailure(output: string): string | null {
+    const plain = output.replace(SGR_RE, '')
+    for (const re of FAILED_TESTS_REPORTS) {
+        const m = re.exec(plain)
+        if (m) return (m[1] ?? m[0]).trim().replace(/\s+/g, ' ')
+    }
+    return null
+}
+
 /** Which way a command failed to tell us anything. */
 export type CommandGapId =
     | 'spawn-failed'
@@ -324,7 +362,13 @@ export type CommandVerdict =
     /** Nothing was observed. Never fails a gate, never closes a debt. */
     | {outcome: 'gap'; gap: CommandGapId; detail: string}
     | {outcome: 'pass'}
-    | {outcome: 'fail'; status: number; tail: string}
+    /** `report` is the runner's own failure summary when it overruled an exit 0. */
+    | {outcome: 'fail'; status: number; tail: string; report?: string}
+
+/** Appended to a reason line's exit status, which alone reads "0" as a pass. */
+export function reportedSuffix(v: {report?: string}): string {
+    return v.report === undefined ? '' : ` but reported "${v.report}"`
+}
 
 /**
  * The gap ladder, in order. FIRST MATCH WINS.
@@ -421,11 +465,15 @@ export function classifyCommandRun(
     gapPatterns: readonly RegExp[] = [],
     opts: ClassifyOptions = {}
 ): CommandVerdict {
-    // A clean exit is a pass before any gap shape is consulted: gap patterns
+    const output = `${run.stdout}\n${run.stderr}`
+    // A clean exit is decided before any gap shape is consulted: gap patterns
     // describe output, and passing output can legitimately mention a database or
     // a browser.
-    if (!run.failedToStart && run.status === 0) return {outcome: 'pass'}
-    const output = `${run.stdout}\n${run.stderr}`
+    if (!run.failedToStart && run.status === 0) {
+        const report = reportedTestFailure(output)
+        if (report === null) return {outcome: 'pass'}
+        return {outcome: 'fail', status: 0, tail: outputTail(run.stdout, run.stderr), report}
+    }
     const runtimeGap = opts.runtimeGap ?? true
     for (const rule of GAP_RULES) {
         if (rule.id === 'missing-runtime' && !runtimeGap) continue
@@ -453,7 +501,7 @@ export function classifyCommandRun(
  */
 export type VerifyRerunOutcome =
     | {outcome: 'pass'}
-    | {outcome: 'fail'; status: number; tail: string}
+    | {outcome: 'fail'; status: number; tail: string; report?: string}
     | {outcome: 'gap'; detail: string}
 
 /** The command word of a shell line, past any leading `VAR=value` assignments.
