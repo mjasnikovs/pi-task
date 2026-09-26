@@ -302,4 +302,11 @@ describe('buildHealthRepairFence', () => {
         const fence = buildHealthRepairFence({command: 'bun run test', files: []})
         expect(fence).toContain('Put the fix in files the repository tracks')
     })
+
+    // A declared dependency missing from node_modules is red until an install, and
+    // a fresh checkout installs: forbidding it leaves the repair nothing to do.
+    test("the project's own install or build is not a forbidden fix", () => {
+        const fence = buildHealthRepairFence({command: 'bun run test', files: []})
+        expect(fence).toContain("Running the project's own install or build is allowed")
+    })
 })

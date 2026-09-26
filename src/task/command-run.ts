@@ -322,16 +322,22 @@ const TESTS_RAN_OUTPUT_RE = /\b[1-9]\d*\s+(?:pass(?:ed|ing)?|fail(?:ed|ing|ures?
  * retry that passed (`1 flaky`) and a test's own log line are not reports. Read for
  * every command, not opted into like the gap rows: these only ever turn a pass into
  * a fail, never hide one.
+ *
+ * `[ \t]`, not `\s`: a summary is one line, and a line-start `\s*` rescans each run
+ * of blank lines from every line in it.
  */
 const FAILED_TESTS_REPORTS: readonly RegExp[] = [
-    /^\s*[1-9]\d* fail$/m, // bun
+    /^[ \t]*[1-9]\d* fail$/m, // bun
     /^ℹ fail [1-9]\d*$/m, // node:test, spec reporter
     /^# fail [1-9]\d*$/m, // node:test, tap reporter
-    /^FAILED \| \d+ passed \| [1-9]\d* failed\b/m, // deno
-    /^\s*Tests:?\s+(?:.*\s)?[1-9]\d* failed\b.*$/m, // jest, vitest
-    /^\s*[1-9]\d* failing$/m, // mocha
-    /^\s*[1-9]\d* failed$/m, // playwright
-    /^=+ ((?:.*\s)?[1-9]\d* failed\b.* in [\d.]+s)\b/m, // pytest
+    /^Failed tests:$/m, // node:test, dot reporter
+    /^FAILED \| \d+ passed(?: \(\d+ steps?\))? \| [1-9]\d* failed\b/m, // deno
+    /^[ \t]*Tests:?[ \t]+(?:.*[ \t])?[1-9]\d* failed\b.*$/m, // jest, vitest
+    /^[ \t]*Test (?:Suites:|Files)[ \t]+(?:.*[ \t])?[1-9]\d* failed\b.*$/m, // jest, vitest: a file that did not load
+    /^[ \t]*Errors[ \t]+[1-9]\d* errors?\b.*$/m, // vitest: an error outside any test
+    /^[ \t]*[1-9]\d* failing$/m, // mocha
+    /^[ \t]*[1-9]\d* failed$/m, // playwright
+    /^=* ?((?:\d+ \w+, )*[1-9]\d* (?:failed|errors?)(?:, \d+ \w+)* in [\d.]+s)\b/m, // pytest, bordered or -q
     /^test result: FAILED\. \d+ passed; [1-9]\d* failed/m, // cargo
     /^--- FAIL: \S+/m // go
 ]
@@ -364,6 +370,8 @@ export type CommandVerdict =
     | {outcome: 'pass'}
     /** `report` is the runner's own failure summary when it overruled an exit 0. */
     | {outcome: 'fail'; status: number; tail: string; report?: string}
+
+export type CommandFailure = Extract<CommandVerdict, {outcome: 'fail'}>
 
 /** Appended to a reason line's exit status, which alone reads "0" as a pass. */
 export function reportedSuffix(v: {report?: string}): string {
@@ -500,9 +508,7 @@ export function classifyCommandRun(
  *          INCONCLUSIVE, so the debt stays open (surface, never re-hide).
  */
 export type VerifyRerunOutcome =
-    | {outcome: 'pass'}
-    | {outcome: 'fail'; status: number; tail: string; report?: string}
-    | {outcome: 'gap'; detail: string}
+    {outcome: 'pass'} | CommandFailure | {outcome: 'gap'; detail: string}
 
 /** The command word of a shell line, past any leading `VAR=value` assignments.
  *  Exported for gate-evidence, which spawns the same shape of line and must

@@ -87,6 +87,7 @@ import {
     reportedSuffix,
     spawnCommand,
     INFRA_GAP_OUTPUT_RE,
+    type CommandFailure,
     type CommandRunner
 } from './command-run.js'
 import {findLaunchConfigGap, probeEnv, configGapUnobservedNote} from './launch-config-gap.js'
@@ -358,7 +359,7 @@ async function runGateCommand(
           spawnFailed: boolean
       }
     | {outcome: 'pass'}
-    | {outcome: 'fail'; status: number; tail: string; report?: string}
+    | CommandFailure
 > {
     // Runner resolution: a login-shell-stripped PATH left `bun`
     // unspawnable, so every dynamic check skipped and the gate went blind. The

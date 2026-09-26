@@ -146,7 +146,9 @@ export function checkIdentity(line: string, scripts: Record<string, string>): st
 
 /** Did the run observe the tree? A gap (nothing spawned, 127, killed) did not, so
  *  it is never handed to a second caller in place of that caller's own run. */
-const observedTree = (run: CommandRun): boolean => classifyCommandRun(run).outcome !== 'gap'
+const observedTree = (run: CommandRun): boolean =>
+    // A clean exit is never a gap, so its output need not be read here.
+    (!run.failedToStart && run.status === 0) || classifyCommandRun(run).outcome !== 'gap'
 
 /** A verify-tooling verdict as the child reported it, before it is dated and stored. */
 export interface ToolingVerdict {

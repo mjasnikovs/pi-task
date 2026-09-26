@@ -229,9 +229,10 @@ export function buildHealthRepairFence(subject: HealthRepairSubject): string {
         '  - Do NOT suppress, disable, ignore or weaken the check to make it pass: no',
         '    disable comments, no ignore entries, no relaxed rules, no deleted or skipped',
         '    tests. A finding is fixed in the code it reports.',
-        '  - Put the fix in files the repository tracks. A check made green by a file git',
-        '    ignores (installed dependencies, build output, a local env file) is still',
-        '    red on a fresh checkout.',
+        '  - Put the fix in files the repository tracks. Do not write or edit a file git',
+        '    ignores (installed dependencies, build output, a local env file) by hand: a',
+        '    fresh checkout does not have it.',
+        "    Running the project's own install or build is allowed.",
         `  - The VERIFY block MUST be exactly: \`${subject.command}\` — the check that was`,
         '    red. It passing is the whole acceptance criterion.'
     ].join('\n')

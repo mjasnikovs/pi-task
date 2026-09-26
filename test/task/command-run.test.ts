@@ -142,6 +142,7 @@ const reports = JSON.parse(
 ) as {
     runners: Array<{runner: string; failing: RunnerRun; passing: RunnerRun}>
     greenExitZero: Array<RunnerRun & {what: string}>
+    variants: Array<{what: string; failing: RunnerRun; passing?: RunnerRun}>
 }
 interface RunnerRun {
     status: number
@@ -185,6 +186,30 @@ describe("a clean exit is not a pass when the runner's own report says tests fai
             outcome: 'fail',
             status: 1
         })
+    })
+
+    // Each is a runner's other way of reporting a red run: a suite-level error, a
+    // step, a reporter or flag that reshapes the summary.
+    test.each(reports.variants.map(v => [v.what, v] as const))('%s', (_what, v) => {
+        expect(v.failing.status).not.toBe(0)
+        const swallowed = ran({stdout: v.failing.stdout, stderr: v.failing.stderr})
+        expect(classifyCommandRun(swallowed)).toMatchObject({outcome: 'fail', status: 0})
+        if (v.passing === undefined) return
+        const green = ran({stdout: v.passing.stdout, stderr: v.passing.stderr})
+        expect(classifyCommandRun(green)).toEqual({outcome: 'pass'})
+    })
+
+    test('a summary is one line: a count on the next line is not its count', () => {
+        expect(classifyCommandRun(ran({stdout: 'Tests:\n  2 failed to parse\n'}))).toEqual({
+            outcome: 'pass'
+        })
+    })
+
+    // The rows are read on every clean exit, so their cost must not grow with the
+    // square of the output: blank padding is ordinary in test logs.
+    test('a long run of blank lines is read in linear time', () => {
+        const stdout = `x\n${'   \n'.repeat(100_000)}done\n`
+        expect(classifyCommandRun(ran({stdout}))).toEqual({outcome: 'pass'})
     })
 })
 
