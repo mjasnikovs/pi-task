@@ -1,5 +1,6 @@
 import {afterEach, describe, expect, test} from 'bun:test'
 import {tmpDir} from '../test-utils/tmp-dir.js'
+import {testPosix} from '../test-utils/platform.js'
 import {rmSync, writeFileSync} from 'node:fs'
 import {spawnSync} from 'node:child_process'
 import {tmpdir} from 'node:os'
@@ -197,7 +198,8 @@ describe('runRepoHealthCheck — withTests', () => {
     })
 
     // mx5-n TASK_0012's script shape: `test $? -le 1` swallows the runner's exit 1.
-    test('a suite whose script swallows the runner exit is still red', async () => {
+    // POSIX only: bun's Windows shell rejects `$?` and exits 2, so nothing is hidden there.
+    testPosix('a suite whose script swallows the runner exit is still red', async () => {
         const dir = tmpRepo({
             'package.json': JSON.stringify({
                 scripts: {lint: 'true', test: 'bun test; test $? -le 1 && echo done'}
