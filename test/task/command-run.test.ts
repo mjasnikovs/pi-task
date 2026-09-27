@@ -135,7 +135,7 @@ describe('an empty-suite phrase beside tests that ran is not a gap', () => {
     })
 })
 
-// Real runs of eleven runners, one passing and one failing test each, and three
+// Real runs of eleven runners, one passing and one failing test each, and five
 // green runs that exit 0 while mentioning failure (see the fixture's header).
 const reports = JSON.parse(
     readFileSync(path.join(import.meta.dir, '__fixtures__/runner-reports.json'), 'utf8')

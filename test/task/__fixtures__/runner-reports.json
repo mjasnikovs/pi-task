@@ -191,6 +191,22 @@
       "status": 0,
       "stdout": "\nRunning 2 tests using 1 worker\n\n  ✓  1 a.spec.ts:2:5 › ok (5ms)\n  ✘  2 a.spec.ts:3:5 › flaky (2ms)\n  ✓  3 a.spec.ts:3:5 › flaky (retry #1) (4ms)\n\n\n  1) a.spec.ts:3:5 › flaky ─────────────────────────────────────────────────────────────────────────\n\n    Error: expect(received).toBe(expected) // Object.is equality\n\n    Expected: 1\n    Received: 0\n\n      1 | import {test, expect} from '@playwright/test'\n      2 | test('ok', () => expect(1).toBe(1))\n    > 3 | test('flaky', ({}, info) => expect(info.retry).toBe(1))\n        |                                                ^\n      4 |\n        at /work/pw-flaky/a.spec.ts:3:48\n\n    Error Context: test-results/a-flaky/error-context.md\n\n  1 flaky\n    a.spec.ts:3:5 › flaky ──────────────────────────────────────────────────────────────────────────\n  1 passed (811ms)\n",
       "stderr": ""
+    },
+    {
+      "what": "node:test dot reporter, a failing todo test",
+      "version": "node v24.19.0",
+      "command": "node --test --test-reporter=dot",
+      "status": 0,
+      "stdout": ".X\n\nFailed tests:\n\n⚠ later (0.18564ms) # TODO\n  Error: not yet\n      at TestContext.<anonymous> (file:///work/node-todo/t.test.mjs:3:43)\n      at Test.runInAsyncScope (node:async_hooks:227:14)\n      at Test.run (node:internal/test_runner/test:1382:25)\n      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)\n      at Test.postRun (node:internal/test_runner/test:1522:19)\n      at Test.run (node:internal/test_runner/test:1447:12)\n      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3)\n",
+      "stderr": ""
+    },
+    {
+      "what": "vitest dangerouslyIgnoreUnhandledErrors, an unhandled error beside passing tests",
+      "version": "vitest 4.1.10",
+      "command": "vitest run",
+      "status": 0,
+      "stdout": "\n RUN  v4.1.10 /work/vitest-ignored\n\n\n Test Files  1 passed (1)\n      Tests  1 passed (1)\n     Errors  1 error\n   Start at  10:07:43\n   Duration  136ms (transform 12ms, setup 0ms, import 20ms, tests 22ms, environment 0ms)\n\n",
+      "stderr": "⎯⎯⎯⎯⎯⎯ Unhandled Errors ⎯⎯⎯⎯⎯⎯\n\nVitest caught 1 unhandled error during the test run.\nThis might cause false positive tests. Resolve unhandled errors to make sure your tests are not affected.\n\n⎯⎯⎯⎯⎯ Uncaught Exception ⎯⎯⎯⎯⎯\nError: unhandled boom\n ❯ Timeout._onTimeout u.test.ts:2:51\n      1| import {test, expect} from 'vitest'\n      2| test('ok', async () => { setTimeout(() => { throw new Error('unhandled…\n       |                                                   ^\n      3|\n ❯ listOnTimeout node:internal/timers:635:17\n ❯ processTimers node:internal/timers:571:7\n\nThis error originated in \"u.test.ts\" test file. It doesn't mean the error was thrown inside the file itself, but while it was running.\nThe latest test that might've caused the error is \"ok\". It might mean one of the following:\n- The error was thrown, while Vitest was running this test.\n- If the error occurred after the test had been completed, this was the last documented test before it was thrown.\n⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n\n"
     }
   ],
   "variants": [
@@ -212,16 +228,6 @@
         "status": 1,
         "stdout": "\n RUN  v4.1.10 /work/vitest-suite\n\n ❯ b.test.ts (0 test)\n\n Test Files  1 failed | 1 passed (2)\n      Tests  1 passed (1)\n   Start at  20:45:06\n   Duration  130ms (transform 29ms, setup 0ms, import 25ms, tests 2ms, environment 0ms)\n\n",
         "stderr": "\n⎯⎯⎯⎯⎯⎯ Failed Suites 1 ⎯⎯⎯⎯⎯⎯⎯\n\n FAIL  b.test.ts [ b.test.ts ]\nError: Cannot find module './nope.js' imported from /work/vitest-suite/b.test.ts\n ❯ b.test.ts:1:1\n      1| import './nope.js'; import {test} from 'vitest'; test('x', () => {})\n       | ^\n      2|\n\n⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯\n\n"
-      }
-    },
-    {
-      "what": "vitest: an error thrown outside any test",
-      "version": "vitest 4.1.10",
-      "command": "vitest run",
-      "failing": {
-        "status": 1,
-        "stdout": "\n RUN  v4.1.10 /work/vitest-unh\n\n\n Test Files  1 passed (1)\n      Tests  2 passed (2)\n     Errors  1 error\n   Start at  20:45:07\n   Duration  154ms (transform 13ms, setup 0ms, import 21ms, tests 32ms, environment 0ms)\n\n",
-        "stderr": "⎯⎯⎯⎯⎯⎯ Unhandled Errors ⎯⎯⎯⎯⎯⎯\n\nVitest caught 1 unhandled error during the test run.\nThis might cause false positive tests. Resolve unhandled errors to make sure your tests are not affected.\n\n⎯⎯⎯⎯⎯ Uncaught Exception ⎯⎯⎯⎯⎯\nError: boom\n ❯ Timeout._onTimeout a.test.ts:1:82\n      1| import {test, expect} from 'vitest'; test('ok', () => { setTimeout(() …\n       |                                                                                  ^\n      2|\n ❯ listOnTimeout node:internal/timers:635:17\n ❯ processTimers node:internal/timers:571:7\n\nThis error originated in \"a.test.ts\" test file. It doesn't mean the error was thrown inside the file itself, but while it was running.\nThe latest test that might've caused the error is \"ok2\". It might mean one of the following:\n- The error was thrown, while Vitest was running this test.\n- If the error occurred after the test had been completed, this was the last documented test before it was thrown.\n⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n\n"
       }
     },
     {
