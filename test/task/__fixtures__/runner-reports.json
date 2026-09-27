@@ -1,5 +1,5 @@
 {
-  "captured": "2026-09-26, one real run per entry; the scratch path is rewritten to /work",
+  "captured": "2026-09-26 and 2026-09-27, one real run per entry; the scratch path is rewritten to /work",
   "runners": [
     {
       "runner": "bun",
@@ -194,7 +194,7 @@
     },
     {
       "what": "node:test dot reporter, a failing todo test",
-      "version": "node v24.19.0",
+      "version": "node 24.19.0",
       "command": "node --test --test-reporter=dot",
       "status": 0,
       "stdout": ".X\n\nFailed tests:\n\n⚠ later (0.18564ms) # TODO\n  Error: not yet\n      at TestContext.<anonymous> (file:///work/node-todo/t.test.mjs:3:43)\n      at Test.runInAsyncScope (node:async_hooks:227:14)\n      at Test.run (node:internal/test_runner/test:1382:25)\n      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)\n      at Test.postRun (node:internal/test_runner/test:1522:19)\n      at Test.run (node:internal/test_runner/test:1447:12)\n      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3)\n",
@@ -292,6 +292,36 @@
       "passing": {
         "status": 0,
         "stdout": "..\n",
+        "stderr": ""
+      }
+    },
+    {
+      "what": "node:test dot reporter: a test name over two lines",
+      "version": "node 24.19.0",
+      "command": "node --test --test-reporter=dot",
+      "failing": {
+        "status": 1,
+        "stdout": ".X\n\nFailed tests:\n\n✖ multi\nline (0.18323ms)\n  Error: nl\n      at TestContext.<anonymous> (file:///work/node-multiline/t.test.mjs:3:35)\n      at Test.runInAsyncScope (node:async_hooks:227:14)\n      at Test.run (node:internal/test_runner/test:1382:25)\n      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)\n      at Test.postRun (node:internal/test_runner/test:1522:19)\n      at Test.run (node:internal/test_runner/test:1447:12)\n      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3)\n",
+        "stderr": ""
+      },
+      "passing": {
+        "status": 0,
+        "stdout": ".\n",
+        "stderr": ""
+      }
+    },
+    {
+      "what": "node:test dot reporter: an expectFailure test that passed",
+      "version": "node 24.19.0",
+      "command": "node --test --test-reporter=dot",
+      "failing": {
+        "status": 1,
+        "stdout": ".X\n\nFailed tests:\n\n✖ xfail passes (0.14386ms) # EXPECTED FAILURE\n  'test was expected to fail but passed'\n",
+        "stderr": ""
+      },
+      "passing": {
+        "status": 0,
+        "stdout": ".\n",
         "stderr": ""
       }
     }

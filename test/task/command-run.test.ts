@@ -135,8 +135,8 @@ describe('an empty-suite phrase beside tests that ran is not a gap', () => {
     })
 })
 
-// Real runs of eleven runners, one passing and one failing test each, and five
-// green runs that exit 0 while mentioning failure (see the fixture's header).
+// Real runs of each runner, one passing and one failing test each, and green runs
+// that exit 0 while mentioning failure (see the fixture's header).
 const reports = JSON.parse(
     readFileSync(path.join(import.meta.dir, '__fixtures__/runner-reports.json'), 'utf8')
 ) as {
@@ -201,6 +201,13 @@ describe("a clean exit is not a pass when the runner's own report says tests fai
 
     test('a summary is one line: a count on the next line is not its count', () => {
         expect(classifyCommandRun(ran({stdout: 'Tests:\n  2 failed to parse\n'}))).toEqual({
+            outcome: 'pass'
+        })
+    })
+
+    // A tested CLI or a logger can print node's failed-test shape on a green run.
+    test("a ✖ line outside node's dot report is not a report", () => {
+        expect(classifyCommandRun(ran({stdout: 'fixtures\n✖ rejects bad input (3ms)\n'}))).toEqual({
             outcome: 'pass'
         })
     })

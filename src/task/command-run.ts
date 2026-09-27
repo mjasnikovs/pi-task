@@ -320,22 +320,22 @@ const TESTS_RAN_OUTPUT_RE = /\b[1-9]\d*\s+(?:pass(?:ed|ing)?|fail(?:ed|ing|ures?
  *
  * Whole summary lines, never a count of zero: an expected failure (`1 xfailed`, a
  * node:test `todo`), a retry that passed (`1 flaky`) and a test's own log line are
- * not reports. Nor is a red the runner itself exits 0 on: vitest prints `Errors 1
- * error` the same way whether or not the project told it to ignore unhandled errors,
- * so that line is left to the exit status. Read for every command, not opted into
- * like the gap rows: these only ever turn a pass into a fail, never hide one.
+ * not reports. Read for every command, not opted into like the gap rows: these only
+ * ever turn a pass into a fail, never hide one.
  *
  * `[ \t]`, not `\s`: a summary is one line, and a line-start `\s*` rescans each run
- * of blank lines from every line in it.
+ * of blank lines from every line in it. The dot row stops at the next heading
+ * for the same reason: unbounded, it rescans to the end from every repeated heading.
  */
 const FAILED_TESTS_REPORTS: readonly RegExp[] = [
     /^[ \t]*[1-9]\d* fail$/m, // bun
     /^ℹ fail [1-9]\d*$/m, // node:test, spec reporter
     /^# fail [1-9]\d*$/m, // node:test, tap reporter
-    /^✖ .+ \(\d+(?:\.\d+)?ms\)$/m, // node:test, dot reporter: a todo is listed under "Failed tests:" too
+    /^Failed tests:\n(?:(?!Failed tests:$).*\n)*?(✖ .*)/m, // node:test, dot reporter: a todo is listed there as ⚠
     /^FAILED \| \d+ passed(?: \(\d+ steps?\))? \| [1-9]\d* failed\b/m, // deno
     /^[ \t]*Tests:?[ \t]+(?:.*[ \t])?[1-9]\d* failed\b.*$/m, // jest, vitest
     /^[ \t]*Test (?:Suites:|Files)[ \t]+(?:.*[ \t])?[1-9]\d* failed\b.*$/m, // jest, vitest: a file that did not load
+    // No vitest `Errors 1 error` row: it prints the same when the config ignores unhandled errors.
     /^[ \t]*[1-9]\d* failing$/m, // mocha
     /^[ \t]*[1-9]\d* failed$/m, // playwright
     /^=* ?((?:\d+ \w+, )*[1-9]\d* (?:failed|errors?)(?:, \d+ \w+)* in [\d.]+s)\b/m, // pytest, bordered or -q
