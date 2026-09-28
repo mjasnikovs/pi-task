@@ -70,6 +70,10 @@ describe('truncateToolResult', () => {
     test('short output is kept verbatim (no ellipsis)', () => {
         expect(truncateToolResult('HELLO_WORLD_123')).toBe('HELLO_WORLD_123')
     })
+
+    test('a truncated tail never starts in half a character', () => {
+        expect(truncateToolResult(`${'😀'.repeat(10)}x`, 4)).toBe('…😀x')
+    })
 })
 
 describe('collectTaskTreeChanges (cross-task deletion probe input)', () => {

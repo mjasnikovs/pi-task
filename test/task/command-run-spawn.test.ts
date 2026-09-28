@@ -246,7 +246,7 @@ describe.skipIf(!posix)('nothing is lost on the way out', () => {
                 bin: 'sh',
                 args: [
                     '-c',
-                    'printf "Failed tests:\\n\\n⚠ big (1ms) # TODO\\n  Error: not yet\\n"; '
+                    'printf "XX\\n\\nFailed tests:\\n\\n⚠ big (1ms) # TODO\\n  Error: not yet\\n"; '
                         + 'yes "      at frame" | head -n 200000; '
                         + 'printf "✖ real (1ms)\\n  Error: bad\\n"'
                 ],

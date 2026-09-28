@@ -38,6 +38,7 @@ import {
     reapProcessGroup
 } from '../shared/child-process.js'
 import {trackLeftovers} from '../shared/leftovers.js'
+import {keepHead, keepTail} from '../shared/text-cut.js'
 import {isCommandNotFound, resolveRunner, runnerEnv} from './runner-resolve.js'
 
 /** What one finished command looks like, stripped of how it was spawned. */
@@ -350,38 +351,68 @@ const SGR_RE = /\x1b\[[\d;]*m/g
  * node:test's dot reporter lists each failed test under its heading, a todo as `⚠`.
  * A title is the raw test name, over any lines, and ends on the line with its
  * duration. Its error follows, every line indented by two spaces. A raw name can
- * hold any of these shapes, so no line ends the list: it is walked to the end in
- * one pass. Walked in code: a regex over a long list hits JavaScriptCore's
- * backtrack limit and silently misses.
+ * hold any of these shapes, so the list is bounded by node's own count: the `X`s
+ * in its progress line above the heading. Walked in code: a regex over a long
+ * list hits JavaScriptCore's backtrack limit and silently misses.
  */
 function nodeDotFailedTest(output: string): string | null {
-    const heading = /^Failed tests:\r?\n\r?\n/m.exec(output)
-    return heading && failedDotEntry(output, heading.index + heading[0].length)
+    const lists = [...output.matchAll(/^Failed tests:\r?\n\r?\n/gm)]
+        .map(h => ({
+            heading: h.index,
+            from: h.index + h[0].length,
+            entries: progressFailures(output, h.index)
+        }))
+        .filter(list => list.entries > 0)
+    for (const [i, list] of lists.entries()) {
+        const to = lists[i + 1]?.heading ?? output.length
+        const failed = failedDotEntry(output, list.from, to, list.entries)
+        if (failed !== null) return failed
+    }
+    return null
 }
 
-/** A title's last line: its duration, alone or before a todo's or expectFailure's ` # ` marker. */
-const DOT_DURATION_RE = / \(\d+(?:\.\d+)?ms\)(?: # |\r?$)/
+/** A test's own output can end in a dot or an X, which only ever overcounts. */
+function progressFailures(output: string, heading: number): number {
+    let failures = 0
+    for (let at = heading - 1; at >= 0 && '.X\r\n'.includes(output[at]!); at--) {
+        if (output[at] === 'X') failures++
+    }
+    return failures
+}
 
-function failedDotEntry(output: string, from: number): string | null {
-    let title = -1
+/** A failed test's title ends on its duration, alone or before expectFailure's marker. */
+const FAILED_TITLE_END_RE = / \(\d+(?:\.\d+)?ms\)(?: # EXPECTED FAILURE)?\r?$/
+/** A todo's title ends on its duration before its reason. */
+const TODO_TITLE_END_RE = / \(\d+(?:\.\d+)?ms\) # /
+
+function failedDotEntry(output: string, from: number, to: number, entries: number): string | null {
+    // The latest open title of each kind: a raw name can hold the other kind's line.
+    let failed = -1
+    let todo = -1
+    let opened = 0
     let pastIndent = false
-    for (let at = from; at < output.length;) {
+    for (let at = from; at < to;) {
         const eol = output.indexOf('\n', at)
         const end = eol === -1 ? output.length : eol
         const opensTitle = output.startsWith('✖ ', at) || output.startsWith('⚠ ', at)
         // A cancelled test prints no duration: past its error, a ✖ or ⚠ line opens the
         // next title. Before any indented line, it is still part of the name.
-        if (opensTitle && (title === -1 || pastIndent)) {
-            title = at
+        if (opensTitle && opened < entries && (pastIndent || (failed === -1 && todo === -1))) {
+            if (output[at] === '✖') failed = at
+            else todo = at
+            opened++
             pastIndent = false
         }
-        if (title !== -1) {
-            if (DOT_DURATION_RE.test(output.slice(at, end))) {
-                if (output.startsWith('✖', title)) return output.slice(title, end)
-                title = -1
-            } else if (output.startsWith('  ', at)) {
-                pastIndent = true
-            }
+        const line = failed === -1 && todo === -1 ? '' : output.slice(at, end)
+        if (failed !== -1 && FAILED_TITLE_END_RE.test(line)) return output.slice(failed, end)
+        if (todo !== -1 && TODO_TITLE_END_RE.test(line)) {
+            // A ✖ line after the todo opened was its name, not an entry of its own.
+            if (failed > todo) opened--
+            failed = -1
+            todo = -1
+            if (opened === entries) return null
+        } else if (line.startsWith('  ')) {
+            pastIndent = true
         }
         at = end + 1
     }
@@ -400,14 +431,7 @@ function reportedTestFailure(output: string): string | null {
 /** Bounded like the tail: a runner's summary line or a test name can run to megabytes. */
 function oneLine(report: string): string {
     const line = report.trim().replace(/\s+/g, ' ')
-    if (line.length <= REASON_CHARS) return line
-    // One code unit short when the cut would split a surrogate pair.
-    const cut = isHighSurrogate(line.charCodeAt(REASON_CHARS - 1)) ? REASON_CHARS - 1 : REASON_CHARS
-    return `${line.slice(0, cut)}…`
-}
-
-function isHighSurrogate(code: number): boolean {
-    return code >= 0xd800 && code <= 0xdbff
+    return line.length > REASON_CHARS ? `${keepHead(line, REASON_CHARS)}…` : line
 }
 
 function regexReport(re: RegExp, output: string): string | null {
@@ -493,7 +517,7 @@ const REASON_CHARS = 400
 export function outputTail(stdout: string, stderr: string, limit = REASON_CHARS): string {
     const combined = `${stdout}\n${stderr}`.trim()
     if (combined.length === 0) return ''
-    const tail = combined.slice(-limit).replace(/\s+/g, ' ').trim()
+    const tail = keepTail(combined, limit).replace(/\s+/g, ' ').trim()
     return combined.length > limit ? `…${tail}` : tail
 }
 

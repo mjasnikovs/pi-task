@@ -231,6 +231,30 @@
       "status": 0,
       "stdout": "X\n\nFailed tests:\n\n⚠ x\nFailed tests:\n\n✖ y (0.603109ms) # TODO\n  Error: not yet\n      at TestContext.<anonymous> (file:///work/node-dot-todo-heading/t.test.mjs:2:61)\n      at Test.runInAsyncScope (node:async_hooks:227:14)\n      at Test.run (node:internal/test_runner/test:1382:25)\n      at Test.start (node:internal/test_runner/test:1242:17)\n      at startSubtestAfterBootstrap (node:internal/test_runner/harness:387:17)\n",
       "stderr": ""
+    },
+    {
+      "what": "node:test dot reporter, a failing todo named over an indented line, then a ✖ line",
+      "version": "node 24.19.0",
+      "command": "node --test --test-reporter=dot",
+      "status": 0,
+      "stdout": "X.\n\nFailed tests:\n\n⚠ a\n  b\n✖ c (0.68548ms) # TODO\n  Error: not yet\n      at TestContext.<anonymous> (file:///work/node-dot-indented-todo-cross/t.test.mjs:2:49)\n      at Test.runInAsyncScope (node:async_hooks:227:14)\n      at Test.run (node:internal/test_runner/test:1382:25)\n      at Test.start (node:internal/test_runner/test:1242:17)\n      at startSubtestAfterBootstrap (node:internal/test_runner/harness:387:17)\n",
+      "stderr": ""
+    },
+    {
+      "what": "node:test dot reporter, a failing todo named over a line ending in a duration, then a ✖ line",
+      "version": "node 24.19.0",
+      "command": "node --test --test-reporter=dot",
+      "status": 0,
+      "stdout": "X.\n\nFailed tests:\n\n⚠ waits (50ms)\n✖ then (0.65247ms) # TODO\n  Error: not yet\n      at TestContext.<anonymous> (file:///work/node-dot-todo-duration-name/t.test.mjs:2:58)\n      at Test.runInAsyncScope (node:async_hooks:227:14)\n      at Test.run (node:internal/test_runner/test:1382:25)\n      at Test.start (node:internal/test_runner/test:1242:17)\n      at startSubtestAfterBootstrap (node:internal/test_runner/harness:387:17)\n",
+      "stderr": ""
+    },
+    {
+      "what": "node:test dot reporter, a failing todo named over an indented line and a ✖ line, then another todo",
+      "version": "node 24.19.0",
+      "command": "node --test --test-reporter=dot",
+      "status": 0,
+      "stdout": "XX\n\nFailed tests:\n\n⚠ a\n  b\n✖ c (0.66038ms) # TODO\n  Error: not yet\n      at TestContext.<anonymous> (file:///work/node-dot-indented-todo-cross-two/t.test.mjs:2:49)\n      at Test.runInAsyncScope (node:async_hooks:227:14)\n      at Test.run (node:internal/test_runner/test:1382:25)\n      at Test.start (node:internal/test_runner/test:1242:17)\n      at startSubtestAfterBootstrap (node:internal/test_runner/harness:387:17)\n⚠ d (0.13725ms) # TODO\n  Error: not yet\n      at TestContext.<anonymous> (file:///work/node-dot-indented-todo-cross-two/t.test.mjs:3:39)\n      at Test.runInAsyncScope (node:async_hooks:227:14)\n      at Test.run (node:internal/test_runner/test:1382:25)\n      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)\n      at Test.postRun (node:internal/test_runner/test:1522:19)\n      at Test.run (node:internal/test_runner/test:1447:12)\n      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3)\n",
+      "stderr": ""
     }
   ],
   "variants": [
@@ -451,6 +475,36 @@
       "passing": {
         "status": 0,
         "stdout": "X.\n\nFailed tests:\n\n⚠ later (0.524418ms) # TODO\n  Error: not yet\n      at TestContext.<anonymous> (file:///work/node-dot-cancelled-todo-green/t.test.mjs:3:34)\n      at Test.runInAsyncScope (node:async_hooks:227:14)\n      at Test.run (node:internal/test_runner/test:1382:25)\n      at Test.start (node:internal/test_runner/test:1242:17)\n      at node:internal/test_runner/test:1867:71\n      at node:internal/per_context/primordials:504:82\n      at new Promise (<anonymous>)\n      at new SafePromise (node:internal/per_context/primordials:478:3)\n      at node:internal/per_context/primordials:504:9\n      at Array.map (<anonymous>)\n",
+        "stderr": ""
+      }
+    },
+    {
+      "what": "node:test dot reporter: a failed test listed after a todo named over an indented line and a ✖ line",
+      "version": "node 24.19.0",
+      "command": "node --test --test-reporter=dot",
+      "failing": {
+        "status": 1,
+        "stdout": "XX\n\nFailed tests:\n\n⚠ a\n  b\n✖ c (0.62677ms) # TODO\n  Error: not yet\n      at TestContext.<anonymous> (file:///work/node-dot-indented-todo-cross-fail/t.test.mjs:2:49)\n      at Test.runInAsyncScope (node:async_hooks:227:14)\n      at Test.run (node:internal/test_runner/test:1382:25)\n      at Test.start (node:internal/test_runner/test:1242:17)\n      at startSubtestAfterBootstrap (node:internal/test_runner/harness:387:17)\n✖ d (0.11967ms)\n  Error: bad\n      at TestContext.<anonymous> (file:///work/node-dot-indented-todo-cross-fail/t.test.mjs:3:25)\n      at Test.runInAsyncScope (node:async_hooks:227:14)\n      at Test.run (node:internal/test_runner/test:1382:25)\n      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)\n      at Test.postRun (node:internal/test_runner/test:1522:19)\n      at Test.run (node:internal/test_runner/test:1447:12)\n      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3)\n",
+        "stderr": ""
+      },
+      "passing": {
+        "status": 0,
+        "stdout": "XX\n\nFailed tests:\n\n⚠ a\n  b\n✖ c (0.66038ms) # TODO\n  Error: not yet\n      at TestContext.<anonymous> (file:///work/node-dot-indented-todo-cross-two/t.test.mjs:2:49)\n      at Test.runInAsyncScope (node:async_hooks:227:14)\n      at Test.run (node:internal/test_runner/test:1382:25)\n      at Test.start (node:internal/test_runner/test:1242:17)\n      at startSubtestAfterBootstrap (node:internal/test_runner/harness:387:17)\n⚠ d (0.13725ms) # TODO\n  Error: not yet\n      at TestContext.<anonymous> (file:///work/node-dot-indented-todo-cross-two/t.test.mjs:3:39)\n      at Test.runInAsyncScope (node:async_hooks:227:14)\n      at Test.run (node:internal/test_runner/test:1382:25)\n      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)\n      at Test.postRun (node:internal/test_runner/test:1522:19)\n      at Test.run (node:internal/test_runner/test:1447:12)\n      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3)\n",
+        "stderr": ""
+      }
+    },
+    {
+      "what": "node:test dot reporter: a test name over an indented line and a ✖ line",
+      "version": "node 24.19.0",
+      "command": "node --test --test-reporter=dot",
+      "failing": {
+        "status": 1,
+        "stdout": "X\n\nFailed tests:\n\n✖ a\n  b\n✖ c (0.58892ms)\n  Error: bad\n      at TestContext.<anonymous> (file:///work/node-dot-indented-cross-name/t.test.mjs:2:35)\n      at Test.runInAsyncScope (node:async_hooks:227:14)\n      at Test.run (node:internal/test_runner/test:1382:25)\n      at Test.start (node:internal/test_runner/test:1242:17)\n      at startSubtestAfterBootstrap (node:internal/test_runner/harness:387:17)\n",
+        "stderr": ""
+      },
+      "passing": {
+        "status": 0,
+        "stdout": ".\n",
         "stderr": ""
       }
     }

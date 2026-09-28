@@ -26,6 +26,7 @@ import type {ExtensionCommandContext} from '@earendil-works/pi-coding-agent'
 import type {GateDeps} from './task-gates.js'
 import {readTaskFile, appendGateRecord, readSection, setTaskSection} from './task-io.js'
 import {makeGit} from '../shared/git-runner.js'
+import {keepTail} from '../shared/text-cut.js'
 import {worktreeTreeHash} from './tree-hash.js'
 import {
     captureHealthBaseline,
@@ -118,7 +119,7 @@ const TOOL_RESULT_LOG_LIMIT = 300
 export function truncateToolResult(text: string, limit = TOOL_RESULT_LOG_LIMIT): string {
     const flat = text.replace(/\s+/g, ' ').trim()
     if (flat.length === 0) return '(no output)'
-    return flat.length > limit ? `…${flat.slice(-limit)}` : flat
+    return flat.length > limit ? `…${keepTail(flat, limit)}` : flat
 }
 
 /** One bounded final-gate fix attempt (see final-gate-fix.ts): fix child →

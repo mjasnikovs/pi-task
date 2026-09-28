@@ -248,28 +248,73 @@ describe("a clean exit is not a pass when the runner's own report says tests fai
         })
     })
 
+    test('a test name line over an indented line and a ✖ line is still part of the name', () => {
+        const crossed = reports.variants.find(v =>
+            v.what.endsWith('a test name over an indented line and a ✖ line')
+        )!
+        expect(classifyCommandRun(ran({stdout: crossed.failing.stdout}))).toMatchObject({
+            report: '✖ a b ✖ c (0.58892ms)'
+        })
+    })
+
+    test('the verdict quotes the failed test after a todo named over a ✖ line', () => {
+        const todoFirst = reports.variants.find(v =>
+            v.what.endsWith('a todo named over an indented line and a ✖ line')
+        )!
+        expect(classifyCommandRun(ran({stdout: todoFirst.failing.stdout}))).toMatchObject({
+            report: '✖ d (0.11967ms)'
+        })
+    })
+
     // node prints nothing after the list, so the next command's output follows it directly.
-    test.each(['✖ 1 task skipped\n', '✖ lint step skipped\n  see docs\n'])(
-        "a ✖ line printed right after node's dot report is not a failed test: %j",
-        after => {
-            const todo = reports.greenExitZero.find(
-                g => g.what === 'node:test dot reporter, a failing todo test'
-            )!
-            const stdout = `${todo.stdout}${after}`
-            expect(classifyCommandRun(ran({stdout}))).toEqual({outcome: 'pass'})
-        }
-    )
+    test.each([
+        '✖ 1 task skipped\n',
+        '✖ lint step skipped\n  see docs\n',
+        '✖ 3 problems (0 errors, 3 warnings)\n  0 errors and 3 warnings potentially fixable\n\n    ✔ does things (123ms)\n    ✔ more\n'
+    ])("a ✖ line printed right after node's dot report is not a failed test: %j", after => {
+        const todo = reports.greenExitZero.find(
+            g => g.what === 'node:test dot reporter, a failing todo test'
+        )!
+        const stdout = `${todo.stdout}${after}`
+        expect(classifyCommandRun(ran({stdout}))).toEqual({outcome: 'pass'})
+    })
+
+    test("a ✖ line on stderr is not a failed test in node's dot report on stdout", () => {
+        const todo = reports.greenExitZero.find(
+            g => g.what === 'node:test dot reporter, a failing todo test'
+        )!
+        const stderr = '✖ lint warn\n  slow rule (12ms)\n'
+        expect(classifyCommandRun(ran({stdout: todo.stdout, stderr}))).toEqual({outcome: 'pass'})
+    })
+
+    test("a ✖ line between two green dot reports does not take the second one's todo", () => {
+        const todo = reports.greenExitZero.find(
+            g => g.what === 'node:test dot reporter, a failing todo test'
+        )!
+        const stdout = `${todo.stdout}✖ 1 task skipped\n${todo.stdout}`
+        expect(classifyCommandRun(ran({stdout}))).toEqual({outcome: 'pass'})
+    })
+
+    test('a failed test in a second dot report after a green one still reads as failed', () => {
+        const todo = reports.greenExitZero.find(
+            g => g.what === 'node:test dot reporter, a failing todo test'
+        )!
+        const dot = reports.variants.find(v => v.what === 'node:test dot reporter')!.failing
+        expect(classifyCommandRun(ran({stdout: `${todo.stdout}${dot.stdout}`}))).toMatchObject({
+            report: '✖ bad (0.59335ms)'
+        })
+    })
 
     test('the quoted report is bounded like the tail', () => {
         const name = `x\n\n${'x'.repeat(1_000_000)}`
-        const stdout = `Failed tests:\n\n✖ ${name} (1ms)\n  Error: x\n`
+        const stdout = `X\n\nFailed tests:\n\n✖ ${name} (1ms)\n  Error: x\n`
         expect(classifyCommandRun(ran({stdout}))).toMatchObject({
             report: `✖ x ${'x'.repeat(396)}…`
         })
     })
 
     test('a bounded report never ends in half a character', () => {
-        const stdout = `Failed tests:\n\n✖ ${'x'.repeat(397)}${'😀'.repeat(10)} (1ms)\n  Error: x\n`
+        const stdout = `X\n\nFailed tests:\n\n✖ ${'x'.repeat(397)}${'😀'.repeat(10)} (1ms)\n  Error: x\n`
         expect(classifyCommandRun(ran({stdout}))).toMatchObject({
             report: `✖ ${'x'.repeat(397)}…`
         })
@@ -284,12 +329,12 @@ describe("a clean exit is not a pass when the runner's own report says tests fai
 
     // A regex scan of the list gives up silently past JavaScriptCore's backtrack limit.
     test('a failed test after a todo report of any length is still read', () => {
-        const stdout = `Failed tests:\n\n⚠ later # TODO\n${'  \n'.repeat(1_100_000)}✖ real (1ms)\n  Error: x\n`
+        const stdout = `XX\n\nFailed tests:\n\n⚠ later # TODO\n${'  \n'.repeat(1_100_000)}✖ real (1ms)\n  Error: x\n`
         expect(classifyCommandRun(ran({stdout}))).toMatchObject({outcome: 'fail', status: 0})
     })
 
     test('repeated headings are read in linear time', () => {
-        const stdout = `${'Failed tests:\n\n✖ stray\n'.repeat(300_000)}Failed tests:\n\n✖ real (1ms)\n  Error: x\n`
+        const stdout = `${'Failed tests:\n\n✖ stray\n'.repeat(300_000)}X\n\nFailed tests:\n\n✖ real (1ms)\n  Error: x\n`
         expect(classifyCommandRun(ran({stdout}))).toMatchObject({outcome: 'fail', status: 0})
     })
 })
@@ -301,6 +346,11 @@ describe('outputTail', () => {
 
     test('empty output is empty, not whitespace', () => {
         expect(outputTail('', '')).toBe('')
+    })
+
+    test('a truncated tail never starts in half a character', () => {
+        const tail = outputTail(`${'😀'.repeat(10)}x`, '', 4)
+        expect(tail).toBe('…😀x')
     })
 
     test('long output is truncated from the FRONT, marked with an ellipsis', () => {
