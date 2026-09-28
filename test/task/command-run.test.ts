@@ -241,23 +241,38 @@ describe("a clean exit is not a pass when the runner's own report says tests fai
         })
     })
 
-    // node prints nothing after the list, so the next command's output follows it directly.
-    test("a ✖ line printed right after node's dot report is not a failed test", () => {
-        const todo = reports.greenExitZero.find(
-            g => g.what === 'node:test dot reporter, a failing todo test'
-        )!
-        const stdout = `${todo.stdout}✖ 1 task skipped\n`
-        expect(classifyCommandRun(ran({stdout}))).toEqual({outcome: 'pass'})
+    test('a test name line that starts with two spaces is still part of the name', () => {
+        const spaced = reports.variants.find(v => v.what.endsWith('starts with two spaces'))!
+        expect(classifyCommandRun(ran({stdout: spaced.failing.stdout}))).toMatchObject({
+            report: '✖ a b (0.560859ms)'
+        })
     })
 
+    // node prints nothing after the list, so the next command's output follows it directly.
+    test.each(['✖ 1 task skipped\n', '✖ lint step skipped\n  see docs\n'])(
+        "a ✖ line printed right after node's dot report is not a failed test: %j",
+        after => {
+            const todo = reports.greenExitZero.find(
+                g => g.what === 'node:test dot reporter, a failing todo test'
+            )!
+            const stdout = `${todo.stdout}${after}`
+            expect(classifyCommandRun(ran({stdout}))).toEqual({outcome: 'pass'})
+        }
+    )
+
     test('the quoted report is bounded like the tail', () => {
-        const name = 'x'.repeat(1_000_000)
-        const stdout = `Failed tests:\n\n✖ ${name}\n  Error: x\n`
-        const v = classifyCommandRun(ran({stdout}))
-        expect(v).toMatchObject({outcome: 'fail', status: 0})
-        const report = (v as {report: string}).report
-        expect(report.length).toBeLessThan(name.length)
-        expect(report.endsWith('…')).toBe(true)
+        const name = `x\n\n${'x'.repeat(1_000_000)}`
+        const stdout = `Failed tests:\n\n✖ ${name} (1ms)\n  Error: x\n`
+        expect(classifyCommandRun(ran({stdout}))).toMatchObject({
+            report: `✖ x ${'x'.repeat(396)}…`
+        })
+    })
+
+    test('a bounded report never ends in half a character', () => {
+        const stdout = `Failed tests:\n\n✖ ${'x'.repeat(397)}${'😀'.repeat(10)} (1ms)\n  Error: x\n`
+        expect(classifyCommandRun(ran({stdout}))).toMatchObject({
+            report: `✖ ${'x'.repeat(397)}…`
+        })
     })
 
     // The rows are read on every clean exit, so their cost must not grow with the

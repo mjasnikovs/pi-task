@@ -348,34 +348,42 @@ const SGR_RE = /\x1b\[[\d;]*m/g
 
 /**
  * node:test's dot reporter lists each failed test under its heading, a todo as `⚠`.
- * A title is the raw test name, over any lines; its error follows, every line
- * indented by two spaces. The list ends at the first line that fits neither, since
- * node prints nothing after it. Walked in code: a regex over a long list hits
- * JavaScriptCore's backtrack limit and silently misses.
+ * A title is the raw test name, over any lines, and ends on the line with its
+ * duration. Its error follows, every line indented by two spaces. A raw name can
+ * hold any of these shapes, so no line ends the list: it is walked to the end in
+ * one pass. Walked in code: a regex over a long list hits JavaScriptCore's
+ * backtrack limit and silently misses.
  */
 function nodeDotFailedTest(output: string): string | null {
-    const headings = [...output.matchAll(/^Failed tests:\r?\n\r?\n/gm)]
-    for (const [i, heading] of headings.entries()) {
-        // Up to the next heading: searching to the end from every heading is quadratic.
-        const list = output.slice(heading.index + heading[0].length, headings[i + 1]?.index)
-        const failed = failedDotEntry(list)
-        if (failed !== null) return failed
-    }
-    return null
+    const heading = /^Failed tests:\r?\n\r?\n/m.exec(output)
+    return heading && failedDotEntry(output, heading.index + heading[0].length)
 }
 
-function failedDotEntry(list: string): string | null {
-    let at = 0
-    while (list.startsWith('✖ ', at) || list.startsWith('⚠ ', at)) {
-        const error = list.indexOf('\n  ', at)
-        if (error === -1) return null
-        if (list.startsWith('✖ ', at)) return list.slice(at, error)
-        at = error + 1
-        while (list.startsWith('  ', at)) {
-            const next = list.indexOf('\n', at)
-            if (next === -1) return null
-            at = next + 1
+/** A title's last line: its duration, alone or before a todo's or expectFailure's ` # ` marker. */
+const DOT_DURATION_RE = / \(\d+(?:\.\d+)?ms\)(?: # |\r?$)/
+
+function failedDotEntry(output: string, from: number): string | null {
+    let title = -1
+    let pastIndent = false
+    for (let at = from; at < output.length;) {
+        const eol = output.indexOf('\n', at)
+        const end = eol === -1 ? output.length : eol
+        const opensTitle = output.startsWith('✖ ', at) || output.startsWith('⚠ ', at)
+        // A cancelled test prints no duration: past its error, a ✖ or ⚠ line opens the
+        // next title. Before any indented line, it is still part of the name.
+        if (opensTitle && (title === -1 || pastIndent)) {
+            title = at
+            pastIndent = false
         }
+        if (title !== -1) {
+            if (DOT_DURATION_RE.test(output.slice(at, end))) {
+                if (output.startsWith('✖', title)) return output.slice(title, end)
+                title = -1
+            } else if (output.startsWith('  ', at)) {
+                pastIndent = true
+            }
+        }
+        at = end + 1
     }
     return null
 }
@@ -392,7 +400,14 @@ function reportedTestFailure(output: string): string | null {
 /** Bounded like the tail: a runner's summary line or a test name can run to megabytes. */
 function oneLine(report: string): string {
     const line = report.trim().replace(/\s+/g, ' ')
-    return line.length > REASON_CHARS ? `${line.slice(0, REASON_CHARS)}…` : line
+    if (line.length <= REASON_CHARS) return line
+    // One code unit short when the cut would split a surrogate pair.
+    const cut = isHighSurrogate(line.charCodeAt(REASON_CHARS - 1)) ? REASON_CHARS - 1 : REASON_CHARS
+    return `${line.slice(0, cut)}…`
+}
+
+function isHighSurrogate(code: number): boolean {
+    return code >= 0xd800 && code <= 0xdbff
 }
 
 function regexReport(re: RegExp, output: string): string | null {

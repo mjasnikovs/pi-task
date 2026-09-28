@@ -238,6 +238,29 @@ describe.skipIf(!posix)('nothing is lost on the way out', () => {
         expect(outputTail(r.stdout, r.stderr)).toContain('TAIL_MARKER')
     })
 
+    test('a failed test after a todo whose error the cap cut still reads as failed', async () => {
+        const r = await within(
+            30_000,
+            spawnCommand({
+                cwd,
+                bin: 'sh',
+                args: [
+                    '-c',
+                    'printf "Failed tests:\\n\\n⚠ big (1ms) # TODO\\n  Error: not yet\\n"; '
+                        + 'yes "      at frame" | head -n 200000; '
+                        + 'printf "✖ real (1ms)\\n  Error: bad\\n"'
+                ],
+                timeoutMs: 60_000
+            })
+        )
+        expect(r.stdout).toContain('elided')
+        expect(classifyCommandRun(r)).toMatchObject({
+            outcome: 'fail',
+            status: 0,
+            report: '✖ real (1ms)'
+        })
+    })
+
     test('capping stays cheap — 32 MiB of output is not quadratic', async () => {
         const started = performance.now()
         const r = await within(
