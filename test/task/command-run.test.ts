@@ -225,6 +225,41 @@ describe("a clean exit is not a pass when the runner's own report says tests fai
         })
     })
 
+    test('the verdict quotes the failed test, not a todo listed before it', () => {
+        const todoFirst = reports.variants.find(v => v.what.endsWith('both named over two lines'))!
+        expect(classifyCommandRun(ran({stdout: todoFirst.failing.stdout}))).toMatchObject({
+            report: '✖ bad name (0.100229ms)'
+        })
+    })
+
+    test('a test name line that starts with a space is still part of the name', () => {
+        const spaced = reports.variants.find(v =>
+            v.what.endsWith('second line starts with a space')
+        )!
+        expect(classifyCommandRun(ran({stdout: spaced.failing.stdout}))).toMatchObject({
+            report: '✖ a b (0.57739ms)'
+        })
+    })
+
+    // node prints nothing after the list, so the next command's output follows it directly.
+    test("a ✖ line printed right after node's dot report is not a failed test", () => {
+        const todo = reports.greenExitZero.find(
+            g => g.what === 'node:test dot reporter, a failing todo test'
+        )!
+        const stdout = `${todo.stdout}✖ 1 task skipped\n`
+        expect(classifyCommandRun(ran({stdout}))).toEqual({outcome: 'pass'})
+    })
+
+    test('the quoted report is bounded like the tail', () => {
+        const name = 'x'.repeat(1_000_000)
+        const stdout = `Failed tests:\n\n✖ ${name}\n  Error: x\n`
+        const v = classifyCommandRun(ran({stdout}))
+        expect(v).toMatchObject({outcome: 'fail', status: 0})
+        const report = (v as {report: string}).report
+        expect(report.length).toBeLessThan(name.length)
+        expect(report.endsWith('…')).toBe(true)
+    })
+
     // The rows are read on every clean exit, so their cost must not grow with the
     // square of the output: blank padding is ordinary in test logs.
     test('a long run of blank lines is read in linear time', () => {
@@ -234,12 +269,12 @@ describe("a clean exit is not a pass when the runner's own report says tests fai
 
     // A regex scan of the list gives up silently past JavaScriptCore's backtrack limit.
     test('a failed test after a todo report of any length is still read', () => {
-        const stdout = `Failed tests:\n\n⚠ later # TODO\n${'  \n'.repeat(1_100_000)}✖ real (1ms)\n`
+        const stdout = `Failed tests:\n\n⚠ later # TODO\n${'  \n'.repeat(1_100_000)}✖ real (1ms)\n  Error: x\n`
         expect(classifyCommandRun(ran({stdout}))).toMatchObject({outcome: 'fail', status: 0})
     })
 
     test('repeated headings are read in linear time', () => {
-        const stdout = `${'Failed tests:\n\n'.repeat(300_000)}✖ real (1ms)\n`
+        const stdout = `${'Failed tests:\n\n✖ stray\n'.repeat(300_000)}Failed tests:\n\n✖ real (1ms)\n  Error: x\n`
         expect(classifyCommandRun(ran({stdout}))).toMatchObject({outcome: 'fail', status: 0})
     })
 })

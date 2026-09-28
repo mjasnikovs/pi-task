@@ -330,7 +330,7 @@ const FAILED_TESTS_REPORTS: ReadonlyArray<RegExp | ((output: string) => string |
     /^[ \t]*[1-9]\d* fail$/m, // bun
     /^ℹ fail [1-9]\d*$/m, // node:test, spec reporter
     /^# fail [1-9]\d*$/m, // node:test, tap reporter
-    nodeDotFailedTest,
+    nodeDotFailedTest, // node:test, dot reporter
     /^FAILED \| \d+ passed(?: \(\d+ steps?\))? \| [1-9]\d* failed\b/m, // deno
     /^[ \t]*Tests:?[ \t]+(?:.*[ \t])?[1-9]\d* failed\b.*$/m, // jest, vitest
     /^[ \t]*Test (?:Suites:|Files)[ \t]+(?:.*[ \t])?[1-9]\d* failed\b.*$/m, // jest, vitest: a file that did not load
@@ -348,22 +348,34 @@ const SGR_RE = /\x1b\[[\d;]*m/g
 
 /**
  * node:test's dot reporter lists each failed test under its heading, a todo as `⚠`.
- * Every error line is indented, so the list ends at its first empty line. Scanned
- * in code: a regex over a long list hits JavaScriptCore's backtrack limit and
- * silently misses.
+ * A title is the raw test name, over any lines; its error follows, every line
+ * indented by two spaces. The list ends at the first line that fits neither, since
+ * node prints nothing after it. Walked in code: a regex over a long list hits
+ * JavaScriptCore's backtrack limit and silently misses.
  */
 function nodeDotFailedTest(output: string): string | null {
-    const listEnd = /\n\r?\n/g
-    for (const heading of output.matchAll(/^Failed tests:\r?\n\r?\n/gm)) {
-        const start = heading.index + heading[0].length
-        listEnd.lastIndex = start
-        const end = listEnd.exec(output)
-        const list = output.slice(start, end === null ? undefined : end.index + 1)
-        const failed = /^✖ /m.exec(list)
-        if (failed === null) continue
-        const entry = list.slice(failed.index)
-        const nameEnd = entry.search(/\r?\n(?: |[✖⚠] )/)
-        return nameEnd === -1 ? entry : entry.slice(0, nameEnd)
+    const headings = [...output.matchAll(/^Failed tests:\r?\n\r?\n/gm)]
+    for (const [i, heading] of headings.entries()) {
+        // Up to the next heading: searching to the end from every heading is quadratic.
+        const list = output.slice(heading.index + heading[0].length, headings[i + 1]?.index)
+        const failed = failedDotEntry(list)
+        if (failed !== null) return failed
+    }
+    return null
+}
+
+function failedDotEntry(list: string): string | null {
+    let at = 0
+    while (list.startsWith('✖ ', at) || list.startsWith('⚠ ', at)) {
+        const error = list.indexOf('\n  ', at)
+        if (error === -1) return null
+        if (list.startsWith('✖ ', at)) return list.slice(at, error)
+        at = error + 1
+        while (list.startsWith('  ', at)) {
+            const next = list.indexOf('\n', at)
+            if (next === -1) return null
+            at = next + 1
+        }
     }
     return null
 }
@@ -372,9 +384,15 @@ function reportedTestFailure(output: string): string | null {
     const plain = output.replace(SGR_RE, '')
     for (const row of FAILED_TESTS_REPORTS) {
         const report = row instanceof RegExp ? regexReport(row, plain) : row(plain)
-        if (report !== null) return report.trim().replace(/\s+/g, ' ')
+        if (report !== null) return oneLine(report)
     }
     return null
+}
+
+/** Bounded like the tail: a runner's summary line or a test name can run to megabytes. */
+function oneLine(report: string): string {
+    const line = report.trim().replace(/\s+/g, ' ')
+    return line.length > REASON_CHARS ? `${line.slice(0, REASON_CHARS)}…` : line
 }
 
 function regexReport(re: RegExp, output: string): string | null {
@@ -454,8 +472,10 @@ const GAP_RULES: ReadonlyArray<{
     }
 ]
 
+const REASON_CHARS = 400
+
 /** Last ~`limit` chars of the command's combined output, one line, for the reason. */
-export function outputTail(stdout: string, stderr: string, limit = 400): string {
+export function outputTail(stdout: string, stderr: string, limit = REASON_CHARS): string {
     const combined = `${stdout}\n${stderr}`.trim()
     if (combined.length === 0) return ''
     const tail = combined.slice(-limit).replace(/\s+/g, ' ').trim()
