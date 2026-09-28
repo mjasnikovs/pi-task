@@ -212,11 +212,35 @@ describe("a clean exit is not a pass when the runner's own report says tests fai
         })
     })
 
+    test('a node dot report piped through a CRLF writer still reads as failed', () => {
+        const dot = reports.variants.find(v => v.what === 'node:test dot reporter')!.failing
+        const stdout = dot.stdout.replace(/\n/g, '\r\n')
+        expect(classifyCommandRun(ran({stdout}))).toMatchObject({outcome: 'fail', status: 0})
+    })
+
+    test('the verdict quotes a failed test by its whole name', () => {
+        const multi = reports.variants.find(v => v.what.endsWith('a test name over two lines'))!
+        expect(classifyCommandRun(ran({stdout: multi.failing.stdout}))).toMatchObject({
+            report: '✖ multi line (0.18323ms)'
+        })
+    })
+
     // The rows are read on every clean exit, so their cost must not grow with the
     // square of the output: blank padding is ordinary in test logs.
     test('a long run of blank lines is read in linear time', () => {
         const stdout = `x\n${'   \n'.repeat(100_000)}done\n`
         expect(classifyCommandRun(ran({stdout}))).toEqual({outcome: 'pass'})
+    })
+
+    // A regex scan of the list gives up silently past JavaScriptCore's backtrack limit.
+    test('a failed test after a todo report of any length is still read', () => {
+        const stdout = `Failed tests:\n\n⚠ later # TODO\n${'  \n'.repeat(1_100_000)}✖ real (1ms)\n`
+        expect(classifyCommandRun(ran({stdout}))).toMatchObject({outcome: 'fail', status: 0})
+    })
+
+    test('repeated headings are read in linear time', () => {
+        const stdout = `${'Failed tests:\n\n'.repeat(300_000)}✖ real (1ms)\n`
+        expect(classifyCommandRun(ran({stdout}))).toMatchObject({outcome: 'fail', status: 0})
     })
 })
 

@@ -1,5 +1,5 @@
 {
-  "captured": "2026-09-26 and 2026-09-27, one real run per entry; the scratch path is rewritten to /work",
+  "captured": "2026-09-26 to 2026-09-28, one real run per entry; the scratch path is rewritten to /work",
   "runners": [
     {
       "runner": "bun",
@@ -207,6 +207,14 @@
       "status": 0,
       "stdout": "\n RUN  v4.1.10 /work/vitest-ignored\n\n\n Test Files  1 passed (1)\n      Tests  1 passed (1)\n     Errors  1 error\n   Start at  10:07:43\n   Duration  136ms (transform 12ms, setup 0ms, import 20ms, tests 22ms, environment 0ms)\n\n",
       "stderr": "⎯⎯⎯⎯⎯⎯ Unhandled Errors ⎯⎯⎯⎯⎯⎯\n\nVitest caught 1 unhandled error during the test run.\nThis might cause false positive tests. Resolve unhandled errors to make sure your tests are not affected.\n\n⎯⎯⎯⎯⎯ Uncaught Exception ⎯⎯⎯⎯⎯\nError: unhandled boom\n ❯ Timeout._onTimeout u.test.ts:2:51\n      1| import {test, expect} from 'vitest'\n      2| test('ok', async () => { setTimeout(() => { throw new Error('unhandled…\n       |                                                   ^\n      3|\n ❯ listOnTimeout node:internal/timers:635:17\n ❯ processTimers node:internal/timers:571:7\n\nThis error originated in \"u.test.ts\" test file. It doesn't mean the error was thrown inside the file itself, but while it was running.\nThe latest test that might've caused the error is \"ok\". It might mean one of the following:\n- The error was thrown, while Vitest was running this test.\n- If the error occurred after the test had been completed, this was the last documented test before it was thrown.\n⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n\n"
+    },
+    {
+      "what": "node:test dot reporter, a failing todo test, then an eslint warning",
+      "version": "node 24.19.0, eslint 10.9.1",
+      "command": "node --test --test-reporter=dot && eslint .",
+      "status": 0,
+      "stdout": "X.\n\nFailed tests:\n\n⚠ later (0.617639ms) # TODO\n  Error: not yet\n      at TestContext.<anonymous> (file:///work/node-dot-eslint/t.test.mjs:2:43)\n      at Test.runInAsyncScope (node:async_hooks:227:14)\n      at Test.run (node:internal/test_runner/test:1382:25)\n      at Test.start (node:internal/test_runner/test:1242:17)\n      at startSubtestAfterBootstrap (node:internal/test_runner/harness:387:17)\n\n/work/node-dot-eslint/lint.mjs\n  1:7  warning  'unused' is assigned a value but never used  no-unused-vars\n\n✖ 1 problem (0 errors, 1 warning)\n\n",
+      "stderr": ""
     }
   ],
   "variants": [
@@ -324,7 +332,22 @@
         "stdout": ".\n",
         "stderr": ""
       }
+    },
+    {
+      "what": "node:test dot reporter: a failed test listed after a todo, both named over two lines",
+      "version": "node 24.19.0",
+      "command": "node --test --test-reporter=dot",
+      "failing": {
+        "status": 1,
+        "stdout": "X.X\n\nFailed tests:\n\n⚠ later\nmulti (0.644329ms) # TODO\n  Error: not yet\n      at TestContext.<anonymous> (file:///work/node-dot-todo-first/t.test.mjs:2:50)\n      at Test.runInAsyncScope (node:async_hooks:227:14)\n      at Test.run (node:internal/test_runner/test:1382:25)\n      at Test.start (node:internal/test_runner/test:1242:17)\n      at startSubtestAfterBootstrap (node:internal/test_runner/harness:387:17)\n✖ bad\nname (0.100229ms)\n  Error: nl\n      at TestContext.<anonymous> (file:///work/node-dot-todo-first/t.test.mjs:4:33)\n      at Test.runInAsyncScope (node:async_hooks:227:14)\n      at Test.run (node:internal/test_runner/test:1382:25)\n      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)\n      at Test.postRun (node:internal/test_runner/test:1522:19)\n      at Test.run (node:internal/test_runner/test:1447:12)\n      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7)\n",
+        "stderr": ""
+      },
+      "passing": {
+        "status": 0,
+        "stdout": "X.\n\nFailed tests:\n\n⚠ later\nmulti (0.614188ms) # TODO\n  Error: not yet\n      at TestContext.<anonymous> (file:///work/node-dot-todo-first/t.test.mjs:2:50)\n      at Test.runInAsyncScope (node:async_hooks:227:14)\n      at Test.run (node:internal/test_runner/test:1382:25)\n      at Test.start (node:internal/test_runner/test:1242:17)\n      at startSubtestAfterBootstrap (node:internal/test_runner/harness:387:17)\n",
+        "stderr": ""
+      }
     }
   ],
-  "capturedVariants": "2026-09-26, one real run per entry; the scratch path is rewritten to /work"
+  "capturedVariants": "2026-09-26 to 2026-09-28, one real run per entry; the scratch path is rewritten to /work"
 }

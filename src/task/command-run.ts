@@ -324,14 +324,13 @@ const TESTS_RAN_OUTPUT_RE = /\b[1-9]\d*\s+(?:pass(?:ed|ing)?|fail(?:ed|ing|ures?
  * ever turn a pass into a fail, never hide one.
  *
  * `[ \t]`, not `\s`: a summary is one line, and a line-start `\s*` rescans each run
- * of blank lines from every line in it. The dot row stops at the next heading
- * for the same reason: unbounded, it rescans to the end from every repeated heading.
+ * of blank lines from every line in it.
  */
-const FAILED_TESTS_REPORTS: readonly RegExp[] = [
+const FAILED_TESTS_REPORTS: ReadonlyArray<RegExp | ((output: string) => string | null)> = [
     /^[ \t]*[1-9]\d* fail$/m, // bun
     /^ℹ fail [1-9]\d*$/m, // node:test, spec reporter
     /^# fail [1-9]\d*$/m, // node:test, tap reporter
-    /^Failed tests:\n(?:(?!Failed tests:$).*\n)*?(✖ .*)/m, // node:test, dot reporter: a todo is listed there as ⚠
+    nodeDotFailedTest,
     /^FAILED \| \d+ passed(?: \(\d+ steps?\))? \| [1-9]\d* failed\b/m, // deno
     /^[ \t]*Tests:?[ \t]+(?:.*[ \t])?[1-9]\d* failed\b.*$/m, // jest, vitest
     /^[ \t]*Test (?:Suites:|Files)[ \t]+(?:.*[ \t])?[1-9]\d* failed\b.*$/m, // jest, vitest: a file that did not load
@@ -347,13 +346,40 @@ const FAILED_TESTS_REPORTS: readonly RegExp[] = [
 // eslint-disable-next-line no-control-regex -- ESC is the byte an SGR sequence starts with
 const SGR_RE = /\x1b\[[\d;]*m/g
 
-function reportedTestFailure(output: string): string | null {
-    const plain = output.replace(SGR_RE, '')
-    for (const re of FAILED_TESTS_REPORTS) {
-        const m = re.exec(plain)
-        if (m) return (m[1] ?? m[0]).trim().replace(/\s+/g, ' ')
+/**
+ * node:test's dot reporter lists each failed test under its heading, a todo as `⚠`.
+ * Every error line is indented, so the list ends at its first empty line. Scanned
+ * in code: a regex over a long list hits JavaScriptCore's backtrack limit and
+ * silently misses.
+ */
+function nodeDotFailedTest(output: string): string | null {
+    const listEnd = /\n\r?\n/g
+    for (const heading of output.matchAll(/^Failed tests:\r?\n\r?\n/gm)) {
+        const start = heading.index + heading[0].length
+        listEnd.lastIndex = start
+        const end = listEnd.exec(output)
+        const list = output.slice(start, end === null ? undefined : end.index + 1)
+        const failed = /^✖ /m.exec(list)
+        if (failed === null) continue
+        const entry = list.slice(failed.index)
+        const nameEnd = entry.search(/\r?\n(?: |[✖⚠] )/)
+        return nameEnd === -1 ? entry : entry.slice(0, nameEnd)
     }
     return null
+}
+
+function reportedTestFailure(output: string): string | null {
+    const plain = output.replace(SGR_RE, '')
+    for (const row of FAILED_TESTS_REPORTS) {
+        const report = row instanceof RegExp ? regexReport(row, plain) : row(plain)
+        if (report !== null) return report.trim().replace(/\s+/g, ' ')
+    }
+    return null
+}
+
+function regexReport(re: RegExp, output: string): string | null {
+    const m = re.exec(output)
+    return m && (m[1] ?? m[0])
 }
 
 /** Which way a command failed to tell us anything. */
