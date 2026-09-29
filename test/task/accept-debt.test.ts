@@ -90,6 +90,20 @@ describe("recordDebt (origin 'accepted') / readAcceptDebts", () => {
         expect((await readAcceptDebts(cwd))[0].reason.length).toBe(300)
     })
 
+    // A runner report can run to 400 chars, and a cut through the end of the reason
+    // lost the next command: nothing could find, owe or close its debt.
+    test('the cap cuts prose, never a quoted command', async () => {
+        const cwd = makeCwd()
+        const reason =
+            `test suite: \`bun run test:unit\` exited 0 but reported "${'x'.repeat(350)}"; `
+            + '`bun run test` found no tests in part of its suite'
+        await recordDebt(cwd, 'T1', reason, 'accepted')
+        const stored = (await readAcceptDebts(cwd))[0].reason
+        expect(stored.length).toBeLessThanOrEqual(300)
+        expect(stored).toStartWith('test suite: `bun run test:unit` exited 0 but reported "xxx')
+        expect(stored).toEndWith('`bun run test` found no tests in part of its suite')
+    })
+
     test('dedups the same task+reason but keeps distinct ones', async () => {
         const cwd = makeCwd()
         await recordDebt(cwd, 'T1', 'same reason', 'accepted')

@@ -265,11 +265,25 @@ export async function readAcceptDebts(cwd: string): Promise<AcceptDebt[]> {
 }
 
 function normaliseReason(reason: string): string {
-    return reason
-        .replace(/[\t\n]+/g, ' ')
-        .replace(/\s+/g, ' ')
-        .trim()
-        .slice(0, MAX_REASON_LENGTH)
+    return fitReason(reason.replace(/\s+/g, ' ').trim())
+}
+
+/** Cuts the longest prose first, never a quoted command: the ledger finds a debt's
+ *  commands by their backticks, to owe and to close it. */
+function fitReason(reason: string): string {
+    const parts = reason.split(/(`[^`]*`)/)
+    let over = reason.length - MAX_REASON_LENGTH
+    while (over > 0) {
+        const longest = parts.reduce(
+            (best, p, i) => (i % 2 === 0 && p.length > parts[best].length ? i : best),
+            0
+        )
+        if (parts[longest].length <= 1) break
+        const cut = `${parts[longest].slice(0, Math.max(0, parts[longest].length - over - 1))}…`
+        over -= parts[longest].length - cut.length
+        parts[longest] = cut
+    }
+    return parts.join('').slice(0, MAX_REASON_LENGTH)
 }
 
 function serialize(d: AcceptDebt): string {

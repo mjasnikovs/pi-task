@@ -168,13 +168,63 @@ describe('an empty part beside tests that all passed is a gap of its own', () =>
         ['a build step that prints no count', 'No tests found\n 3 pass\nerror during build:'],
         [
             'eslint over its warning budget',
-            'No tests found\n 3 pass\n✖ 3 problems (0 errors, 3 warnings)'
+            'No tests found\n 3 pass\n✖ 1 problem (0 errors, 1 warning)\n\n'
+                + 'ESLint found too many warnings (maximum: 0).'
         ],
-        ['a compiler error line', "No tests found\n 3 pass\nsrc/a.ts(1,7): error TS2322: Type 'x'"]
+        ['a compiler error line', "No tests found\n 3 pass\nsrc/a.ts(1,7): error TS2322: Type 'x'"],
+        // mx5-n: a check script's own verdict line, with no count on it.
+        ['a script printing FAIL', 'No tests found\n 3 pass\nPASS: tsc --noEmit\nFAIL: scope fence']
     ])('any failure beside it keeps the fail: %s', (_what, out) => {
         expect(
             classifyCommandRun(ran({status: 1, stdout: out}), [], {emptySuite: true}).outcome
         ).toBe('fail')
+    })
+
+    // A real bun 1.3.14 unit half under AGENT=1: the file header and a passing test's
+    // logged Error both say "error", and bun counts neither as a failure.
+    const unitHalf =
+        'src/errors.test.ts:\n'
+        + "2 | test('rejects on error', () => { console.error(new Error('user not found')) })\n"
+        + '                                                       ^\n'
+        + 'error: user not found\n'
+        + '      at <anonymous> (/repo/src/errors.test.ts:2:52)\n\n'
+        + 'Error: user not found\n\n'
+        + ' 1 pass\n 1 skip\n 1 todo\n 0 fail\n 1 expect() calls\n'
+        + 'Ran 3 tests across 1 file. [8.00ms]\n'
+    const emptyHalf = 'Error: No tests found\n'
+    test.each([
+        ['a file or a log line naming an error', `${unitHalf}${emptyHalf}`],
+        [
+            'a skipped or todo title',
+            '(skip) skipped on failure\n(todo) todo error path\n 3 pass\nNo tests found'
+        ],
+        [
+            "a passing test's title with a count",
+            '(pass) returns 2 errors [0.1ms]\n 3 pass\nNo tests found'
+        ],
+        [
+            'pnpm restating the exit',
+            `${unitHalf}${emptyHalf} ELIFECYCLE  Test failed. See above for more details.\n`
+        ],
+        [
+            'yarn restating the exit',
+            `${unitHalf}${emptyHalf}error Command failed with exit code 1.\n`
+        ],
+        [
+            'CRLF line ends',
+            `${unitHalf}${emptyHalf}error: script "test" exited with code 1\n`.replaceAll(
+                '\n',
+                '\r\n'
+            )
+        ],
+        [
+            'eslint warnings under budget',
+            '✖ 1 problem (0 errors, 1 warning)\n 3 pass\nNo tests found'
+        ]
+    ])('text that reports no failure keeps the gap: %s', (_what, out) => {
+        expect(
+            classifyCommandRun(ran({status: 1, stdout: out}), [], {emptySuite: true})
+        ).toMatchObject({outcome: 'gap', gap: 'part-empty-suite'})
     })
 })
 

@@ -7,8 +7,7 @@ import {
     parseHealthRepairTitle,
     checkpointMayRepair,
     owingTask,
-    planCoversHealthRed,
-    suiteRegressionOwed
+    planCoversHealthRed
 } from '../../src/task/health-repair.js'
 import type {HealthOutcome} from '../../src/task/repo-health-check.js'
 
@@ -102,7 +101,13 @@ describe('healthRedSubject', () => {
             output: ''
         }
         const vanished = healthRedSubject(health, CWD, TRACKED)
-        expect(vanished).toEqual({command: 'bun run test', exitCode: null, files: []})
+        expect(vanished).toEqual({
+            command: 'bun run test',
+            exitCode: null,
+            files: [],
+            kind: 'test',
+            gap: 'empty-suite'
+        })
         const title = buildHealthRepairTitle({...vanished!, owners: []})
         expect(title).toBe('repair `bun run test`: exits ? (no task in this run owns it)')
         expect(parseHealthRepairTitle(title)?.command).toBe('bun run test')
@@ -137,7 +142,8 @@ describe('healthRedSubject', () => {
         expect(healthRedSubject(health, CWD, TRACKED, c => c.kind !== 'test')).toEqual({
             command: 'bun run lint',
             exitCode: 1,
-            files: ['src/client/api.ts']
+            files: ['src/client/api.ts'],
+            kind: 'static'
         })
         expect(healthRedSubject(health, CWD, TRACKED, () => false)).toBeNull()
     })
@@ -168,29 +174,6 @@ describe('healthRedSubject', () => {
     })
 })
 
-describe('suiteRegressionOwed', () => {
-    test('an accepted suite regression naming the command is owed', () => {
-        expect(
-            suiteRegressionOwed('bun run test', [
-                {reason: 'test suite: `bun run test` exited 1', origin: 'yolo-accepted'}
-            ])
-        ).toBe(true)
-    })
-
-    test('an inherited red, a static debt, or another command is not', () => {
-        expect(
-            suiteRegressionOwed('bun run test', [
-                {
-                    reason: 'test suite: `bun run test` exited 1 — already failing before this task',
-                    origin: 'inherited-health'
-                },
-                {reason: 'repo health: `bun run lint` exited 1', origin: 'accepted'},
-                {reason: 'test suite: `bun run test:e2e` exited 1', origin: 'accepted'}
-            ])
-        ).toBe(false)
-    })
-})
-
 describe('title grammar', () => {
     test('file form round-trips', () => {
         const title = buildHealthRepairTitle({
@@ -206,6 +189,22 @@ describe('title grammar', () => {
             command: 'bun run lint',
             files: ['src/client/api.ts', 'src/server/index.ts']
         })
+    })
+
+    // The task that regressed the check is named apart from those that wrote the files.
+    test('a regressing task is named as such, once', () => {
+        const dbRed = {command: 'bun run test', exitCode: 1, files: ['src/db.ts']}
+        expect(
+            buildHealthRepairTitle({...dbRed, owners: ['TASK_0004'], regressedBy: 'TASK_0013'})
+        ).toBe(
+            'repair src/db.ts: `bun run test` exits 1 (introduced by TASK_0004; regressed by TASK_0013)'
+        )
+        expect(
+            buildHealthRepairTitle({...dbRed, owners: ['TASK_0004'], regressedBy: 'TASK_0004'})
+        ).toBe('repair src/db.ts: `bun run test` exits 1 (introduced by TASK_0004)')
+        expect(
+            buildHealthRepairTitle({...dbRed, files: [], owners: [], regressedBy: 'TASK_0013'})
+        ).toBe('repair `bun run test`: exits 1 (regressed by TASK_0013)')
     })
 
     test('command form round-trips', () => {
@@ -286,29 +285,37 @@ describe('planCoversHealthRed', () => {
 // tasks later TASK_0013 broke the suite again, and TASK_0005's entry "covered"
 // it: no repair ran, and three root-cause repairs chased the fallout for hours.
 describe('a repair covers only reds that existed when it ran', () => {
-    const suiteRed = {command: 'bun run test', exitCode: 1, files: []}
-    const ran = (producedId: string) => [
-        {title: 'repair `bun run test`: exits 1 (x)', done: true, producedId}
-    ]
+    const suiteRed = {command: 'bun run test', exitCode: 1, files: [], kind: 'test' as const}
+    const repair = 'repair `bun run test`: exits 1 (x)'
+    const done = (title: string, producedId?: string) => ({
+        title,
+        done: true,
+        ...(producedId === undefined ? {} : {producedId})
+    })
+    const owing = done('B', 'TASK_0013')
+    const covers = (entries: {title: string; producedId?: string}[], owedBy = 'TASK_0013') =>
+        planCoversHealthRed(entries, suiteRed, new Set(), owedBy)
 
     test('a repair that ran before the task that owes the red does not cover it', () => {
-        expect(planCoversHealthRed(ran('TASK_0005'), suiteRed, new Set(), 'TASK_0013')).toBe(false)
+        expect(covers([done(repair, 'TASK_0005'), owing])).toBe(false)
+    })
+
+    // Abandoned before an id was allocated: it never tried this red either.
+    test('nor does one checked off above it with no task id', () => {
+        expect(covers([done(repair), owing])).toBe(false)
     })
 
     test('a repair that ran after it, or is the owing task, still covers: no loop', () => {
-        expect(planCoversHealthRed(ran('TASK_0014'), suiteRed, new Set(), 'TASK_0013')).toBe(true)
-        expect(planCoversHealthRed(ran('TASK_0013'), suiteRed, new Set(), 'TASK_0013')).toBe(true)
+        expect(covers([owing, done(repair, 'TASK_0014')])).toBe(true)
+        expect(covers([done(repair, 'TASK_0013')])).toBe(true)
     })
 
     test('a queued repair that has not run covers', () => {
-        expect(
-            planCoversHealthRed(
-                [{title: 'repair `bun run test`: exits 1 (x)'}],
-                suiteRed,
-                new Set(),
-                'TASK_0013'
-            )
-        ).toBe(true)
+        expect(covers([owing, {title: repair}])).toBe(true)
+    })
+
+    test('an owing task from outside this plan leaves every entry covering', () => {
+        expect(covers([done(repair, 'TASK_0005'), owing], 'TASK_0001')).toBe(true)
     })
 
     test('owingTask is the latest regression of the command; a found red owes nothing', () => {
@@ -335,8 +342,8 @@ describe('a repair covers only reds that existed when it ran', () => {
             },
             {taskId: '', reason: 'test suite: `bun run test` exited 1'}
         ]
-        expect(owingTask('bun run test', debts)).toBe('TASK_0013')
-        expect(owingTask('bun run build', debts)).toBeNull()
+        expect(owingTask(suiteRed, debts)).toBe('TASK_0013')
+        expect(owingTask({...suiteRed, command: 'bun run build'}, debts)).toBeNull()
     })
 
     // An abandoned entry's debt quotes its title, and a title can quote a command.
@@ -358,26 +365,54 @@ describe('a repair covers only reds that existed when it ran', () => {
                 origin: 'accepted'
             }
         ]
-        expect(owingTask('bun run test', debts)).toBe('TASK_0013')
+        expect(owingTask(suiteRed, debts)).toBe('TASK_0013')
+    })
+
+    // mx5-n: TASK_0016 tripped over TASK_0004's db.ts and recorded it as root cause.
+    // Counted as TASK_0016's regression, it made TASK_0014's repair stale.
+    test('a task that tripped over the red, blaming another task, does not owe it', () => {
+        const debts = [
+            {
+                taskId: 'TASK_0013',
+                reason: 'test suite: `bun run test` exited 1',
+                origin: 'yolo-accepted'
+            },
+            {
+                taskId: 'TASK_0016',
+                reason: 'test suite: `bun run test` exited 1 — ROOT CAUSE: `src/db.ts` (introduced by TASK_0004, not touched by this task)',
+                origin: 'root-cause'
+            }
+        ]
+        expect(owingTask(suiteRed, debts)).toBe('TASK_0013')
+    })
+
+    test('a suite that lost a part is owed by the task that lost it, not a later red', () => {
+        const debts = [
+            {
+                taskId: 'TASK_0009',
+                reason: 'test suite: `bun run test` found no tests in part of its suite',
+                origin: 'accepted'
+            },
+            {taskId: 'TASK_0011', reason: 'test suite: `bun run test` exited 1', origin: 'accepted'}
+        ]
+        const part = {...suiteRed, exitCode: null, gap: 'part-empty-suite' as const}
+        expect(owingTask(part, debts)).toBe('TASK_0009')
+        expect(owingTask(suiteRed, debts)).toBe('TASK_0011')
     })
 })
 
-// A part-empty suite passed every test it ran. At a checkpoint it is repairable
-// only when a task was accepted for losing that half, not for an older red.
+// A red suite at a checkpoint is repairable only when a task was accepted for
+// making it red that way: a database may be down here, and a part-empty suite
+// passed every test it ran.
 describe('checkpointMayRepair', () => {
     const part = {
-        cmd: 'bun run test',
-        outcome: 'skip' as const,
+        command: 'bun run test',
         exitCode: null,
+        files: [],
         kind: 'test' as const,
         gap: 'part-empty-suite' as const
     }
-    const failRow = {
-        cmd: 'bun run test',
-        outcome: 'fail' as const,
-        exitCode: 1,
-        kind: 'test' as const
-    }
+    const failRow = {command: 'bun run test', exitCode: 1, files: [], kind: 'test' as const}
     const oldRed = [
         {taskId: 'TASK_0004', reason: 'test suite: `bun run test` exited 1', origin: 'accepted'}
     ]
@@ -389,9 +424,22 @@ describe('checkpointMayRepair', () => {
         }
     ]
 
-    test('a failing suite with an owed regression is repairable, as before', () => {
+    test('a failing suite with an owed regression is repairable', () => {
         expect(checkpointMayRepair(failRow, oldRed)).toBe(true)
         expect(checkpointMayRepair(failRow, [])).toBe(false)
+    })
+
+    test('an inherited red, a static debt, or another command owes nothing', () => {
+        expect(
+            checkpointMayRepair(failRow, [
+                {
+                    reason: 'test suite: `bun run test` exited 1 — already failing before this task',
+                    origin: 'inherited-health'
+                },
+                {reason: 'repo health: `bun run lint` exited 1', origin: 'accepted'},
+                {reason: 'test suite: `bun run test:e2e` exited 1', origin: 'accepted'}
+            ])
+        ).toBe(false)
     })
 
     test('a part-empty suite is repairable only for the regression that emptied it', () => {
@@ -402,7 +450,7 @@ describe('checkpointMayRepair', () => {
     test('a static check is always repairable', () => {
         expect(
             checkpointMayRepair(
-                {cmd: 'bun run lint', outcome: 'fail', exitCode: 1, kind: 'static'},
+                {command: 'bun run lint', exitCode: 1, files: [], kind: 'static'},
                 []
             )
         ).toBe(true)

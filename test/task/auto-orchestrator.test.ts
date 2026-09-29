@@ -4040,10 +4040,59 @@ test('runAutoLoop: A breaks the suite and is ACCEPTED → a repair runs before B
         )
         handle.queueSelect(`${ACCEPT_LABEL}; queues a repair for \`${SUITE}\``)
         await runAutoLoop(handle.ctx, dir, 'TASK_AUTO_0001', deps)
-        const repair = `repair \`${SUITE}\`: exits 1 (introduced by TASK_0006)`
+        const repair = `repair \`${SUITE}\`: exits 1 (regressed by TASK_0006)`
         expect(ran).toEqual(['A', repair, 'B'])
         const debts = await readAcceptDebts(dir)
         expect(debts.map(d => [d.taskId, d.resolvedBy])).toEqual([['TASK_0006', 'TASK_0007']])
+    })
+})
+
+// A suite that lost a part fails nothing, so its health is `ok`. The checkpoint
+// spliced only on `!ok`: the gate said a repair was queued, and none ran.
+test('runAutoLoop: A loses part of the suite and is ACCEPTED → a repair runs before B', async () => {
+    await withTmpTaskDir(async dir => {
+        const handle = makeFakeCtx(dir)
+        await writeTaskFile(
+            dir,
+            autoFm('TASK_AUTO_0001'),
+            buildAutoBody('feat', '(none)', ['A', 'B'])
+        )
+        const partEmpty: HealthOutcome = {
+            ...suiteHealth(false),
+            commands: [
+                {cmd: SUITE, outcome: 'skip', exitCode: null, kind: 'test', gap: 'part-empty-suite'}
+            ]
+        }
+        let lost = false
+        let current = ''
+        const {deps, ran} = suiteRun(() => undefined, false)
+        const run = deps.runTask
+        deps.runTask = (c, cwd, title, ...rest) => {
+            current = title
+            if (title === 'A') lost = true
+            if (title.startsWith('repair ')) lost = false
+            return run(c, cwd, title, ...rest)
+        }
+        deps.captureHealthBaseline = () =>
+            Promise.resolve({
+                at: 'T',
+                treeHash: null,
+                outcome: lost ? partEmpty : suiteHealth(false)
+            })
+        deps.verify = () =>
+            Promise.resolve(
+                lost && current === 'A' ?
+                    {
+                        ok: false,
+                        failClass: 'test-suite',
+                        reason: `test suite: \`${SUITE}\` found no tests in part of its suite`,
+                        health: partEmpty
+                    }
+                :   {ok: true, greenHealth: [SUITE]}
+            )
+        handle.queueSelect(`${ACCEPT_LABEL}; queues a repair for \`${SUITE}\``)
+        await runAutoLoop(handle.ctx, dir, 'TASK_AUTO_0001', deps)
+        expect(ran).toEqual(['A', `repair \`${SUITE}\`: exits ? (regressed by TASK_0006)`, 'B'])
     })
 })
 
@@ -4069,7 +4118,7 @@ test('runAutoLoop: a later regression of a check is repaired though an older rep
         handle.queueSelect(`${ACCEPT_LABEL}; queues a repair for \`${SUITE}\``)
         handle.queueSelect(`${ACCEPT_LABEL}; queues a repair for \`${SUITE}\``)
         await runAutoLoop(handle.ctx, dir, 'TASK_AUTO_0001', deps)
-        const repairOf = (owner: string) => `repair \`${SUITE}\`: exits 1 (introduced by ${owner})`
+        const repairOf = (owner: string) => `repair \`${SUITE}\`: exits 1 (regressed by ${owner})`
         expect(ran).toEqual(['A', repairOf('TASK_0006'), 'B', 'C', repairOf('TASK_0009'), 'D'])
     })
 })
@@ -4098,7 +4147,7 @@ test('runAutoLoop: a later regression in the same file is repaired though an old
         handle.queueSelect(`${ACCEPT_LABEL}; queues a repair for ${API} (\`${LINT}\`)`)
         handle.queueSelect(`${ACCEPT_LABEL}; queues a repair for ${API} (\`${LINT}\`)`)
         await runAutoLoop(handle.ctx, dir, 'TASK_AUTO_0001', deps)
-        const second = `repair ${API}: \`${LINT}\` exits 1 (introduced by TASK_0006, TASK_0009)`
+        const second = `repair ${API}: \`${LINT}\` exits 1 (introduced by TASK_0006; regressed by TASK_0009)`
         expect(ran).toEqual(['A', REPAIR_A, 'B', 'C', second, 'D'])
     })
 })

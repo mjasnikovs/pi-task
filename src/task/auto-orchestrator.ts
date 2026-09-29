@@ -96,7 +96,7 @@ import {
     parseHealthBaseline,
     type HealthBaseline
 } from './health-baseline.js'
-import type {HealthOutcome} from './repo-health-check.js'
+import {isHealthRed, type HealthOutcome} from './repo-health-check.js'
 import {runFinalGateStage, type FinalGateStageDeps} from './run-final-gate.js'
 import {gitUnmergedPaths, gitStashRef} from './auto-commit.js'
 import {runFinalIntegrationGate, deriveOpenDebts} from './final-gate.js'
@@ -581,10 +581,10 @@ async function spliceHealthRepair(
         const repaired = new Set(
             ledger.flatMap(d => (d.resolvedBy === undefined ? [] : [d.resolvedBy]))
         )
-        const pick = healthReds(health, cwd, (await deps.repoFiles?.(cwd)) ?? null, c =>
-            checkpointMayRepair(c, debts)
+        const pick = healthReds(health, cwd, (await deps.repoFiles?.(cwd)) ?? null, r =>
+            checkpointMayRepair(r, debts)
         )
-            .map(r => ({red: r, owing: owingTask(r.command, debts)}))
+            .map(r => ({red: r, owing: owingTask(r, debts)}))
             .find(({red: r, owing}) => !planCoversHealthRed(entries, r, repaired, owing))
         if (!pick) return false
         const {red, owing} = pick
@@ -593,10 +593,7 @@ async function spliceHealthRepair(
             const owner = await deps.introducedBy?.(cwd, f)
             if (owner && !owners.includes(owner)) owners.push(owner)
         }
-        // The task that regressed the check owns this red too, and naming it keeps
-        // the title apart from an older, failed repair of the same files.
-        if (owing !== null && !owners.includes(owing)) owners.push(owing)
-        const title = buildHealthRepairTitle({...red, owners})
+        const title = buildHealthRepairTitle({...red, owners, regressedBy: owing})
         if (!(await insertTaskBefore(cwd, id, next.index, title))) return false
         await deps.record?.(
             cwd,
@@ -1874,7 +1871,7 @@ export async function runAutoLoop(
             const baseline = await baselineAtCheckpoint(active, cwd, resumeId, next.title, deps)
             if (
                 baseline
-                && !baseline.outcome.ok
+                && (baseline.outcome.commands ?? []).some(isHealthRed)
                 && (await spliceHealthRepair(
                     cwd,
                     id,

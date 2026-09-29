@@ -312,20 +312,26 @@ export const EMPTY_SUITE_OUTPUT_RE =
  */
 const TESTS_RAN_OUTPUT_RE = /\b[1-9]\d*\s+(?:pass(?:ed|ing)?|fail(?:ed|ing|ures?)?)\b|^--- FAIL:/im
 
-/** A failure in any tool's words. Deliberately loose: a build step, a compiler or a
- *  linter beside the empty half prints no count, and missing it hides a real red. */
-const FAILURE_WORD_RE = /\b(?:errors?|fail(?:ed|ures?|ing)?|problems?)\b/i
-const ZERO_COUNT_RE = /\b0\s+(?:fail\w*|errors?|problems?)\b/gi
-/** Lines that say "failure" without one: bun's wrapper around the script's own
- *  exit status, and a passing test's title. */
-const NOT_A_FAILURE_LINE_RE = /^error: script ".*" exited with code \d+$|^\s*(?:\(pass\)|✓|✔)/
+/**
+ * A failure reported as a count, or in the words of a tool that prints none: a
+ * compiler diagnostic, a build step's error, a linter over its warning budget. Not
+ * the word "error" alone: bun prints a passing test's logged Error, and a file named
+ * errors.test.ts, exactly as it prints a failure, and counts neither.
+ */
+const FAILURE_COUNT_RE = /\b[1-9]\d*[ \t]+(?:fail(?:ed|ing|ures?)?|errors?)\b/i
+const FAILURE_LINE_RE =
+    /^\s*(?:--- )?FAIL\b|\berror TS\d+:|^error during build:|\btoo many warnings\b/
+const TEST_TITLE_LINE_RE = /^\s*(?:\((?:pass|skip|todo)\)|✓|✔|○|↓)/
 
 /** Does anything beside the empty-suite report say something else failed? */
 function failsBesideEmptySuite(plain: string): boolean {
     return plain
-        .split('\n')
-        .filter(line => !EMPTY_SUITE_OUTPUT_RE.test(line) && !NOT_A_FAILURE_LINE_RE.test(line))
-        .some(line => FAILURE_WORD_RE.test(line.replace(ZERO_COUNT_RE, '')))
+        .split(/\r?\n/)
+        .some(
+            line =>
+                !TEST_TITLE_LINE_RE.test(line)
+                && (FAILURE_COUNT_RE.test(line) || FAILURE_LINE_RE.test(line))
+        )
 }
 
 /**

@@ -22,7 +22,7 @@
  * because its script is a placeholder `exit 1`, and no repair task can fix either.
  */
 import type {HealthSignal} from './health-baseline.js'
-import {describeHealthFailures, isHealthRed, type HealthCommandResult} from './repo-health-check.js'
+import {isHealthRed, type HealthCommandResult} from './repo-health-check.js'
 import {reportedSuffix} from './command-run.js'
 import {parseRepairTitleFile} from './root-cause-repair.js'
 import {failClassOfReason, isHealthClass} from './verify-work.js'
@@ -34,6 +34,9 @@ const PATH_TOKEN_RE = /(?:[\w.@-]+[\\/])+[\w.@-]+\.\w+/g
 export interface HealthRed {
     command: string
     exitCode: number | null
+    kind?: HealthCommandResult['kind']
+    /** Set when the suite found no tests rather than failed one. */
+    gap?: HealthCommandResult['gap']
     /** The runner's failure summary, when it overruled an exit 0. */
     report?: string
     /** Repo-relative tracked paths the output named, in first-seen order. */
@@ -44,6 +47,9 @@ export interface HealthRedOwners {
     /** Task ids whose commits introduced the named files; empty when nothing in
      *  the run owns them (a leftover, or a red the run started on). */
     owners: string[]
+    /** The latest task accepted with this red (see owingTask). It keeps a second
+     *  repair of the same files apart from the first, failed one. */
+    regressedBy?: string | null
 }
 
 function normalisePath(p: string): string {
@@ -79,11 +85,11 @@ export function healthReds(
     health: HealthSignal & {output?: string},
     cwd: string,
     tracked: readonly string[] | null,
-    mayRepair: (c: HealthCommandResult) => boolean = () => true
+    mayRepair: (red: HealthRed) => boolean = () => true
 ): HealthRed[] {
     return (health.commands ?? [])
-        .filter(c => isHealthRed(c) && mayRepair(c))
-        .map(failing => {
+        .filter(isHealthRed)
+        .map((failing): HealthRed => {
             const files: string[] = []
             if (tracked) {
                 for (const m of (failing.output ?? health.output ?? '').matchAll(PATH_TOKEN_RE)) {
@@ -95,9 +101,12 @@ export function healthReds(
                 command: failing.cmd,
                 exitCode: failing.exitCode,
                 files,
+                ...(failing.kind === undefined ? {} : {kind: failing.kind}),
+                ...(failing.gap === undefined ? {} : {gap: failing.gap}),
                 ...(failing.report === undefined ? {} : {report: failing.report})
             }
         })
+        .filter(mayRepair)
 }
 
 /** The first of {@link healthReds}, or null. */
@@ -105,58 +114,45 @@ export function healthRedSubject(
     health: HealthSignal & {output?: string},
     cwd: string,
     tracked: readonly string[] | null,
-    mayRepair?: (c: HealthCommandResult) => boolean
+    mayRepair?: (red: HealthRed) => boolean
 ): HealthRed | null {
     return healthReds(health, cwd, tracked, mayRepair)[0] ?? null
 }
 
 type OpenDebt = {taskId?: string; reason: string; origin?: string}
 
+/** Origins recording a red the task found rather than made. */
+const FOUND_NOT_MADE: ReadonlySet<string> = new Set(['inherited-health', 'root-cause'])
+
 /**
- * The open debts that record a task's regression of `cmd`: a health-class FAIL
- * quoting the command. An inherited-health debt records a red the task found, not
- * one it made; any other debt that quotes the command (an abandoned entry's title,
- * say) is not a regression of it.
+ * The open debts that record a task's own regression of this red: a health-class
+ * FAIL saying the same of the command. A failing suite and one that found no tests
+ * are different reds, and a debt that only quotes the command, an abandoned entry's
+ * title say, is neither.
  */
-function regressionsOf(cmd: string, openDebts: readonly OpenDebt[]): OpenDebt[] {
+function regressionsOf(red: HealthRed, openDebts: readonly OpenDebt[]): OpenDebt[] {
+    const said =
+        red.gap === undefined ? `\`${red.command}\` exited` : `\`${red.command}\` found no tests`
     return openDebts.filter(
         d =>
-            d.origin !== 'inherited-health'
+            !FOUND_NOT_MADE.has(d.origin ?? '')
             && isHealthClass(failClassOfReason(d.reason))
-            && d.reason.includes(`\`${cmd}\``)
+            && d.reason.includes(said)
     )
 }
 
 /**
- * Is a red TEST command owed? True when an open debt records a task's regression
- * of it — an accepted `test suite:` FAIL naming the command. An inherited-health
- * debt does not count: every task in a run whose suite needs a missing database
- * records one.
+ * May the checkpoint repair this red? A test command only when a task's regression
+ * of it is owed: a suite can be red because a database is not up here, and a suite
+ * that found no tests in part of itself is owed only by the task that lost that part.
  */
-export function suiteRegressionOwed(cmd: string, openDebts: readonly OpenDebt[]): boolean {
-    return regressionsOf(cmd, openDebts).some(d => failClassOfReason(d.reason) === 'test-suite')
+export function checkpointMayRepair(red: HealthRed, openDebts: readonly OpenDebt[]): boolean {
+    return red.kind !== 'test' || regressionsOf(red, openDebts).length > 0
 }
 
-/**
- * May the checkpoint repair this red? A test command only when its regression is
- * owed. A suite that found no tests in part of itself passed every test it ran, so
- * only a task accepted for losing that part owes it: an older red of the same
- * command is no repair's to make now, and adding the missing tests is a plan step.
- */
-export function checkpointMayRepair(
-    c: HealthCommandResult,
-    openDebts: readonly OpenDebt[]
-): boolean {
-    if (c.kind !== 'test') return true
-    if (!suiteRegressionOwed(c.cmd, openDebts)) return false
-    if (c.gap !== 'part-empty-suite') return true
-    const lost = describeHealthFailures([c])
-    return openDebts.some(d => d.origin !== 'inherited-health' && d.reason.includes(lost))
-}
-
-/** The latest task whose regression of `cmd` is still open, or null. */
-export function owingTask(cmd: string, openDebts: readonly OpenDebt[]): string | null {
-    const owing = regressionsOf(cmd, openDebts)
+/** The latest task whose regression of this red is still open, or null. */
+export function owingTask(red: HealthRed, openDebts: readonly OpenDebt[]): string | null {
+    const owing = regressionsOf(red, openDebts)
         .map(d => d.taskId ?? '')
         .filter(id => TASK_ID_RE.test(id))
     return owing.sort((a, b) => taskOrdinal(a) - taskOrdinal(b)).at(-1) ?? null
@@ -166,29 +162,27 @@ export function owingTask(cmd: string, openDebts: readonly OpenDebt[]): string |
 const TASK_ID_RE = /^TASK_\d+$/
 
 function taskOrdinal(id: string): number {
-    return TASK_ID_RE.test(id) ? Number(id.slice('TASK_'.length)) : Number.NaN
-}
-
-/** False on any id outside the inner sequence: an unknown order is no proof the repair is stale. */
-function ranBefore(repairId: string, owedBy: string | null): boolean {
-    return owedBy !== null && taskOrdinal(repairId) < taskOrdinal(owedBy)
+    return Number(id.slice('TASK_'.length))
 }
 
 // ─── Plan entry ──────────────────────────────────────────────────────────────
 
 /**
  * The plan title, in one of two fixed shapes the parser below recovers:
- *   `repair src/a.ts, src/b.ts: \`bun run lint\` exits 1 (introduced by TASK_0033)`
+ *   `repair src/a.ts, src/b.ts: \`bun run lint\` exits 1 (introduced by TASK_0033; regressed by TASK_0040)`
  *   `repair \`bun run lint\`: exits 1 (no task in this run owns it)`
  * The subject sits right after the prefix so it is both the dedup key and what
  * the scope fence pins.
  */
 export function buildHealthRepairTitle(red: HealthRed & HealthRedOwners): string {
     const exits = `exits ${red.exitCode ?? '?'}${reportedSuffix(red)}`
-    const owner =
-        red.owners.length > 0 ?
-            `introduced by ${red.owners.join(', ')}`
-        :   'no task in this run owns it'
+    const said = [
+        ...(red.owners.length > 0 ? [`introduced by ${red.owners.join(', ')}`] : []),
+        ...(red.regressedBy && !red.owners.includes(red.regressedBy) ?
+            [`regressed by ${red.regressedBy}`]
+        :   [])
+    ]
+    const owner = said.length > 0 ? said.join('; ') : 'no task in this run owns it'
     return red.files.length > 0 ?
             `repair ${red.files.join(', ')}: \`${red.command}\` ${exits} (${owner})`
         :   `repair \`${red.command}\`: ${exits} (${owner})`
@@ -227,8 +221,8 @@ export interface PlanEntryRef {
  * `repaired` holds the tasks that closed a debt: their check went green, so the
  * same check red again is a new regression the next repair is for.
  *
- * `owedBy` is the latest task that regressed this check. A repair that ran before
- * it was a repair for an older red, and cannot have tried this one.
+ * `owedBy` is the latest task that regressed this check. The plan runs in order, so
+ * an entry above the one that produced it ran, or was abandoned, before this red.
  */
 export function planCoversHealthRed(
     entries: readonly PlanEntryRef[],
@@ -237,9 +231,10 @@ export function planCoversHealthRed(
     owedBy: string | null = null
 ): boolean {
     const files = new Set(red.files.map(f => normalisePath(f).toLowerCase()))
-    return entries.some(({title: t, producedId}) => {
+    const owedAt = owedBy === null ? -1 : entries.findIndex(e => e.producedId === owedBy)
+    return entries.some(({title: t, producedId}, at) => {
         if (producedId !== undefined && repaired.has(producedId)) return false
-        if (producedId !== undefined && ranBefore(producedId, owedBy)) return false
+        if (at < owedAt) return false
         const rootCause = parseRepairTitleFile(t)
         if (rootCause !== null && files.has(normalisePath(rootCause).toLowerCase())) return true
         const h = parseHealthRepairTitle(t)
