@@ -164,7 +164,13 @@ describe('an empty part beside tests that all passed is a gap of its own', () =>
         ['a runner row', 'No tests found\n 3 pass\n 1 fail'],
         ['an error count', 'No tests found\n 3 pass\n 0 fail\n 1 error'],
         ['a linter in the chain', 'No tests found\n 3 pass\n✖ 2 problems (2 errors, 0 warnings)'],
-        ['a colour code glued to the count', 'No tests found\n 3 pass\n\x1b[31m1 fail\x1b[0m']
+        ['a colour code glued to the count', 'No tests found\n 3 pass\n\x1b[31m1 fail\x1b[0m'],
+        ['a build step that prints no count', 'No tests found\n 3 pass\nerror during build:'],
+        [
+            'eslint over its warning budget',
+            'No tests found\n 3 pass\n✖ 3 problems (0 errors, 3 warnings)'
+        ],
+        ['a compiler error line', "No tests found\n 3 pass\nsrc/a.ts(1,7): error TS2322: Type 'x'"]
     ])('any failure beside it keeps the fail: %s', (_what, out) => {
         expect(
             classifyCommandRun(ran({status: 1, stdout: out}), [], {emptySuite: true}).outcome

@@ -4040,10 +4040,66 @@ test('runAutoLoop: A breaks the suite and is ACCEPTED → a repair runs before B
         )
         handle.queueSelect(`${ACCEPT_LABEL}; queues a repair for \`${SUITE}\``)
         await runAutoLoop(handle.ctx, dir, 'TASK_AUTO_0001', deps)
-        const repair = `repair \`${SUITE}\`: exits 1 (no task in this run owns it)`
+        const repair = `repair \`${SUITE}\`: exits 1 (introduced by TASK_0006)`
         expect(ran).toEqual(['A', repair, 'B'])
         const debts = await readAcceptDebts(dir)
         expect(debts.map(d => [d.taskId, d.resolvedBy])).toEqual([['TASK_0006', 'TASK_0007']])
+    })
+})
+
+// mx5-n: TASK_0005's failed repair of `bun run test` "covered" TASK_0013's new
+// regression of it, eight tasks later, so no repair ran for TASK_0013 at all.
+test('runAutoLoop: a later regression of a check is repaired though an older repair of it failed', async () => {
+    await withTmpTaskDir(async dir => {
+        const handle = makeFakeCtx(dir)
+        await writeTaskFile(
+            dir,
+            autoFm('TASK_AUTO_0001'),
+            buildAutoBody('feat', '(none)', ['A', 'B', 'C', 'D'])
+        )
+        let repairs = 0
+        const {deps, ran} = suiteRun(title => {
+            if (title.startsWith('repair ')) return repairs++ === 0 ? undefined : false
+            return (
+                title === 'A' || title === 'C' ? true
+                : title === 'B' ? false
+                : undefined
+            )
+        }, false)
+        handle.queueSelect(`${ACCEPT_LABEL}; queues a repair for \`${SUITE}\``)
+        handle.queueSelect(`${ACCEPT_LABEL}; queues a repair for \`${SUITE}\``)
+        await runAutoLoop(handle.ctx, dir, 'TASK_AUTO_0001', deps)
+        const repairOf = (owner: string) => `repair \`${SUITE}\`: exits 1 (introduced by ${owner})`
+        expect(ran).toEqual(['A', repairOf('TASK_0006'), 'B', 'C', repairOf('TASK_0009'), 'D'])
+    })
+})
+
+// The same file red again names the same file owner, so the title alone matched
+// the older failed repair's and the plan refused it as a duplicate.
+test('runAutoLoop: a later regression in the same file is repaired though an older repair of it failed', async () => {
+    await withTmpTaskDir(async dir => {
+        const handle = makeFakeCtx(dir)
+        await writeTaskFile(
+            dir,
+            autoFm('TASK_AUTO_0001'),
+            buildAutoBody('feat', '(none)', ['A', 'B', 'C', 'D'])
+        )
+        let repairs = 0
+        const {deps, ran} = healthRun({
+            red: title => {
+                if (title.startsWith('repair ')) return repairs++ === 0 ? undefined : false
+                return (
+                    title === 'A' || title === 'C' ? true
+                    : title === 'B' ? false
+                    : undefined
+                )
+            }
+        })
+        handle.queueSelect(`${ACCEPT_LABEL}; queues a repair for ${API} (\`${LINT}\`)`)
+        handle.queueSelect(`${ACCEPT_LABEL}; queues a repair for ${API} (\`${LINT}\`)`)
+        await runAutoLoop(handle.ctx, dir, 'TASK_AUTO_0001', deps)
+        const second = `repair ${API}: \`${LINT}\` exits 1 (introduced by TASK_0006, TASK_0009)`
+        expect(ran).toEqual(['A', REPAIR_A, 'B', 'C', second, 'D'])
     })
 })
 

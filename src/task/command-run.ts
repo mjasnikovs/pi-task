@@ -312,9 +312,21 @@ export const EMPTY_SUITE_OUTPUT_RE =
  */
 const TESTS_RAN_OUTPUT_RE = /\b[1-9]\d*\s+(?:pass(?:ed|ing)?|fail(?:ed|ing|ures?)?)\b|^--- FAIL:/im
 
-/** Any count of failures or errors, in any tool's words — wider than the runner
- *  rows, so the part-empty row keeps a red that no row is written for. */
-const ANY_FAILURE_OUTPUT_RE = /\b[1-9]\d*\s+(?:fail(?:ed|ing|ures?)?|errors?)\b|^--- FAIL:/im
+/** A failure in any tool's words. Deliberately loose: a build step, a compiler or a
+ *  linter beside the empty half prints no count, and missing it hides a real red. */
+const FAILURE_WORD_RE = /\b(?:errors?|fail(?:ed|ures?|ing)?|problems?)\b/i
+const ZERO_COUNT_RE = /\b0\s+(?:fail\w*|errors?|problems?)\b/gi
+/** Lines that say "failure" without one: bun's wrapper around the script's own
+ *  exit status, and a passing test's title. */
+const NOT_A_FAILURE_LINE_RE = /^error: script ".*" exited with code \d+$|^\s*(?:\(pass\)|✓|✔)/
+
+/** Does anything beside the empty-suite report say something else failed? */
+function failsBesideEmptySuite(plain: string): boolean {
+    return plain
+        .split('\n')
+        .filter(line => !EMPTY_SUITE_OUTPUT_RE.test(line) && !NOT_A_FAILURE_LINE_RE.test(line))
+        .some(line => FAILURE_WORD_RE.test(line.replace(ZERO_COUNT_RE, '')))
+}
 
 /**
  * A test runner's own summary saying tests FAILED, one row per runner, each checked
@@ -536,7 +548,7 @@ const GAP_RULES: ReadonlyArray<{
             return (
                 EMPTY_SUITE_OUTPUT_RE.test(plain)
                 && TESTS_RAN_OUTPUT_RE.test(plain)
-                && !ANY_FAILURE_OUTPUT_RE.test(plain)
+                && !failsBesideEmptySuite(plain)
                 && reportedTestFailure(plain) === null
             )
         }

@@ -86,7 +86,8 @@ import {
     buildHealthRepairFence,
     buildHealthRepairTitle,
     healthReds,
-    suiteRegressionOwed,
+    checkpointMayRepair,
+    owingTask,
     parseHealthRepairTitle,
     planCoversHealthRed
 } from './health-repair.js'
@@ -580,18 +581,21 @@ async function spliceHealthRepair(
         const repaired = new Set(
             ledger.flatMap(d => (d.resolvedBy === undefined ? [] : [d.resolvedBy]))
         )
-        const red = healthReds(
-            health,
-            cwd,
-            (await deps.repoFiles?.(cwd)) ?? null,
-            c => c.kind !== 'test' || suiteRegressionOwed(c.cmd, debts)
-        ).find(r => !planCoversHealthRed(entries, r, repaired))
-        if (!red) return false
+        const pick = healthReds(health, cwd, (await deps.repoFiles?.(cwd)) ?? null, c =>
+            checkpointMayRepair(c, debts)
+        )
+            .map(r => ({red: r, owing: owingTask(r.command, debts)}))
+            .find(({red: r, owing}) => !planCoversHealthRed(entries, r, repaired, owing))
+        if (!pick) return false
+        const {red, owing} = pick
         const owners: string[] = []
         for (const f of red.files) {
             const owner = await deps.introducedBy?.(cwd, f)
             if (owner && !owners.includes(owner)) owners.push(owner)
         }
+        // The task that regressed the check owns this red too, and naming it keeps
+        // the title apart from an older, failed repair of the same files.
+        if (owing !== null && !owners.includes(owing)) owners.push(owing)
         const title = buildHealthRepairTitle({...red, owners})
         if (!(await insertTaskBefore(cwd, id, next.index, title))) return false
         await deps.record?.(

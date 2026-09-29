@@ -5,6 +5,8 @@ import {
     healthRedSubject,
     healthReds,
     parseHealthRepairTitle,
+    checkpointMayRepair,
+    owingTask,
     planCoversHealthRed,
     suiteRegressionOwed
 } from '../../src/task/health-repair.js'
@@ -277,6 +279,133 @@ describe('planCoversHealthRed', () => {
         expect(planCoversHealthRed(done, lintRed, new Set(['TASK_0004']))).toBe(false)
         expect(planCoversHealthRed(done, lintRed, new Set(['TASK_0002']))).toBe(true)
         expect(planCoversHealthRed(done, lintRed)).toBe(true)
+    })
+})
+
+// mx5-n: TASK_0005 repaired TASK_0004's red `bun run test` and failed. Eight
+// tasks later TASK_0013 broke the suite again, and TASK_0005's entry "covered"
+// it: no repair ran, and three root-cause repairs chased the fallout for hours.
+describe('a repair covers only reds that existed when it ran', () => {
+    const suiteRed = {command: 'bun run test', exitCode: 1, files: []}
+    const ran = (producedId: string) => [
+        {title: 'repair `bun run test`: exits 1 (x)', done: true, producedId}
+    ]
+
+    test('a repair that ran before the task that owes the red does not cover it', () => {
+        expect(planCoversHealthRed(ran('TASK_0005'), suiteRed, new Set(), 'TASK_0013')).toBe(false)
+    })
+
+    test('a repair that ran after it, or is the owing task, still covers: no loop', () => {
+        expect(planCoversHealthRed(ran('TASK_0014'), suiteRed, new Set(), 'TASK_0013')).toBe(true)
+        expect(planCoversHealthRed(ran('TASK_0013'), suiteRed, new Set(), 'TASK_0013')).toBe(true)
+    })
+
+    test('a queued repair that has not run covers', () => {
+        expect(
+            planCoversHealthRed(
+                [{title: 'repair `bun run test`: exits 1 (x)'}],
+                suiteRed,
+                new Set(),
+                'TASK_0013'
+            )
+        ).toBe(true)
+    })
+
+    test('owingTask is the latest regression of the command; a found red owes nothing', () => {
+        const debts = [
+            {
+                taskId: 'TASK_0004',
+                reason: 'test suite: `bun run test` exited 1',
+                origin: 'yolo-accepted'
+            },
+            {
+                taskId: 'TASK_0013',
+                reason: 'test suite: `bun run test` exited 1',
+                origin: 'yolo-accepted'
+            },
+            {
+                taskId: 'TASK_0014',
+                reason: 'test suite: `bun run test` exited 1 — already failing before this task',
+                origin: 'inherited-health'
+            },
+            {
+                taskId: 'TASK_0020',
+                reason: 'test suite: `bun run lint` exited 1',
+                origin: 'yolo-accepted'
+            },
+            {taskId: '', reason: 'test suite: `bun run test` exited 1'}
+        ]
+        expect(owingTask('bun run test', debts)).toBe('TASK_0013')
+        expect(owingTask('bun run build', debts)).toBeNull()
+    })
+
+    // An abandoned entry's debt quotes its title, and a title can quote a command.
+    test('only a regression of the check owes it, never a debt that merely quotes it', () => {
+        const debts = [
+            {
+                taskId: 'TASK_0013',
+                reason: 'test suite: `bun run test` exited 1',
+                origin: 'yolo-accepted'
+            },
+            {
+                taskId: 'TASK_0020',
+                reason: '"repair `bun run test`: exits 1 (x)" was abandoned after 3 attempts',
+                origin: 'abandoned'
+            },
+            {
+                taskId: 'TASK_AUTO_0099',
+                reason: 'test suite: `bun run test` exited 1',
+                origin: 'accepted'
+            }
+        ]
+        expect(owingTask('bun run test', debts)).toBe('TASK_0013')
+    })
+})
+
+// A part-empty suite passed every test it ran. At a checkpoint it is repairable
+// only when a task was accepted for losing that half, not for an older red.
+describe('checkpointMayRepair', () => {
+    const part = {
+        cmd: 'bun run test',
+        outcome: 'skip' as const,
+        exitCode: null,
+        kind: 'test' as const,
+        gap: 'part-empty-suite' as const
+    }
+    const failRow = {
+        cmd: 'bun run test',
+        outcome: 'fail' as const,
+        exitCode: 1,
+        kind: 'test' as const
+    }
+    const oldRed = [
+        {taskId: 'TASK_0004', reason: 'test suite: `bun run test` exited 1', origin: 'accepted'}
+    ]
+    const lostHalf = [
+        {
+            taskId: 'TASK_0009',
+            reason: 'test suite: `bun run test` found no tests in part of its suite',
+            origin: 'accepted'
+        }
+    ]
+
+    test('a failing suite with an owed regression is repairable, as before', () => {
+        expect(checkpointMayRepair(failRow, oldRed)).toBe(true)
+        expect(checkpointMayRepair(failRow, [])).toBe(false)
+    })
+
+    test('a part-empty suite is repairable only for the regression that emptied it', () => {
+        expect(checkpointMayRepair(part, oldRed)).toBe(false)
+        expect(checkpointMayRepair(part, lostHalf)).toBe(true)
+    })
+
+    test('a static check is always repairable', () => {
+        expect(
+            checkpointMayRepair(
+                {cmd: 'bun run lint', outcome: 'fail', exitCode: 1, kind: 'static'},
+                []
+            )
+        ).toBe(true)
     })
 })
 

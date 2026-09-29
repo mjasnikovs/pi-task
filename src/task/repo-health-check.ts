@@ -377,7 +377,6 @@ export async function runRepoHealthCheck(
     }
 }
 
-/** A test command whose runner found no tests, in all or part of its suite. */
 export function foundNoTests(c: HealthCommandResult): boolean {
     return c.gap !== undefined && EMPTY_SUITE_GAPS.has(c.gap)
 }
@@ -394,7 +393,7 @@ function describeHealthRed(c: HealthCommandResult): string {
         :   `\`${c.cmd}\` found no tests to run`
 }
 
-/** "`bun run lint` exited 1; `bun run test` exited 1" — every failing command. */
+/** "`bun run lint` exited 1; `bun run test` found no tests to run" — every red command. */
 export function describeHealthFailures(commands: readonly HealthCommandResult[]): string {
     return commands.filter(isHealthRed).map(describeHealthRed).join('; ')
 }
