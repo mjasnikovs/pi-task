@@ -38,6 +38,7 @@ import * as path from 'node:path'
 import {resolveRunner, runnerEnv} from './runner-resolve.js'
 import {
     classifyCommandRun,
+    EMPTY_SUITE_GAPS,
     reportedSuffix,
     spawnCommand,
     type CommandGapId,
@@ -376,19 +377,24 @@ export async function runRepoHealthCheck(
     }
 }
 
+/** A test command whose runner found no tests, in all or part of its suite. */
+export function foundNoTests(c: HealthCommandResult): boolean {
+    return c.gap !== undefined && EMPTY_SUITE_GAPS.has(c.gap)
+}
+
 /** A command the repo owes an answer for: it failed, or its suite went missing. */
 export function isHealthRed(c: HealthCommandResult): boolean {
-    return c.outcome === 'fail' || c.gap === 'empty-suite'
+    return c.outcome === 'fail' || foundNoTests(c)
+}
+
+function describeHealthRed(c: HealthCommandResult): string {
+    if (c.outcome === 'fail') return `\`${c.cmd}\` exited ${c.exitCode}${reportedSuffix(c)}`
+    return c.gap === 'part-empty-suite' ?
+            `\`${c.cmd}\` found no tests in part of its suite`
+        :   `\`${c.cmd}\` found no tests to run`
 }
 
 /** "`bun run lint` exited 1; `bun run test` exited 1" — every failing command. */
 export function describeHealthFailures(commands: readonly HealthCommandResult[]): string {
-    return commands
-        .filter(isHealthRed)
-        .map(c =>
-            c.outcome === 'fail' ?
-                `\`${c.cmd}\` exited ${c.exitCode}${reportedSuffix(c)}`
-            :   `\`${c.cmd}\` found no tests to run`
-        )
-        .join('; ')
+    return commands.filter(isHealthRed).map(describeHealthRed).join('; ')
 }

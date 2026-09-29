@@ -54,7 +54,11 @@ import {
     type HealthBaseline,
     type HealthSignal
 } from './health-baseline.js'
-import {describeHealthFailures, type HealthCommandResult} from './repo-health-check.js'
+import {
+    describeHealthFailures,
+    foundNoTests,
+    type HealthCommandResult
+} from './repo-health-check.js'
 import {parseSpec, sliceSpecSection, type Spec} from './spec-model.js'
 import {qaKindsFromRecord} from './qa-transcript.js'
 import {annotateConstraints, anyBinding, renderConstraintPolicy} from './constraint-policy.js'
@@ -1280,7 +1284,7 @@ export async function runWorkVerification(deps: VerificationDeps): Promise<Verif
         // nothing, so nothing fails, and only the differential sees it went away.
         // Establishing a baseline can cost a worktree health run, so it is asked for
         // only in the two shapes it can speak to.
-        const suiteGone = (h.commands ?? []).some(c => c.gap === 'empty-suite')
+        const suiteGone = (h.commands ?? []).some(foundNoTests)
         if (!h.ok || suiteGone) {
             const baseline = deps.healthBaseline ? await deps.healthBaseline() : null
             const before = baseline?.outcome ?? null
@@ -1402,15 +1406,6 @@ export async function runWorkVerification(deps: VerificationDeps): Promise<Verif
                 ...probed
             }
         }
-        // Capture the environment facts the child shared — regardless of verdict
-        // (a FAIL run's discoveries are just as reusable).
-        if (deps.envNotes) {
-            try {
-                await deps.envNotes.append(extractEnvNotes(text))
-            } catch {
-                // best-effort cache
-            }
-        }
         // A child that mutated the repo (git-state guard fired) judged a tree it had
         // itself changed — its verdict is meaningless in both directions, so discard
         // it BEFORE parsing. The guard already restored the state, so one retry runs
@@ -1428,6 +1423,16 @@ export async function runWorkVerification(deps: VerificationDeps): Promise<Verif
                     + `(state restored: ${mutation.detail.slice(0, 200)})`,
                 ...inherited,
                 ...probed
+            }
+        }
+        // Capture the environment facts the child shared — regardless of verdict
+        // (a FAIL run's discoveries are just as reusable), but not from a child that
+        // measured a tree it had changed itself.
+        if (deps.envNotes) {
+            try {
+                await deps.envNotes.append(extractEnvNotes(text))
+            } catch {
+                // best-effort cache
             }
         }
         const verdict = parseVerifyVerdict(text)

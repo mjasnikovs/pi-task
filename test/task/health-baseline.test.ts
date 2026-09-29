@@ -196,6 +196,49 @@ describe('classifyHealthDelta — the test suite', () => {
         expect(classifyHealthDelta(null, {ok: true, commands: gone})).toBe('clean')
     })
 
+    // `unit && component` where the component half finds no tests. It lost that
+    // half only against a baseline that ran it green.
+    const part: HealthCommandResult[] = [
+        {cmd: 'bun run lint', outcome: 'pass', exitCode: 0, kind: 'static'},
+        {
+            cmd: 'bun run test',
+            outcome: 'skip',
+            exitCode: null,
+            kind: 'test',
+            gap: 'part-empty-suite'
+        }
+    ]
+
+    test('the first unit test beside a still-empty half is clean, not a regression', () => {
+        expect(classifyHealthDelta({ok: true, commands: gone}, {ok: true, commands: part})).toBe(
+            'clean'
+        )
+    })
+
+    test('a half the baseline ran green and this tree no longer finds is REGRESSED, and named', () => {
+        const before = {ok: true, commands: ran}
+        const after = {ok: true, commands: part}
+        expect(classifyHealthDelta(before, after)).toBe('regressed')
+        expect(regressedCommands(before, after).map(c => c.cmd)).toEqual(['bun run test'])
+    })
+
+    test('a red baseline turned part-empty is clean: the red may be the half now fixed', () => {
+        const wasRed: HealthCommandResult[] = [
+            {cmd: 'bun run lint', outcome: 'pass', exitCode: 0, kind: 'static'},
+            {cmd: 'bun run test', outcome: 'fail', exitCode: 1, kind: 'test'}
+        ]
+        expect(classifyHealthDelta({ok: false, commands: wasRed}, {ok: true, commands: part})).toBe(
+            'clean'
+        )
+    })
+
+    test('a part-empty baseline whose tested half is gone too is REGRESSED', () => {
+        const before = {ok: true, commands: part}
+        const after = {ok: true, commands: gone}
+        expect(classifyHealthDelta(before, after)).toBe('regressed')
+        expect(regressedCommands(before, after).map(c => c.cmd)).toEqual(['bun run test'])
+    })
+
     // A missing browser is the environment, not the tree: it skips under a
     // different gap id and says nothing about whether the suite still exists.
     test('a suite skipped for a missing runtime is not a vanished suite', () => {

@@ -135,6 +135,43 @@ describe('an empty-suite phrase beside tests that ran is not a gap', () => {
     })
 })
 
+// `AGENT=1 bun test && playwright test` before the first component test exists,
+// captured from mx5-n: the unit half passed and the empty half alone exited 1. The
+// same half run alone is the whole-suite gap; chained, it was read as a fail, and a
+// repair task was queued for a suite with nothing wrong in it.
+describe('an empty part beside tests that all passed is a gap of its own', () => {
+    const chained = ran({
+        status: 1,
+        stdout: 'bun test v1.3.14 (0d9b296a)\nError: No tests found\n\n',
+        stderr:
+            '$ AGENT=1 bun test && playwright test -c playwright-ct.config.ts\n\n 45 pass\n 0 fail\n'
+            + ' 65 expect() calls\nRan 45 tests across 1 file. [35.00ms]\n'
+            + 'error: script "test" exited with code 1\n'
+    })
+
+    test('a test command: part-empty-suite, not a fail', () => {
+        expect(classifyCommandRun(chained, [], {emptySuite: true})).toMatchObject({
+            outcome: 'gap',
+            gap: 'part-empty-suite'
+        })
+    })
+
+    test('a static command may not claim it', () => {
+        expect(classifyCommandRun(chained).outcome).toBe('fail')
+    })
+
+    test.each([
+        ['a runner row', 'No tests found\n 3 pass\n 1 fail'],
+        ['an error count', 'No tests found\n 3 pass\n 0 fail\n 1 error'],
+        ['a linter in the chain', 'No tests found\n 3 pass\n✖ 2 problems (2 errors, 0 warnings)'],
+        ['a colour code glued to the count', 'No tests found\n 3 pass\n\x1b[31m1 fail\x1b[0m']
+    ])('any failure beside it keeps the fail: %s', (_what, out) => {
+        expect(
+            classifyCommandRun(ran({status: 1, stdout: out}), [], {emptySuite: true}).outcome
+        ).toBe('fail')
+    })
+})
+
 // Real runs of each runner, one passing and one failing test each, and green runs
 // that exit 0 while mentioning failure (see the fixture's header).
 const reports = JSON.parse(

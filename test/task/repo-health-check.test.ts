@@ -6,6 +6,7 @@ import {spawnSync} from 'node:child_process'
 import {tmpdir} from 'node:os'
 import * as path from 'node:path'
 import {
+    describeHealthFailures,
     captureHealthOutput,
     discoverHealthCommands,
     discoverTestCommands,
@@ -229,6 +230,26 @@ describe('runRepoHealthCheck — withTests', () => {
             outcome: 'skip',
             gap: 'empty-suite'
         })
+    })
+
+    // mx5-n's `AGENT=1 bun test && playwright test` before its first component test.
+    test('a test script whose tests passed beside an empty half is a SKIP, not a FAIL', async () => {
+        const dir = tmpRepo({
+            'package.json': JSON.stringify({
+                scripts: {lint: 'true', test: 'bun test && echo "Error: No tests found" && exit 1'}
+            }),
+            'a.test.ts':
+                'import {test, expect} from "bun:test"\ntest("a", () => expect(1).toBe(1))\n'
+        })
+        const out = await runRepoHealthCheck(dir, {withTests: true})
+        expect(out.ok).toBe(true)
+        expect(out.commands.find(c => c.cmd === 'bun run test')).toMatchObject({
+            outcome: 'skip',
+            gap: 'part-empty-suite'
+        })
+        expect(describeHealthFailures(out.commands)).toBe(
+            '`bun run test` found no tests in part of its suite'
+        )
     })
 
     test('"no tests found" in a LINT report is still a lint failure', async () => {

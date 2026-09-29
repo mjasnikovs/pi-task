@@ -1,3 +1,4 @@
+import type {HealthCommandResult} from '../../src/task/repo-health-check.js'
 import type {EmittedNote} from '../../src/task/env-notes.js'
 import {describe, expect, test} from 'bun:test'
 import {
@@ -907,6 +908,36 @@ describe('runWorkVerification', () => {
         expect(runs).toBe(2)
     })
 
+    test('a mutated run leaves no env notes — its facts were measured on a tree it changed', async () => {
+        // mx5-n TASK_0016: the child `git checkout`-ed the task's own db.ts, then
+        // probed the reverted file. Only the retry, on the restored tree, may record.
+        let runs = 0
+        const appended: EmittedNote[][] = []
+        const out = await runWorkVerification({
+            cwd: '/x',
+            spec: 'GOAL\nx',
+            envNotes: {
+                read: () => Promise.resolve(''),
+                append: notes => {
+                    appended.push([...notes])
+                    return Promise.resolve()
+                }
+            },
+            runChild: async () => {
+                runs++
+                return runs === 1 ?
+                        'ENV-NOTE[db.ts]: db.ts re-exports the raw pool\nWORK-VERIFIED: FAIL pool dies'
+                    :   'ENV-NOTE[bun]: bun 1.4.2\nWORK-VERIFIED: PASS'
+            },
+            mutationCheck: () =>
+                runs === 1 ?
+                    {mutated: true, detail: 'restored src/server/db.ts'}
+                :   {mutated: false, detail: ''}
+        })
+        expect(out.ok).toBe(true)
+        expect(appended).toEqual([[{subject: 'bun', fact: 'bun 1.4.2'}]])
+    })
+
     test('child mutates on the retry too → FAIL naming the guard, no third run', async () => {
         let runs = 0
         const out = await runWorkVerification({
@@ -1119,6 +1150,44 @@ describe('runWorkVerification', () => {
             // REGRESSED signal cannot be handed on still saying "tests passed".
             expect(out.health?.reason).toBe('`bun run test` found no tests to run')
             expect(childRan).toBe(false)
+        })
+
+        test('a half of the suite the baseline ran green and this tree no longer finds is this task’s FAIL', async () => {
+            const suite = (row: HealthCommandResult) => ({
+                ok: true,
+                reason: 'passed',
+                ecosystem: 'package.json',
+                output: '',
+                commands: [row]
+            })
+            const out = await runWorkVerification({
+                cwd: '/x',
+                spec: 'GOAL\nx',
+                repoHealth: async () =>
+                    suite({
+                        cmd: 'bun run test',
+                        outcome: 'skip',
+                        exitCode: null,
+                        kind: 'test',
+                        gap: 'part-empty-suite'
+                    }),
+                healthBaseline: async () => ({
+                    at: '2026-09-29T00:00:00.000Z',
+                    treeHash: 'abc',
+                    outcome: suite({
+                        cmd: 'bun run test',
+                        outcome: 'pass',
+                        exitCode: 0,
+                        kind: 'test'
+                    })
+                }),
+                runChild: async () => 'WORK-VERIFIED: PASS'
+            })
+            expect(out.ok).toBe(false)
+            expect(out.failClass).toBe('test-suite')
+            expect(out.reason).toBe(
+                'test suite: `bun run test` found no tests in part of its suite'
+            )
         })
 
         test('a repo that never had tests to find still passes', async () => {

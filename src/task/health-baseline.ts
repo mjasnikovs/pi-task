@@ -103,15 +103,25 @@ const failureKey = (c: HealthCommandResult): string => JSON.stringify([c.cmd, c.
  *
  * Ran, not passed. A baseline that ran the suite RED ran it, and deleting a red
  * suite is the same move with a larger payoff: the whole check turns green.
+ *
+ * A suite that now finds no tests in only PART of itself lost that part against a
+ * baseline that passed whole. Against a red one it proves nothing: the red may
+ * have been the part that is still there, now fixed.
  */
 export function vanishedSuites(
     baseline: HealthSignal | null,
     after: HealthSignal
 ): HealthCommandResult[] {
     if (!baseline) return []
-    const ran = new Set((baseline.commands ?? []).filter(c => c.outcome !== 'skip').map(c => c.cmd))
-    return (after.commands ?? []).filter(
-        c => c.outcome === 'skip' && c.gap === 'empty-suite' && ran.has(c.cmd)
+    const before = baseline.commands ?? []
+    const ran = new Set(
+        before.filter(c => c.outcome !== 'skip' || c.gap === 'part-empty-suite').map(c => c.cmd)
+    )
+    const passed = new Set(before.filter(c => c.outcome === 'pass').map(c => c.cmd))
+    return (after.commands ?? []).filter(c =>
+        c.gap === 'part-empty-suite' ? passed.has(c.cmd)
+        : c.gap === 'empty-suite' ? ran.has(c.cmd)
+        : false
     )
 }
 

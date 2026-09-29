@@ -312,6 +312,10 @@ export const EMPTY_SUITE_OUTPUT_RE =
  */
 const TESTS_RAN_OUTPUT_RE = /\b[1-9]\d*\s+(?:pass(?:ed|ing)?|fail(?:ed|ing|ures?)?)\b|^--- FAIL:/im
 
+/** Any count of failures or errors, in any tool's words — wider than the runner
+ *  rows, so the part-empty row keeps a red that no row is written for. */
+const ANY_FAILURE_OUTPUT_RE = /\b[1-9]\d*\s+(?:fail(?:ed|ing|ures?)?|errors?)\b|^--- FAIL:/im
+
 /**
  * A test runner's own summary saying tests FAILED, one row per runner, each checked
  * against a real run of it (test/task/__fixtures__/runner-reports.json). The summary
@@ -419,8 +423,13 @@ function failedDotEntry(output: string, from: number, to: number, entries: numbe
     return null
 }
 
+/** A colour code glued to a count (`\x1b[31m1 fail`) hides it from a `\b` match. */
+function plainText(output: string): string {
+    return output.replace(SGR_RE, '')
+}
+
 function reportedTestFailure(output: string): string | null {
-    const plain = output.replace(SGR_RE, '')
+    const plain = plainText(output)
     for (const row of FAILED_TESTS_REPORTS) {
         const report = row instanceof RegExp ? regexReport(row, plain) : row(plain)
         if (report !== null) return oneLine(report)
@@ -447,9 +456,16 @@ export type CommandGapId =
     | 'missing-runtime'
     | 'infrastructure'
     | 'empty-suite'
+    | 'part-empty-suite'
+
+/** The gaps a runner reports by finding no tests: only a test command may claim them. */
+export const EMPTY_SUITE_GAPS: ReadonlySet<CommandGapId> = new Set([
+    'empty-suite',
+    'part-empty-suite'
+])
 
 export type CommandVerdict =
-    /** Nothing was observed. Never fails a gate, never closes a debt. */
+    /** Nothing conclusive was observed. Never fails a gate, never closes a debt. */
     | {outcome: 'gap'; gap: CommandGapId; detail: string}
     | {outcome: 'pass'}
     /** `report` is the runner's own failure summary when it overruled an exit 0. */
@@ -507,7 +523,23 @@ const GAP_RULES: ReadonlyArray<{
         id: 'empty-suite',
         detail: () => 'no tests found',
         applies: (_run, output) =>
-            EMPTY_SUITE_OUTPUT_RE.test(output) && !TESTS_RAN_OUTPUT_RE.test(output)
+            EMPTY_SUITE_OUTPUT_RE.test(output) && !TESTS_RAN_OUTPUT_RE.test(plainText(output))
+    },
+    {
+        // `unit && component` before the first component test exists: the unit half
+        // passed and the empty half alone set the exit status. Run on its own, that
+        // half is the gap above; chained, it must not turn into a fail.
+        id: 'part-empty-suite',
+        detail: () => 'no tests found in part of the suite; the tests that ran passed',
+        applies: (_run, output) => {
+            const plain = plainText(output)
+            return (
+                EMPTY_SUITE_OUTPUT_RE.test(plain)
+                && TESTS_RAN_OUTPUT_RE.test(plain)
+                && !ANY_FAILURE_OUTPUT_RE.test(plain)
+                && reportedTestFailure(plain) === null
+            )
+        }
     }
 ]
 
@@ -571,7 +603,7 @@ export function classifyCommandRun(
     const runtimeGap = opts.runtimeGap ?? true
     for (const rule of GAP_RULES) {
         if (rule.id === 'missing-runtime' && !runtimeGap) continue
-        if (rule.id === 'empty-suite' && opts.emptySuite !== true) continue
+        if (EMPTY_SUITE_GAPS.has(rule.id) && opts.emptySuite !== true) continue
         if (rule.applies(run, output, gapPatterns)) {
             return {outcome: 'gap', gap: rule.id, detail: rule.detail(run)}
         }
