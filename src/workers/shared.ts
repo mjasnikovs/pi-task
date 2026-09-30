@@ -1,4 +1,4 @@
-import type {Static, TSchema} from '@sinclair/typebox'
+import type {Static, TSchema} from 'typebox'
 import type {AgentToolResult} from '@earendil-works/pi-agent-core'
 import type {ExtensionAPI, ExtensionContext, Theme} from '@earendil-works/pi-coding-agent'
 import type {Text} from '@earendil-works/pi-tui'

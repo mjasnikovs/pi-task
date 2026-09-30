@@ -1,5 +1,5 @@
 import {spawn as defaultSpawn} from 'node:child_process'
-import {Type} from '@sinclair/typebox'
+import {Type} from 'typebox'
 import type {ExtensionAPI} from '@earendil-works/pi-coding-agent'
 import {Text} from '@earendil-works/pi-tui'
 import {openCache as defaultOpenCache} from './docs-cache.js'
