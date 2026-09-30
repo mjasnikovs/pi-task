@@ -1,8 +1,8 @@
 import {expect, test} from 'bun:test'
 import {readdirSync, readFileSync} from 'node:fs'
-import {builtinModules} from 'node:module'
 import * as path from 'node:path'
 import ts from 'typescript'
+import {packageRootOf} from '../../src/workers/pi-worker-docs.js'
 
 interface Manifest {
     name: string
@@ -11,19 +11,37 @@ interface Manifest {
     devDependencies?: Record<string, string>
 }
 
-const own = JSON.parse(readFileSync('package.json', 'utf8')) as Manifest
-const host = JSON.parse(
-    readFileSync('node_modules/@earendil-works/pi-coding-agent/package.json', 'utf8')
-) as Manifest
+const ROOT = path.join(import.meta.dir, '../..')
+const readManifest = (file: string): Manifest =>
+    JSON.parse(readFileSync(path.join(ROOT, file), 'utf8')) as Manifest
+const own = readManifest('package.json')
+const host = readManifest('node_modules/@earendil-works/pi-coding-agent/package.json')
 
+const SOURCE = /\.(ts|mjs)$/
+
+/** Fixtures are data: their stubs import phantom packages on purpose. */
 function sourceFiles(dir: string): string[] {
-    return readdirSync(dir, {recursive: true, encoding: 'utf8'})
-        .filter(f => f.endsWith('.ts') && !f.includes('node_modules'))
+    return readdirSync(path.join(ROOT, dir), {recursive: true, encoding: 'utf8'})
+        .filter(f => SOURCE.test(f) && !f.split(/[\\/]/).includes('__fixtures__'))
         .map(f => path.join(dir, f))
 }
 
+const rootConfigs = readdirSync(ROOT).filter(f => SOURCE.test(f))
+
+function isModuleCall(call: ts.CallExpression): boolean {
+    const callee = call.expression
+    return (
+        callee.kind === ts.SyntaxKind.ImportKeyword
+        || (ts.isIdentifier(callee) && callee.text === 'require')
+        || (ts.isPropertyAccessExpression(callee)
+            && callee.name.text === 'resolve'
+            && ts.isMetaProperty(callee.expression)
+            && callee.expression.keywordToken === ts.SyntaxKind.ImportKeyword)
+    )
+}
+
 /** A full parse: `preProcessFile` reads `from "${x}"` inside a template string as an import. */
-function moduleSpecifiers(file: string): string[] {
+function moduleSpecifiers(fileName: string, text: string): string[] {
     const found: string[] = []
     const visit = (node: ts.Node): void => {
         if (
@@ -33,8 +51,14 @@ function moduleSpecifiers(file: string): string[] {
         )
             found.push(node.moduleSpecifier.text)
         else if (
+            ts.isImportEqualsDeclaration(node)
+            && ts.isExternalModuleReference(node.moduleReference)
+            && ts.isStringLiteral(node.moduleReference.expression)
+        )
+            found.push(node.moduleReference.expression.text)
+        else if (
             ts.isCallExpression(node)
-            && node.expression.kind === ts.SyntaxKind.ImportKeyword
+            && isModuleCall(node)
             && node.arguments[0]
             && ts.isStringLiteral(node.arguments[0])
         )
@@ -47,28 +71,41 @@ function moduleSpecifiers(file: string): string[] {
             found.push(node.argument.literal.text)
         ts.forEachChild(node, visit)
     }
-    visit(ts.createSourceFile(file, readFileSync(file, 'utf8'), ts.ScriptTarget.Latest))
+    visit(ts.createSourceFile(fileName, text, ts.ScriptTarget.Latest))
     return found
 }
 
-/** Package names a file imports, type-only imports included: they ship in the .d.ts. */
-function importedPackages(file: string): string[] {
-    return moduleSpecifiers(file)
-        .filter(s => !s.startsWith('.') && !s.includes(':') && !builtinModules.includes(s))
-        .map(s =>
-            s
-                .split('/')
-                .slice(0, s.startsWith('@') ? 2 : 1)
-                .join('/')
-        )
+/**
+ * Package names a source imports, type-only imports included: they ship in the .d.ts.
+ * A builtin must be spelled `node:x`: Bun's `builtinModules` also lists `ws` and `undici`,
+ * which are packages on Node.
+ */
+function packagesIn(fileName: string, text: string): string[] {
+    return moduleSpecifiers(fileName, text)
+        .filter(s => !s.startsWith('.') && !s.includes(':'))
+        .map(packageRootOf)
 }
 
-function undeclared(dirs: string[], declared: Record<string, string>): string[] {
-    const missing = dirs
-        .flatMap(sourceFiles)
-        .flatMap(file => importedPackages(file).map(pkg => `${pkg} (${file})`))
-        .filter(entry => !(entry.split(' ')[0] in declared))
+function undeclared(files: string[], declared: Record<string, string>): string[] {
+    const missing = files.flatMap(file =>
+        packagesIn(file, readFileSync(path.join(ROOT, file), 'utf8'))
+            .filter(pkg => !(pkg in declared))
+            .map(pkg => `${pkg} (${file})`)
+    )
     return [...new Set(missing)]
+}
+
+/** Every peer needs a dev pin, and every dev pin the host also ships must match the host's. */
+function drift(pkg: Manifest, piHost: Manifest): string[] {
+    const shipped = piHost.dependencies ?? {}
+    const dev = pkg.devDependencies ?? {}
+    const unpinned = Object.keys(pkg.peerDependencies ?? {}).filter(
+        p => p !== piHost.name && !(p in dev)
+    )
+    const offHost = Object.keys(dev).filter(
+        p => p in shipped && !Bun.semver.satisfies(dev[p], shipped[p])
+    )
+    return [...unpinned, ...offHost]
 }
 
 test('every peer is a package the pi host ships', () => {
@@ -77,28 +114,52 @@ test('every peer is a package the pi host ships', () => {
     expect(foreign).toEqual([])
 })
 
-test('tests run against the version of each peer the host ships', () => {
-    const drifted = Object.entries(own.peerDependencies ?? {})
-        .filter(([peer]) => peer !== host.name)
-        .map(([peer]) => ({
-            peer,
-            dev: own.devDependencies?.[peer],
-            host: host.dependencies?.[peer]
-        }))
-        .filter(p => !p.dev || !p.host || !Bun.semver.satisfies(p.dev, p.host))
-    expect(drifted).toEqual([])
+test('tests run against the version of each host package the host ships', () => {
+    expect(drift(own, host)).toEqual([])
+})
+
+test('drift catches a dev-only host package pinned off the host', () => {
+    const offPin = {name: 'x', devDependencies: {'@earendil-works/pi-ai': '0.86.0'}}
+    const piHost = {name: 'pi', dependencies: {'@earendil-works/pi-ai': '^0.87.0'}}
+    expect(drift(offPin, piHost)).toEqual(['@earendil-works/pi-ai'])
 })
 
 test('shipped code imports only runtime dependencies and host peers', () => {
-    expect(undeclared(['src'], {...own.dependencies, ...own.peerDependencies})).toEqual([])
+    expect(undeclared(sourceFiles('src'), {...own.dependencies, ...own.peerDependencies})).toEqual(
+        []
+    )
 })
 
-test('tests and scripts import only declared packages', () => {
+test('tests, scripts and root configs import only declared packages', () => {
     expect(
-        undeclared(['test', 'scripts'], {
+        undeclared([...sourceFiles('test'), ...sourceFiles('scripts'), ...rootConfigs], {
             ...own.dependencies,
             ...own.peerDependencies,
-            ...own.devDependencies
+            ...own.devDependencies,
+            bun: 'the runtime the suite runs on'
         })
     ).toEqual([])
+})
+
+test('the scan reads every file that can import a package, and no fixture', () => {
+    const scanned = [...sourceFiles('scripts'), ...sourceFiles('test'), ...rootConfigs]
+    expect(scanned).toContain('eslint.config.mjs')
+    expect(scanned).toContain(path.join('scripts', 'node-smoke.mjs'))
+    expect(scanned.filter(f => f.includes('__fixtures__'))).toEqual([])
+})
+
+test('a package Bun builds in is still a package', () => {
+    expect(
+        packagesIn('a.ts', "import {WebSocket} from 'ws'\nimport {fetch} from 'undici'")
+    ).toEqual(['ws', 'undici'])
+})
+
+test('every form that loads a package is read', () => {
+    const text = [
+        "const a = require('req-pkg')",
+        "import b = require('eq-pkg')",
+        "const c = import.meta.resolve('@scope/meta-pkg/sub')",
+        "const d = `require('in-a-string')`"
+    ].join('\n')
+    expect(packagesIn('a.ts', text)).toEqual(['req-pkg', 'eq-pkg', '@scope/meta-pkg'])
 })

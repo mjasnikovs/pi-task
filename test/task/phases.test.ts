@@ -1785,8 +1785,8 @@ describe('phaseResearch enrichment DI', () => {
                 },
                 'use `zod` for validation'
             )
-            const fs = await import('fs/promises')
-            const path = await import('path')
+            const fs = await import('node:fs/promises')
+            const path = await import('node:path')
             const taskBody = await fs.readFile(path.join(cwd, '.pi-tasks', 'TASK_0001.md'), 'utf-8')
             expect(taskBody).not.toContain('research enrichment')
         })
