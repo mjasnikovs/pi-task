@@ -631,3 +631,92 @@ describe('runFinalGateAutofix — ignored-path channel', () => {
         })
     })
 })
+
+describe('runFinalGateAutofix — off-tree pass', () => {
+    const NOTE = 'nothing the fix pass changed in the repository explains it'
+    const base = (over: Partial<FinalFixDeps>): FinalFixDeps => ({
+        cwd: '/tmp/x',
+        failReason: 'boot check: `bun run dev` exited 1 — Executable not found in $PATH: "docker"',
+        runChild: () => Promise.resolve('FINAL-GATE-FIX: DONE'),
+        gate: () =>
+            Promise.resolve({ok: true, reason: 'statics + `bun run dev` passed', tree: 't0'}),
+        discoverLabels: () => ['bun run dev'],
+        failedTrees: ['t-earlier', 't0'],
+        ...over
+    })
+
+    test('THE LEAD (mx5-n AUTO_0001): green on the tree that failed is not the repo’s pass', async () => {
+        const log: string[] = []
+        const r = await runFinalGateAutofix(base({log: m => log.push(m)}))
+        expect(r.ok).toBe(true)
+        expect(r.offTree).toBe(true)
+        expect(r.unobserved).toContain('UNOBSERVED')
+        expect(r.unobserved).toContain(NOTE)
+        expect(log.some(l => l.includes('OFF-TREE'))).toBe(true)
+    })
+
+    test('a re-run that ends on a failed tree is no pass either', async () => {
+        const r = await runFinalGateAutofix(
+            base({
+                gate: () =>
+                    Promise.resolve({ok: true, reason: 'passed', tree: 't1', leftTree: 't0'})
+            })
+        )
+        expect(r.offTree).toBe(true)
+    })
+
+    test('a pass on a different tree keeps its credit', async () => {
+        const r = await runFinalGateAutofix(
+            base({gate: () => Promise.resolve({ok: true, reason: 'passed', tree: 't1'})})
+        )
+        expect(r.ok).toBe(true)
+        expect(r.offTree).toBeUndefined()
+        expect(r.unobserved).toBeUndefined()
+    })
+
+    test('a tree either gate could not name never downgrades', async () => {
+        for (const over of [
+            {failedTrees: undefined},
+            {failedTrees: []},
+            {gate: () => Promise.resolve({ok: true, reason: 'passed'})}
+        ] satisfies Array<Partial<FinalFixDeps>>) {
+            const r = await runFinalGateAutofix(base(over))
+            expect(r.unobserved).toBeUndefined()
+        }
+    })
+
+    test('a gate that still fails carries no note', async () => {
+        const r = await runFinalGateAutofix(
+            base({gate: () => Promise.resolve({ok: false, reason: 'still red', tree: 't0'})})
+        )
+        expect(r.ok).toBe(false)
+        expect(r.unobserved).toBeUndefined()
+    })
+
+    test('an ignored write proven necessary is reported once, as the ignored-file note', async () => {
+        const snaps: Array<Record<string, string>> = [{}, {'.env': '1:20'}]
+        let s = 0
+        const r = await runFinalGateAutofix(
+            base({
+                ignoredSnapshot: () => Promise.resolve(snaps[Math.min(s++, 1)]!),
+                gateWithoutIgnored: () => Promise.resolve(false)
+            })
+        )
+        expect(r.unobserved).toContain('.env')
+        expect(r.unobserved).not.toContain(NOTE)
+        expect(r.offTree).toBeUndefined()
+    })
+
+    test('an ignored write the gate does not need leaves the same tree to the off-tree note', async () => {
+        const snaps: Array<Record<string, string>> = [{}, {'scratch.log': '1:5'}]
+        let s = 0
+        const r = await runFinalGateAutofix(
+            base({
+                ignoredSnapshot: () => Promise.resolve(snaps[Math.min(s++, 1)]!),
+                gateWithoutIgnored: () => Promise.resolve(true)
+            })
+        )
+        expect(r.ignoredDependent).toBe(false)
+        expect(r.unobserved).toContain(NOTE)
+    })
+})

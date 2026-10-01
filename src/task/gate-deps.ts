@@ -52,7 +52,7 @@ import {
     discoverGateCommandLabels,
     discoverGateCommandBodies
 } from './final-gate.js'
-import {runFinalGateAutofix, type FinalFixResult} from './final-gate-fix.js'
+import {runFinalGateAutofix, type FinalFixDeps, type FinalFixResult} from './final-gate-fix.js'
 import {researchResolution} from './verify-resolution.js'
 import {extractProhibitions, findProhibitionViolations} from './prohibition-probe.js'
 import {frozenPathsFromSpec, revertFrozenPaths} from './frozen-path-guard.js'
@@ -128,11 +128,21 @@ export type FinalGateFixFn = (
     ctx: ExtensionCommandContext,
     cwd: string,
     failReason: string,
+    loop?: FinalGateFixLoop
+) => Promise<FinalFixResult>
+
+/** What the resolution loop knows that one fix attempt needs. */
+export interface FinalGateFixLoop {
     /** Ignored paths earlier attempts in this resolution loop already wrote (see
      *  FinalFixDeps.ignoredKnown) — a failed attempt's ignored writes survive its
      *  discard and can green a later attempt. */
     ignoredKnown?: string[]
-) => Promise<FinalFixResult>
+    /** Every tree a gate in this loop failed on or left (AutofixLedger.failedTrees). */
+    failedTrees?: string[]
+    /** The plan the failing gate was given. A re-run without it skips the plan-driven
+     *  checks, so it would not be the gate that failed. */
+    planText?: string
+}
 
 /** Keep the gate machinery's own artifacts out of every git pathspec below. */
 const EXCLUDE_TASKS_DIR = ':(exclude).pi-tasks'
@@ -924,6 +934,66 @@ export function parseDiffLines(diff: string): DiffLine[] {
     return out
 }
 
+/** Keeps the `.pi-tasks` trail. Shared by the enforce pre-commit gate
+ *  (discardEdits) and the final-gate autofix guards. */
+async function discardWorktreeEdits(cwd: string, signal?: AbortSignal): Promise<void> {
+    await git(cwd, ['checkout', '--', '.', EXCLUDE_TASKS_DIR], signal)
+    await git(cwd, ['clean', '-fd', '-e', '.pi-tasks'], signal)
+}
+
+/** The final-gate fix pass's deps, everything but the child wired to production. */
+export function finalGateFixDeps(
+    args: {
+        cwd: string
+        signal?: AbortSignal
+        failReason: string
+        runChild: FinalFixDeps['runChild']
+    } & FinalGateFixLoop
+): FinalFixDeps {
+    const {cwd, signal, failReason, runChild, ignoredKnown, failedTrees, planText} = args
+    const gate = (c: string) => runFinalIntegrationGate(c, {signal, planText})
+    const log = makeDebugAppender(runLogPath(cwd, 'final-gate-debug.log'))
+    return {
+        cwd,
+        ...(signal === undefined ? {} : {signal}),
+        failReason,
+        runChild,
+        // The gate re-run is the only arbiter of convergence, and the
+        // shrink guard's discovery is the gate's own (see final-gate.ts).
+        // The run's cancel reaches the re-run too. Without it the whole
+        // `FinalGateOptions.signal` path is inert in the shipped code.
+        gate,
+        discoverLabels: discoverGateCommandLabels,
+        discoverBodies: discoverGateCommandBodies,
+        discard: c => discardWorktreeEdits(c, signal),
+        // WRITE-GUARD STACK. This child has free bash, so it needs one.
+        // Diff capture happens at the makeGateChild seam, keyed on the
+        // child's TOOLS; the deletion guard and the probe scan
+        // reject-and-discard inside runFinalGateAutofix. The frozen-path
+        // deny (FinalFixDeps.frozenPaths/revertFrozen) is deliberately NOT
+        // wired here: per-task fences are task-SCOPED — "this task must not
+        // touch a sibling's territory" — so their union across a run can
+        // fence off a file a legitimate whole-repo fix has to touch. Wire it
+        // only when a run-GLOBAL freeze source exists, never a per-task
+        // union.
+        treeChanges: () => collectTreeChanges(cwd, signal),
+        probeScan: () => collectAddedLines(cwd, signal).then(findProbeGaming),
+        // IGNORED-PATH CHANNEL: every write guard above reads
+        // `git status --porcelain`, which does not report ignored paths, so
+        // a pass that greens a command by writing credentials into a
+        // gitignored `.env` is structurally invisible to all of them — and
+        // the gate would certify a PASS no fresh clone can reproduce. This
+        // does not reject the write; a local `.env` is often the only way to
+        // make a check run at all. It records it, and downgrades a PASS
+        // proven to depend on it.
+        ignoredSnapshot: () => collectIgnoredSnapshot(cwd, signal),
+        ...(ignoredKnown && ignoredKnown.length > 0 ? {ignoredKnown} : {}),
+        gateWithoutIgnored: paths => gatePassesWithoutIgnored(cwd, paths, gate, log),
+        ...(failedTrees && failedTrees.length > 0 ? {failedTrees} : {}),
+        log
+    }
+}
+
 /**
  * Build the gate deps for one command run. `runTask` is the orchestrator's
  * implementation re-runner, injected by the caller. The returned object also drives
@@ -951,14 +1021,7 @@ export function buildGateDeps(params: {
     // mutationCheck dep to discard a verdict computed on a mutated tree.
     let lastGuardReconcile: ReconcileResult | null = null
 
-    // Restore tracked files to HEAD and drop files a pass created. The `.pi-tasks`
-    // trail survives both: the checkout excludes that directory by pathspec and the
-    // clean excludes it with `-e`. Debug logs are outside the tree. Shared by the
-    // enforce pre-commit gate (discardEdits) and the final-gate autofix guards.
-    const discardTreeEdits = async (cwd2: string): Promise<void> => {
-        await git(cwd2, ['checkout', '--', '.', EXCLUDE_TASKS_DIR], signal)
-        await git(cwd2, ['clean', '-fd', '-e', '.pi-tasks'], signal)
-    }
+    const discardTreeEdits = (cwd2: string): Promise<void> => discardWorktreeEdits(cwd2, signal)
 
     const gateHealth = (cwd2: string, onCommand: HealthProgress): Promise<HealthOutcome> =>
         gateRepoHealth(cwd2, {onCommand, ...(signal === undefined ? {} : {signal})})
@@ -1312,57 +1375,22 @@ export function buildGateDeps(params: {
             return r.exitCode === 0 && r.stdout.trim().length > 0
         },
         discardEdits: discardTreeEdits,
-        finalGateFix: (fixCtx, cwd2, failReason, ignoredKnown) =>
-            runFinalGateAutofix({
-                cwd: cwd2,
-                signal,
-                failReason,
-                runChild: gateChild(
-                    fixCtx,
-                    cwd2,
-                    'final integration gate',
-                    'final-fix',
-                    'final-gate-debug.log'
-                ),
-                // The gate re-run is the only arbiter of convergence, and the
-                // shrink guard's discovery is the gate's own (see final-gate.ts).
-                // The run's cancel reaches the re-run too. Without it the whole
-                // `FinalGateOptions.signal` path is inert in the shipped code.
-                gate: c => runFinalIntegrationGate(c, {signal}),
-                discoverLabels: discoverGateCommandLabels,
-                discoverBodies: discoverGateCommandBodies,
-                discard: discardTreeEdits,
-                // WRITE-GUARD STACK. This child has free bash, so it needs one.
-                // Diff capture happens at the makeGateChild seam, keyed on the
-                // child's TOOLS; the deletion guard and the probe scan
-                // reject-and-discard inside runFinalGateAutofix. The frozen-path
-                // deny (FinalFixDeps.frozenPaths/revertFrozen) is deliberately NOT
-                // wired here: per-task fences are task-SCOPED — "this task must not
-                // touch a sibling's territory" — so their union across a run can
-                // fence off a file a legitimate whole-repo fix has to touch. Wire it
-                // only when a run-GLOBAL freeze source exists, never a per-task
-                // union.
-                treeChanges: () => collectTreeChanges(cwd2, signal),
-                probeScan: () => collectAddedLines(cwd2, signal).then(findProbeGaming),
-                // IGNORED-PATH CHANNEL: every write guard above reads
-                // `git status --porcelain`, which does not report ignored paths, so
-                // a pass that greens a command by writing credentials into a
-                // gitignored `.env` is structurally invisible to all of them — and
-                // the gate would certify a PASS no fresh clone can reproduce. This
-                // does not reject the write; a local `.env` is often the only way to
-                // make a check run at all. It records it, and downgrades a PASS
-                // proven to depend on it.
-                ignoredSnapshot: () => collectIgnoredSnapshot(cwd2, signal),
-                ...(ignoredKnown && ignoredKnown.length > 0 ? {ignoredKnown} : {}),
-                gateWithoutIgnored: paths =>
-                    gatePassesWithoutIgnored(
+        finalGateFix: (fixCtx, cwd2, failReason, loop) =>
+            runFinalGateAutofix(
+                finalGateFixDeps({
+                    cwd: cwd2,
+                    signal,
+                    failReason,
+                    runChild: gateChild(
+                        fixCtx,
                         cwd2,
-                        paths,
-                        c => runFinalIntegrationGate(c, {signal}),
-                        makeDebugAppender(runLogPath(cwd2, 'final-gate-debug.log'))
+                        'final integration gate',
+                        'final-fix',
+                        'final-gate-debug.log'
                     ),
-                log: makeDebugAppender(runLogPath(cwd2, 'final-gate-debug.log'))
-            }),
+                    ...loop
+                })
+            ),
         recommend: async (recCtx, cwd2, taskTitle, taskId, failReason) => {
             // Read the same composed spec the verify gate judged against, so the
             // recommendation reasons over the real contract (degrade to the bare title).

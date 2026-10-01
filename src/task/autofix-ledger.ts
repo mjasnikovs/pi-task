@@ -64,6 +64,9 @@ export class AutofixLedger {
      * overlapping path yield the union, deduplicated, in first-seen order.
      */
     private _ignoredWritten: string[] = []
+    /** Every tree a gate in this loop failed on or left behind. A guard's discard
+     *  can put the worktree back on an earlier one, so the last is not enough. */
+    private readonly _failedTrees = new Set<string>()
     /** Sub-fixes a non-converging attempt left uncommitted. REPLACED each attempt,
      *  unlike `_ignoredWritten` above — this is a snapshot of what is uncommitted
      *  right now, not a history. Run: a second `setStranded` discards the first. */
@@ -106,6 +109,15 @@ export class AutofixLedger {
 
     ignoredWrites(): readonly string[] {
         return this._ignoredWritten
+    }
+
+    gateFailedOn(outcome: {tree?: string; leftTree?: string}): void {
+        if (outcome.tree !== undefined) this._failedTrees.add(outcome.tree)
+        if (outcome.leftTree !== undefined) this._failedTrees.add(outcome.leftTree)
+    }
+
+    failedTrees(): string[] {
+        return [...this._failedTrees]
     }
 
     /** The uncommitted sub-fixes as of now. Replaces, never accumulates. */

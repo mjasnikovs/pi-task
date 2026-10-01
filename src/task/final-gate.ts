@@ -106,6 +106,8 @@ import {findMissingServeEntry, serveEntryGateFailureText} from './serve-entry.js
 import {makefileRecipe} from './command-shrink.js'
 import {GateTally, observabilityGapFailure, unobservedVerdict} from './gate-tally.js'
 import {VERIFY_FAIL_PREFIX} from './verify-work.js'
+import {treeHasGitlink, worktreeTreeHash} from './tree-hash.js'
+import {makeGit} from '../shared/git-runner.js'
 
 export interface FinalGateOutcome {
     /** true → statics and every runnable integration command passed (or nothing to run). */
@@ -171,6 +173,13 @@ export interface FinalGateOutcome {
      * Absent ⇒ everything the gate meant to observe, it observed.
      */
     unobserved?: string
+    /** The worktree content the gate judged ({@link worktreeTreeHash}), read before
+     *  its first command. Absent when git cannot say, or when the tree holds a
+     *  submodule whose edits the hash cannot see. */
+    tree?: string
+    /** The worktree content the gate left behind, when its own checks moved it
+     *  (`lint --fix`, codegen). Same absence rules as `tree`. */
+    leftTree?: string
 }
 
 /**
@@ -623,6 +632,15 @@ export async function runFinalIntegrationGate(
         },
         trackedFiles: trackedFilesFn = trackedFiles
     } = opts
+    const tree = await judgeableTree(cwd, opts.signal)
+    const judged = async (v: FinalGateOutcome): Promise<FinalGateOutcome> => {
+        const left = await judgeableTree(cwd, opts.signal)
+        return {
+            ...v,
+            ...(tree === null ? {} : {tree}),
+            ...(left === null || left === tree ? {} : {leftTree: left})
+        }
+    }
     // ASYNC so the event loop keeps turning while the project's own lint runs: a
     // loader can paint and a cancel can reach the child.
     const check = confirmingRunner(runCmd)
@@ -844,7 +862,7 @@ export async function runFinalIntegrationGate(
     // integration command. The condition asks the TALLY — no attempt and no failure
     // — rather than asking discovery, so both paths see the same state. It still
     // returns before the boot section and the post-boot closure scans.
-    if (!boot && tally.silent()) return tally.verdict(debts)
+    if (!boot && tally.silent()) return await judged(tally.verdict(debts))
     // The boot CONCEPT lives in boot-probe.ts (runBootSection): discovery,
     // served-app detection, the probe defaults, the boot check, orphan-port
     // recovery, the port-holder diagnosis, the skip verdict and the
@@ -877,5 +895,12 @@ export async function runFinalIntegrationGate(
     // is where their failures sit in the aggregate's within-rank order
     // (CLOSURE_SCANS: 'post-boot').
     runClosureScans('post-boot', {cwd, planText}, (t, r) => tally.fail(t, r))
-    return tally.verdict(debts)
+    return await judged(tally.verdict(debts))
+}
+
+/** The worktree's hash, or null when git cannot say or a submodule would hide edits. */
+async function judgeableTree(cwd: string, signal?: AbortSignal): Promise<string | null> {
+    const git = makeGit(cwd, signal)
+    const tree = await worktreeTreeHash(git)
+    return tree !== null && (await treeHasGitlink(git, tree)) === false ? tree : null
 }

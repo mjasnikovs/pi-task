@@ -3497,8 +3497,8 @@ test('runAutoLoop: ignored writes are CARRIED from a failed attempt into the nex
             runTask: () => Promise.resolve({taskId: 'TASK_0006', end: {kind: 'completed'}}),
             commit: () => Promise.resolve({committed: true}),
             finalGate: () => Promise.resolve({ok: false, reason: '`bun run seed` exited 1'}),
-            finalGateFix: (_ctx, _cwd, _seed, ignoredKnown) => {
-                known.push(ignoredKnown)
+            finalGateFix: (_ctx, _cwd, _seed, loop) => {
+                known.push(loop?.ignoredKnown)
                 attempt++
                 // Attempt 1 writes .env and does not converge; attempt 2 converges
                 // WITHOUT writing anything ignored — its own diff would see nothing.

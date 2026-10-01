@@ -19,6 +19,7 @@ import * as path from 'node:path'
 import {
     buildGateDeps,
     buildVerifyProbes,
+    finalGateFixDeps,
     healthBaselineFor,
     readSpecForVerification
 } from '../../src/task/gate-deps.js'
@@ -553,5 +554,17 @@ describe('the gate health check leaves the tree as it found it', () => {
         write(dir, {'notes.txt': 'mine'})
         await deps().repoHealth(fake.ctx, dir, 'a task')
         expect(porcelain(dir)).toBe('?? notes.txt')
+    })
+})
+
+describe('finalGateFixDeps — the production wiring of the fix pass', () => {
+    test('it carries every tree a failing gate judged', () => {
+        const d = finalGateFixDeps({
+            cwd: '/tmp/x',
+            failReason: 'boot check: `bun run dev` exited 1',
+            runChild: () => Promise.reject(new Error('the child must not run here')),
+            failedTrees: ['e'.repeat(40), 'f'.repeat(40)]
+        })
+        expect(d.failedTrees).toEqual(['e'.repeat(40), 'f'.repeat(40)])
     })
 })

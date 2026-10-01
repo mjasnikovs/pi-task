@@ -20,11 +20,14 @@
  *     nothing about the sha. The move is still classed verdict-tainting, so the
  *     verdict is discarded; the commit stays.
  *   - The WORKTREE CONTENT as a git tree object, built through a THROWAWAY index
- *     (`read-tree --empty` + `add -A` + `write-tree`, excluding `.pi-tasks` — the
- *     gate's own debug logs land there DURING the run). Measured on a repo with a
- *     staged file, an untracked file, a gitignored file and a `.pi-tasks/` log: the
- *     tree holds the tracked and untracked files and neither of the other two, and
- *     the REAL index still shows the same staged path afterwards. Restoration
+ *     seeded from HEAD (`read-tree HEAD` + `add -A` + `write-tree`, excluding
+ *     `.pi-tasks` — the gate's own debug logs land there DURING the run; see
+ *     tree-hash.ts). Measured on a repo with a staged file, an untracked file, a
+ *     gitignored file and a `.pi-tasks/` log: the tree holds the tracked and
+ *     untracked files and neither of the other two, and the REAL index still shows
+ *     the same staged path afterwards. A tracked file under an ignored pattern (a
+ *     force-added `dist/`) is in the tree too, so a child rewriting it is a graded
+ *     modification like any other tracked file. Restoration
  *     re-materialises every changed or deleted file and deletes what the child
  *     created.
  *   - The STASH ref: entries the child pushed are dropped AFTER the worktree is

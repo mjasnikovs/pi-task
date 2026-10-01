@@ -216,6 +216,22 @@ describe('verdict-taint classification', () => {
         )
     })
 
+    test('a TRACKED file under an ignored pattern is graded too: restored and tainted', async () => {
+        const dir = makeRepo()
+        fs.writeFileSync(path.join(dir, '.gitignore'), 'dist/\n')
+        fs.mkdirSync(path.join(dir, 'dist'))
+        fs.writeFileSync(path.join(dir, 'dist/app.js'), 'built v1\n')
+        git(dir, 'add', '.gitignore')
+        git(dir, 'add', '-f', 'dist/app.js')
+        git(dir, 'commit', '-q', '-m', 'ship the bundle')
+        const snap = await captureGitState(dir)
+        fs.writeFileSync(path.join(dir, 'dist/app.js'), 'rebuilt by the child\n')
+        const rec = await reconcileGitState(dir, snap)
+        expect(rec.verdictTainted).toBe(true)
+        expect(rec.actions).toContain('restored modified file dist/app.js')
+        expect(fs.readFileSync(path.join(dir, 'dist/app.js'), 'utf8')).toBe('built v1\n')
+    })
+
     test('modified UNTRACKED non-artifact (impl new source) → tainted (closes the hole)', async () => {
         const dir = makeRepo() // new-work.ts is untracked, source-shaped
         const snap = await captureGitState(dir)

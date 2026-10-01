@@ -2030,3 +2030,58 @@ describe('a red seen once is believed where a re-run would hide it', () => {
         expect((await runVerifyCommandLine(dir, failsOnce(), 10_000)).outcome).toBe('fail')
     })
 })
+
+test('the outcome names the tree it judged, read before a check could edit it', async () => {
+    const dir = makeDir({name: 'judged', private: true, scripts: {lint: 'eslint --fix .'}})
+    const git = (...args: string[]) => spawnSync('git', args, {cwd: dir, encoding: 'utf8'})
+    git('init', '-q')
+    fs.writeFileSync(path.join(dir, 'a.js'), 'let a = 1\n')
+    const before = git('add', '-A') && git('write-tree').stdout.trim()
+    git('read-tree', '--empty')
+    const edits: CommandRunner = spec => {
+        fs.writeFileSync(path.join(spec.cwd, 'a.js'), 'const a = 1\n')
+        return Promise.resolve({failedToStart: false, status: 1, stdout: '', stderr: '1 error'})
+    }
+    const out = await runFinalIntegrationGate(dir, {run: edits, envClosure: inertClosure})
+    expect(out.ok).toBe(false)
+    expect(fs.readFileSync(path.join(dir, 'a.js'), 'utf8')).toBe('const a = 1\n')
+    expect(out.tree).toBe(before)
+})
+
+test('outside a repo the outcome names no tree', async () => {
+    const out = await runFinalIntegrationGate(makeDir(), {envClosure: inertClosure})
+    expect(out.tree).toBeUndefined()
+})
+
+test('a check that moves the tree leaves its result as leftTree', async () => {
+    const dir = makeDir({name: 'left', private: true, scripts: {lint: 'eslint --fix .'}})
+    const git = (...args: string[]) => spawnSync('git', args, {cwd: dir, encoding: 'utf8'})
+    git('init', '-q')
+    fs.writeFileSync(path.join(dir, 'a.js'), 'let a = 1\n')
+    const edits: CommandRunner = spec => {
+        fs.writeFileSync(path.join(spec.cwd, 'a.js'), 'const a = 1\n')
+        return Promise.resolve({failedToStart: false, status: 1, stdout: '', stderr: '1 error'})
+    }
+    const out = await runFinalIntegrationGate(dir, {run: edits, envClosure: inertClosure})
+    expect(out.tree).toMatch(/^[0-9a-f]{40}$/)
+    expect(out.leftTree).toMatch(/^[0-9a-f]{40}$/)
+    expect(out.leftTree).not.toBe(out.tree)
+})
+
+test('a repo holding a nested repo names no tree: the hash cannot see edits inside it', async () => {
+    const dir = makeDir({name: 'nested', private: true})
+    const git = (cwd: string, ...args: string[]) =>
+        spawnSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', ...args], {
+            cwd,
+            encoding: 'utf8'
+        })
+    git(dir, 'init', '-q')
+    const nested = path.join(dir, 'packages/api')
+    fs.mkdirSync(nested, {recursive: true})
+    git(nested, 'init', '-q')
+    fs.writeFileSync(path.join(nested, 'x.ts'), 'x\n')
+    git(nested, 'add', '-A')
+    git(nested, 'commit', '-qm', 'n')
+    const out = await runFinalIntegrationGate(dir, {envClosure: inertClosure})
+    expect(out.tree).toBeUndefined()
+})

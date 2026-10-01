@@ -10,6 +10,7 @@ import {withTmpTaskDir} from '../test-utils/tmp-task-dir.js'
 import {makeFakeCtx} from '../test-utils/fake-ctx.js'
 import {runFinalGateStage, type FinalGateStageDeps} from '../../src/task/run-final-gate.js'
 import {readAcceptDebts} from '../../src/task/accept-debt.js'
+import type {FinalFixResult} from '../../src/task/final-gate-fix.js'
 import {writeOwnedRequirements} from '../../src/task/requirements.js'
 import {
     FINAL_ACCEPT_LABEL,
@@ -774,5 +775,112 @@ test('a fresh gate outcome rides forward whole: every ranked failure is re-trail
         // Both entries, not just the ranked first, and from the FRESH gate.
         expect(trail.some(l => l.includes('still red'))).toBe(true)
         expect(trail.some(l => l.includes('and this too'))).toBe(true)
+    })
+})
+
+test('a PASS resting on state outside the commit is no proof for static debts (mx5-n AUTO_0001)', async () => {
+    for (const outside of [{offTree: true as const}, {ignoredDependent: true}]) {
+        await withTmpTaskDir(async dir => {
+            const handle = makeFakeCtx(dir)
+            const trail: string[] = []
+            const staticOkSeen: boolean[] = []
+            const written: string[] = []
+            handle.queueSelect(FINAL_AUTOFIX_LABEL)
+            await runFinalGateStage(
+                handle.ctx,
+                stageDeps(trail, [], {
+                    finalGate: () => Promise.resolve({ok: false, reason: 'boom'}),
+                    finalGateFix: () =>
+                        Promise.resolve({
+                            ok: true,
+                            reason: 'green',
+                            unobserved: 'UNOBSERVED — NOT a pass: rests outside the commit',
+                            ...outside
+                        }),
+                    recordDebt: (_cwd, _taskId, reason) => {
+                        written.push(reason)
+                        return Promise.resolve()
+                    },
+                    recheckOpenDebts: (_cwd, staticOk) => {
+                        staticOkSeen.push(staticOk)
+                        return Promise.resolve({openDebts: []})
+                    }
+                }),
+                params(dir)
+            )
+            expect(staticOkSeen).toEqual([false])
+            expect(written).toContain('UNOBSERVED — NOT a pass: rests outside the commit')
+            expect(trail.some(l => l.startsWith('final-gate: autofix ended UNOBSERVED'))).toBe(true)
+        })
+    }
+})
+
+test("the gate's own UNOBSERVED pass still proves the statics it ran", async () => {
+    await withTmpTaskDir(async dir => {
+        const handle = makeFakeCtx(dir)
+        const staticOkSeen: boolean[] = []
+        handle.queueSelect(FINAL_AUTOFIX_LABEL)
+        await runFinalGateStage(
+            handle.ctx,
+            stageDeps([], [], {
+                finalGate: () => Promise.resolve({ok: false, reason: 'boom'}),
+                finalGateFix: () =>
+                    Promise.resolve({
+                        ok: true,
+                        reason: 'statics passed',
+                        unobserved: 'UNOBSERVED — NOT a pass: nothing dynamic ran'
+                    }),
+                recheckOpenDebts: (_cwd, staticOk) => {
+                    staticOkSeen.push(staticOk)
+                    return Promise.resolve({openDebts: []})
+                }
+            }),
+            params(dir)
+        )
+        expect(staticOkSeen).toEqual([true])
+    })
+})
+
+test('each fix attempt sees every tree a gate failed on, even after a guard discard', async () => {
+    await withTmpTaskDir(async dir => {
+        const handle = makeFakeCtx(dir)
+        const seen: Array<string[] | undefined> = []
+        const plans: Array<string | undefined> = []
+        const results: FinalFixResult[] = [
+            {
+                ok: false,
+                reason: 'did not converge',
+                gate: {ok: false, reason: 'lint red', tree: 'T1'}
+            },
+            {ok: false, reason: 'probe-gaming guard', guardTripped: true, editsDiscarded: true},
+            {ok: true, reason: 'green'}
+        ]
+        for (let i = 0; i < 3; i++) handle.queueSelect(FINAL_AUTOFIX_LABEL)
+        await runFinalGateStage(
+            handle.ctx,
+            stageDeps([], [], {
+                finalGate: () =>
+                    Promise.resolve({
+                        ok: false,
+                        reason: 'boot red',
+                        tree: 'T0',
+                        leftTree: 'T0-lint'
+                    }),
+                finalGateFix: (_ctx, _cwd, _reason, loop) => {
+                    seen.push(loop?.failedTrees)
+                    plans.push(loop?.planText)
+                    return Promise.resolve(results[seen.length - 1]!)
+                }
+            }),
+            params(dir)
+        )
+        expect(seen).toEqual([
+            ['T0', 'T0-lint'],
+            ['T0', 'T0-lint', 'T1'],
+            ['T0', 'T0-lint', 'T1']
+        ])
+        // The re-run must be the gate that failed, plan-driven checks included.
+        const plan = params(dir).planText
+        expect(plans).toEqual([plan, plan, plan])
     })
 })

@@ -39,8 +39,17 @@ export async function worktreeTreeHash(git: GitRunner): Promise<string | null> {
     const tmpIndex = throwawayIndexPath()
     const env = {GIT_INDEX_FILE: tmpIndex}
     try {
-        const empty = await git(['read-tree', '--empty'], env)
-        if (empty.exitCode !== 0) return null
+        // Seeded from HEAD, not empty: `add -A` into an empty index skips a tracked
+        // file that matches .gitignore, so an edit to a force-added `dist/` would
+        // never move the hash. An unborn HEAD has nothing tracked to lose.
+        const unborn = (await git(['rev-parse', '-q', '--verify', 'HEAD'])).exitCode !== 0
+        const seeded = await git(['read-tree', unborn ? '--empty' : 'HEAD'], env)
+        if (seeded.exitCode !== 0) return null
+        const untracked = await git(
+            ['rm', '-r', '-q', '--cached', '--ignore-unmatch', '--', '.pi-tasks'],
+            env
+        )
+        if (untracked.exitCode !== 0) return null
         const add = await git(['add', '-A', '--', '.', EXCLUDE_TASKS_DIR], env)
         if (add.exitCode !== 0) return null
         const tree = await git(['write-tree'], env)
@@ -56,4 +65,13 @@ export async function commitTreeHash(git: GitRunner, revision: string): Promise<
     if (r.exitCode !== 0) return null
     const sha = r.stdout.trim()
     return sha.length > 0 ? sha : null
+}
+
+/** Whether `tree` records a submodule or nested repo. Its content is only that
+ *  repo's HEAD, so an edit inside its worktree never moves {@link worktreeTreeHash}.
+ *  Null when git cannot say. */
+export async function treeHasGitlink(git: GitRunner, tree: string): Promise<boolean | null> {
+    const r = await git(['ls-tree', '-r', tree])
+    if (r.exitCode !== 0) return null
+    return r.stdout.split('\n').some(line => line.startsWith('160000 '))
 }

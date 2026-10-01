@@ -404,6 +404,7 @@ export async function runFinalGateStage(
     // rejected-edits flag. That keeps the non-progress rule where its evidence is.
     // `GateTally`'s twin, one altitude up (autofix-ledger.ts).
     const ledger = new AutofixLedger(MAX_FINAL_GATE_AUTOFIX)
+    if (!fin.ok) ledger.gateFailedOn(fin)
     const refreshStranded = async (): Promise<void> => {
         if (!deps.pendingChanges) return
         try {
@@ -516,7 +517,11 @@ export async function runFinalGateStage(
             )
             const seed =
                 choice.guidance ? `${fin.reason}\n\nUser guidance: ${choice.guidance}` : fin.reason
-            const fix = await deps.finalGateFix!(active, cwd, seed, [...ledger.ignoredWrites()])
+            const fix = await deps.finalGateFix!(active, cwd, seed, {
+                ignoredKnown: [...ledger.ignoredWrites()],
+                failedTrees: ledger.failedTrees(),
+                planText
+            })
             // IGNORED-PATH WRITES. The pass wrote file(s) git ignores, so
             // they are not in the commit and a fresh clone does not have them. Trailed
             // on EVERY outcome — a rejected attempt's tracked edits are discarded while
@@ -557,8 +562,8 @@ export async function runFinalGateStage(
                 // `observedFailures` from the value entirely.
                 fin = {...(fix.gate ?? fin), ok: true, reason: fix.reason}
                 // The gate itself just passed, statics included, so `staticOk` here is
-                // proof rather than assumption.
-                await reconcileDebts(true)
+                // proof — unless it rests on state outside the commit.
+                await reconcileDebts(fix.offTree !== true && fix.ignoredDependent !== true)
                 break
             }
             await recGate(
@@ -653,6 +658,7 @@ export async function runFinalGateStage(
             // either way it is spread rather than rebuilt, so no field (`openDebts`,
             // `observedFailures`) is dropped by the assignment.
             const base = fix.gate ?? fin
+            ledger.gateFailedOn(base)
             const carried = base.failures === undefined ? undefined : ledger.remaining(base)
             fin = {
                 ...base,

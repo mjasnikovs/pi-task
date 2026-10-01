@@ -137,3 +137,14 @@ describe('AutofixLedger — writes, stranded work and the commit gate', () => {
         expect(l.mayCommitTree()).toBe(false)
     })
 })
+
+describe('AutofixLedger — the trees gates failed on', () => {
+    test('every judged and left-behind tree is kept, once, across attempts', () => {
+        const l = new AutofixLedger(3)
+        l.gateFailedOn({tree: 't0', leftTree: 't0-fixed-by-lint'})
+        l.gateFailedOn({tree: 't1'})
+        l.gateFailedOn({tree: 't0'})
+        l.gateFailedOn({})
+        expect(l.failedTrees()).toEqual(['t0', 't0-fixed-by-lint', 't1'])
+    })
+})

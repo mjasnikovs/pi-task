@@ -58,6 +58,15 @@ export const FINAL_FIX_TOOLS = 'read,edit,bash'
  */
 export const MAX_FINAL_GATE_AUTOFIX = 3
 
+/** The UNOBSERVED note for a PASS the repository's own changes do not explain. */
+export const OFF_TREE_UNOBSERVED_NOTE =
+    'UNOBSERVED — NOT a pass: the gate passes on a tree a failing gate already ran on or '
+    + 'left behind, so nothing the fix pass changed in the repository explains it. The pass '
+    + 'rests on something outside the commit (an installed tool, a started or created '
+    + 'service or database, a gitignored or out-of-repo file), on edits the failing '
+    + "gate's own checks made, or on a transient failure. Re-run the gate on a fresh "
+    + "checkout to tell; the fix pass's commands are in final-gate-debug.log."
+
 /** Picker labels/values. Each label starts with its own value word, so
  *  `classifyFinalGateAnswer` accepts the value token and the label alike;
  *  anything else is free text and becomes autofix guidance. */
@@ -234,6 +243,8 @@ export interface FinalFixResult {
      *  probe could not answer: no probe wired, a path that would not move, or more
      *  paths than its bound allows. */
     ignoredDependent?: boolean
+    /** The gate passed on the tree it failed on; `unobserved` carries the downgrade. */
+    offTree?: true
     /** A write-guard rejected this attempt (deletion / shrink / probe-gaming). */
     guardTripped?: boolean
     /** …and its edits were discarded. False here with `guardTripped` true means
@@ -304,6 +315,9 @@ export interface FinalFixDeps {
     /** The mechanical dependency test: does the gate still pass with these paths
      *  moved aside? `null` ⇒ unanswerable, which never downgrades a verdict. */
     gateWithoutIgnored?: (paths: string[]) => Promise<boolean | null>
+    /** Every tree a gate in this loop failed on or left behind. A re-run that
+     *  passes on one of them is no pass of the repository's. Absent → off. */
+    failedTrees?: string[]
     /** Write a timestamped line to the gate debug log (guard events). */
     log?: (msg: string) => void
 }
@@ -471,9 +485,14 @@ export async function runFinalGateAutofix(deps: FinalFixDeps): Promise<FinalFixR
         const passesWithout = await deps.gateWithoutIgnored(ignoredWrites)
         if (passesWithout !== null) ignoredDependent = !passesWithout
     }
+    const failed = new Set(deps.failedTrees)
+    const offTree =
+        ignoredDependent !== true
+        && [fin.tree, fin.leftTree].some(t => t !== undefined && failed.has(t))
     const notes = [
         ...(fin.unobserved ? [fin.unobserved] : []),
-        ...(ignoredDependent === true ? [ignoredWriteUnobservedNote(ignoredWrites)] : [])
+        ...(ignoredDependent === true ? [ignoredWriteUnobservedNote(ignoredWrites)] : []),
+        ...(offTree ? [OFF_TREE_UNOBSERVED_NOTE] : [])
     ]
     if (ignoredDependent === true) {
         deps.log?.(
@@ -481,11 +500,18 @@ export async function runFinalGateAutofix(deps: FinalFixDeps): Promise<FinalFixR
                 + `${ignoredWrites.join(', ')} moved aside, and those path(s) are gitignored`
         )
     }
+    if (offTree) {
+        deps.log?.(
+            `final-gate: converged PASS DOWNGRADED to UNOBSERVED (OFF-TREE) — the passing gate `
+                + `ran on or left a tree a gate in this loop already failed on`
+        )
+    }
     return withIgnored({
         ok: true,
         reason: fin.reason,
         gate: fin,
         ...(notes.length > 0 ? {unobserved: notes.join(' ')} : {}),
-        ...(ignoredDependent !== undefined ? {ignoredDependent} : {})
+        ...(ignoredDependent !== undefined ? {ignoredDependent} : {}),
+        ...(offTree ? {offTree} : {})
     })
 }
