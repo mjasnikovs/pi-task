@@ -42,7 +42,7 @@ import {runWorkVerification, extractSpecForVerification, type VerifyProbes} from
 import {readEnvNotes, appendEnvNotes} from './env-notes.js'
 import {currentRunContext} from './run-context.js'
 import {runGateEvidence, evidenceVerifyFindings} from './gate-evidence.js'
-import type {CommandRunner} from './command-run.js'
+import {spawnCommand, type CommandRunner} from './command-run.js'
 import {readContracts} from './contracts.js'
 import {closeHealthDebts, recordDebt} from './accept-debt.js'
 import {recordRepairCandidate} from './root-cause-repair.js'
@@ -731,18 +731,21 @@ export function gateRepoHealth(
 ): Promise<HealthOutcome> {
     const {signal, onCommand, run} = opts
     const rc = currentRunContext(cwd)
+    const base = run ?? spawnCommand
     return rc.healthFor(async tree => {
         const before = await untrackedFiles(cwd, signal)
-        const checks = rc.checkRunner(run, tree)
+        // Cleaned after each run, under the check cache: a re-run confirming a red
+        // must read the tree the first run read.
+        const checks = rc.checkRunner(async spec => {
+            try {
+                return await base(spec)
+            } finally {
+                if (before) await removeCreated(cwd, before, signal)
+            }
+        }, tree)
         return runRepoHealthCheck(cwd, {
             withTests: true,
-            run: async spec => {
-                try {
-                    return await checks(spec)
-                } finally {
-                    if (before) await removeCreated(cwd, before, signal)
-                }
-            },
+            run: checks,
             ...(signal === undefined ? {} : {signal}),
             ...(onCommand === undefined ? {} : {onCommand})
         })

@@ -264,6 +264,26 @@ describe('one execution per check per tree', () => {
     })
 })
 
+describe('a red the gate confirms', () => {
+    // A component suite writes test-results/ on every run. Left in place, the
+    // re-run reads a tree the first run changed and cannot confirm anything.
+    test("a suite's own leftovers do not stop a flaky red being run again", async () => {
+        await withProject(async cwd => {
+            let tests = 0
+            const {lines, run} = lineSpy(line => {
+                if (line !== 'bun run test') return {}
+                fs.mkdirSync(path.join(cwd, 'test-results'), {recursive: true})
+                fs.writeFileSync(path.join(cwd, 'test-results', `${tests}.json`), '{}')
+                return ++tests === 1 ? {status: 1, stdout: '54 pass\n1 fail\n'} : {}
+            })
+            const health = await gateRepoHealth(cwd, {run})
+            expect(lines).toEqual(['bun run lint', 'bun run test', 'bun run test'])
+            expect(health.ok).toBe(true)
+            expect(fs.readdirSync(path.join(cwd, 'test-results'))).toEqual([])
+        })
+    })
+})
+
 describe('what a gate runs, and what it reads back', () => {
     test("a task the run never verified tooling for gets the run's checks", async () => {
         // A resumed task skips research, so this run never heard its TOOLING.

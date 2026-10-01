@@ -84,6 +84,7 @@ import {readEnvNotes, parseEnvNotes, isExcuseNote} from './env-notes.js'
 import {resolveRunner, runnerEnv} from './runner-resolve.js'
 import {
     classifyCommandRun,
+    confirmingRunner,
     reportedSuffix,
     spawnCommand,
     INFRA_GAP_OUTPUT_RE,
@@ -624,8 +625,9 @@ export async function runFinalIntegrationGate(
     } = opts
     // ASYNC so the event loop keeps turning while the project's own lint runs: a
     // loader can paint and a cancel can reach the child.
+    const check = confirmingRunner(runCmd)
     const stat = await runRepoHealthCheck(cwd, {
-        run: runCmd,
+        run: check,
         ...(opts.signal === undefined ? {} : {signal: opts.signal})
     })
     // Debts are derived ONCE, before any section runs, and ride on every verdict
@@ -689,7 +691,7 @@ export async function runFinalIntegrationGate(
                 timeoutMs,
                 undefined,
                 undefined,
-                runCmd,
+                check,
                 opts.signal
             )
             if (r.outcome === 'skip') {

@@ -37,9 +37,11 @@ import {
     reapGroupAfterExit,
     reapProcessGroup
 } from '../shared/child-process.js'
+import {makeGit} from '../shared/git-runner.js'
 import {trackLeftovers} from '../shared/leftovers.js'
 import {keepHead, keepTail} from '../shared/text-cut.js'
 import {isCommandNotFound, resolveRunner, runnerEnv} from './runner-resolve.js'
+import {worktreeTreeHash} from './tree-hash.js'
 
 /** What one finished command looks like, stripped of how it was spawned. */
 export interface CommandRun {
@@ -54,6 +56,9 @@ export interface CommandRun {
     /** The line that ran, when this run answers a spec that named the check
      *  another way (see `RunContext.checkRunner`). */
     ranAs?: string
+    /** How an earlier run of the same spec on the same tree failed, where this one
+     *  did not (see {@link confirmingRunner}). */
+    flakedWith?: string
 }
 
 /** Everything a runner needs to spawn one command. */
@@ -275,6 +280,50 @@ export const spawnCommand = (
     })
 
 /**
+ * `base`, with a failed run run once more before anyone builds on it. A suite that
+ * fails on timing fails on one run, not on the tree: read once, mx5-n's single 54/55
+ * component run became a regression, a repair task and three debts, while thirteen
+ * later runs of the same tree passed. A second failure is the red, reported as its
+ * own run; a pass is the answer and carries how the first run failed as `flakedWith`.
+ * The first failure stands when the re-run observed nothing, when the run was
+ * cancelled, and when the first run moved the tree: a formatter's write-then-diff
+ * passes on its own output. A gap is not run again: a timeout or a missing tool
+ * would only repeat itself.
+ *
+ * For checks only. A one-shot script (migrate, seed) is not idempotent, and a
+ * debt's VERIFY line is a recorded failure that a second chance would let pass.
+ */
+export function confirmingRunner(base: CommandRunner): CommandRunner {
+    return async spec => confirmRed(base, spec, await worktreeOf(spec))
+}
+
+/** {@link confirmingRunner}, told the hash of the tree `spec` runs on (null: unknown). */
+export async function confirmRed(
+    base: CommandRunner,
+    spec: CommandSpec,
+    tree: string | null
+): Promise<CommandRun> {
+    const first = await base(spec)
+    const verdict = classifyCommandRun(first, [], ANY_CALLERS_GAP)
+    if (verdict.outcome !== 'fail' || tree === null || spec.signal?.aborted) return first
+    if ((await worktreeOf(spec)) !== tree) return first
+    const second = await base(spec)
+    const again = classifyCommandRun(second, [], ANY_CALLERS_GAP).outcome
+    if (again === 'pass')
+        return {...second, flakedWith: `exited ${verdict.status}${reportedSuffix(verdict)}`}
+    return again === 'fail' ? second : first
+}
+
+/** What a test caller reads as a gap, so only a run every caller calls a fail is re-run. */
+const ANY_CALLERS_GAP: ClassifyOptions = {emptySuite: true}
+
+const worktreeOf = (spec: CommandSpec): Promise<string | null> =>
+    worktreeTreeHash(makeGit(spec.cwd, spec.signal))
+
+/** The spawner every project check defaults to: {@link spawnCommand}, confirming a red. */
+export const spawnCheck: CommandRunner = confirmingRunner(spec => spawnCommand(spec))
+
+/**
  * A non-zero exit whose output shows an EXTERNAL runtime dependency is missing, not
  * a code fault: a browser suite (Playwright/Cypress) whose browser binaries or system
  * libraries were never installed here (a component-test runner must run in the
@@ -321,7 +370,20 @@ const TESTS_RAN_OUTPUT_RE = /\b[1-9]\d*\s+(?:pass(?:ed|ing)?|fail(?:ed|ing|ures?
 const FAILURE_COUNT_RE = /\b[1-9]\d*[ \t]+(?:fail(?:ed|ing|ures?)?|errors?)\b/i
 const FAILURE_LINE_RE =
     /^\s*(?:--- )?FAIL\b|\berror TS\d+:|^error during build:|\btoo many warnings\b/
-const TEST_TITLE_LINE_RE = /^\s*(?:\((?:pass|skip|todo)\)|✓|✔|○|↓)/
+/**
+ * A row in which a runner names a test or a file that did not fail: its pass, skip
+ * or todo mark (bun, playwright, node, mocha, jest, vitest, TAP), or a header it
+ * prints for every file whatever the outcome (jest's PASS, deno's check and running
+ * lines, cargo's Running). Each shape is from a real run of that runner
+ * (test/task/__fixtures__/runner-multi-file.json).
+ */
+const QUIET_TEST_ROW_RE =
+    /^\s*(?:\((?:pass|skip|todo)\)|[✓✔○↓﹣]|-\s+\d+\s.*›|PASS\b|ok\s+\d+\b|running\s+\d+\s+tests?\s+from\b|Check\s+\S+$|Running\s+(?:unittests\s+)?\S+\s+\()/
+
+/** Does this line of a runner's output only name something that did not fail? */
+export function isQuietTestRow(line: string): boolean {
+    return QUIET_TEST_ROW_RE.test(plainText(line).trimEnd())
+}
 
 /** Does anything beside the empty-suite report say something else failed? */
 function failsBesideEmptySuite(plain: string): boolean {
@@ -329,7 +391,7 @@ function failsBesideEmptySuite(plain: string): boolean {
         .split(/\r?\n/)
         .some(
             line =>
-                !TEST_TITLE_LINE_RE.test(line)
+                !QUIET_TEST_ROW_RE.test(line)
                 && (FAILURE_COUNT_RE.test(line) || FAILURE_LINE_RE.test(line))
         )
 }

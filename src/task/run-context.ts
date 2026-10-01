@@ -29,6 +29,7 @@ import type {SpawnFn} from '../shared/child-process.js'
 import {makeGit} from '../shared/git-runner.js'
 import {
     classifyCommandRun,
+    confirmRed,
     spawnCommand,
     type CommandRun,
     type CommandRunner
@@ -399,10 +400,9 @@ export class RunContext {
             const label = spec.label
             const knownHere = spec.cwd === this.cwd ? known : null
             known = null
-            if (label === undefined) return base(spec)
             const signal = spec.signal ?? this._signal
             const hash = knownHere ?? (await treeHash(spec.cwd, signal ? {signal} : {}))
-            if (hash === null) return base(spec)
+            if (label === undefined || hash === null) return confirmRed(base, spec, hash)
             const at = `${spec.cwd}\n${hash}`
             if (this._checkRuns?.tree !== at) this._checkRuns = {tree: at, runs: new Map()}
             const runs = this._checkRuns.runs
@@ -415,7 +415,8 @@ export class RunContext {
                     return earlier.label === label ? run : {...run, ranAs: earlier.label}
                 }
             }
-            const fresh = {label, run: base(spec)}
+            // A cached red answers every later ask on this tree, so it must be a confirmed one.
+            const fresh = {label, run: confirmRed(base, spec, hash)}
             runs.set(key, fresh)
             const run = await fresh.run.catch((e: unknown) => {
                 runs.delete(key)

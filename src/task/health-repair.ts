@@ -23,7 +23,7 @@
  */
 import type {HealthSignal} from './health-baseline.js'
 import {isHealthRed, type HealthCommandResult} from './repo-health-check.js'
-import {reportedSuffix} from './command-run.js'
+import {isQuietTestRow, reportedSuffix} from './command-run.js'
 import {parseRepairTitleFile} from './root-cause-repair.js'
 import {failClassOfReason, isHealthClass} from './verify-work.js'
 
@@ -92,9 +92,12 @@ export function healthReds(
         .map((failing): HealthRed => {
             const files: string[] = []
             if (tracked) {
-                for (const m of (failing.output ?? health.output ?? '').matchAll(PATH_TOKEN_RE)) {
-                    const rel = resolveTracked(m[0], cwd, tracked)
-                    if (rel !== null && !files.includes(rel)) files.push(rel)
+                const lines = (failing.output ?? health.output ?? '').split('\n')
+                for (const line of lines.filter(l => !isQuietTestRow(l))) {
+                    for (const m of line.matchAll(PATH_TOKEN_RE)) {
+                        const rel = resolveTracked(m[0], cwd, tracked)
+                        if (rel !== null && !files.includes(rel)) files.push(rel)
+                    }
                 }
             }
             return {

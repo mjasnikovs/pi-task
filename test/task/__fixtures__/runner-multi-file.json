@@ -1,0 +1,198 @@
+{
+ "captured": "2026-10-01, one real run per entry: three test files (alpha passes, beta has one failing test, gamma has a skip); the scratch path is rewritten to /work",
+ "runs": [
+  {
+   "what": "bun",
+   "version": "bun 1.3.14",
+   "command": "bun test",
+   "status": 1,
+   "stdout": "bun test v1.3.14 (0d9b296a)\n",
+   "stderr": "\ntest/beta.test.ts:\nerror: expect(received).toBe(expected)\n\nExpected: 3\nReceived: 2\n\n(fail) beta breaks [0.06ms]\n\n 4 pass\n 1 skip\n 1 fail\n 5 expect() calls\nRan 6 tests across 3 files. [9.00ms]\n",
+   "tracked": [
+    "test/alpha.test.ts",
+    "test/beta.test.ts",
+    "test/gamma.test.ts"
+   ],
+   "failing": "test/beta.test.ts"
+  },
+  {
+   "what": "bun agent",
+   "version": "bun 1.3.14",
+   "command": "AGENT=1 bun test",
+   "status": 1,
+   "stdout": "bun test v1.3.14 (0d9b296a)\n",
+   "stderr": "\ntest/beta.test.ts:\nerror: expect(received).toBe(expected)\n\nExpected: 3\nReceived: 2\n\n(fail) beta breaks [0.05ms]\n\n 4 pass\n 1 skip\n 1 fail\n 5 expect() calls\nRan 6 tests across 3 files. [9.00ms]\n",
+   "tracked": [
+    "test/alpha.test.ts",
+    "test/beta.test.ts",
+    "test/gamma.test.ts"
+   ],
+   "failing": "test/beta.test.ts"
+  },
+  {
+   "what": "node spec",
+   "version": "node 24.19.0",
+   "command": "node --test --test-reporter=spec",
+   "status": 1,
+   "stdout": "✔ alpha adds (0.618321ms)\n✔ alpha keeps (0.12833ms)\n✔ beta ok (0.79861ms)\n✖ beta breaks (0.77888ms)\n✔ gamma ok (0.61909ms)\n﹣ gamma later (0.10847ms) # SKIP\nℹ tests 6\nℹ suites 0\nℹ pass 4\nℹ fail 1\nℹ cancelled 0\nℹ skipped 1\nℹ todo 0\nℹ duration_ms 58.423526\n\n✖ failing tests:\n\ntest at test/beta.test.mjs:3:1\n✖ beta breaks (0.77888ms)\n  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:\n  \n  2 !== 3\n  \n      at TestContext.<anonymous> (file:///work/test/beta.test.mjs:3:34)\n      at Test.runInAsyncScope (node:async_hooks:227:14)\n      at Test.run (node:internal/test_runner/test:1382:25)\n      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)\n      at Test.postRun (node:internal/test_runner/test:1522:19)\n      at Test.run (node:internal/test_runner/test:1447:12)\n      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {\n    generatedMessage: true,\n    code: 'ERR_ASSERTION',\n    actual: 2,\n    expected: 3,\n    operator: 'strictEqual',\n    diff: 'simple'\n  }\n",
+   "stderr": "",
+   "tracked": [
+    "test/alpha.test.mjs",
+    "test/beta.test.mjs",
+    "test/gamma.test.mjs"
+   ],
+   "failing": "test/beta.test.mjs"
+  },
+  {
+   "what": "node tap",
+   "version": "node 24.19.0",
+   "command": "node --test --test-reporter=tap",
+   "status": 1,
+   "stdout": "TAP version 13\n# Subtest: alpha adds\nok 1 - alpha adds\n  ---\n  duration_ms: 0.631521\n  type: 'test'\n  ...\n# Subtest: alpha keeps\nok 2 - alpha keeps\n  ---\n  duration_ms: 0.12396\n  type: 'test'\n  ...\n# Subtest: beta ok\nok 3 - beta ok\n  ---\n  duration_ms: 0.613201\n  type: 'test'\n  ...\n# Subtest: beta breaks\nnot ok 4 - beta breaks\n  ---\n  duration_ms: 0.69804\n  type: 'test'\n  location: '/work/test/beta.test.mjs:3:1'\n  failureType: 'testCodeFailure'\n  error: |-\n    Expected values to be strictly equal:\n    \n    2 !== 3\n    \n  code: 'ERR_ASSERTION'\n  name: 'AssertionError'\n  expected: 3\n  actual: 2\n  operator: 'strictEqual'\n  stack: |-\n    TestContext.<anonymous> (file:///work/test/beta.test.mjs:3:34)\n    Test.runInAsyncScope (node:async_hooks:227:14)\n    Test.run (node:internal/test_runner/test:1382:25)\n    Test.processPendingSubtests (node:internal/test_runner/test:960:18)\n    Test.postRun (node:internal/test_runner/test:1522:19)\n    Test.run (node:internal/test_runner/test:1447:12)\n    async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3)\n  ...\n# Subtest: gamma ok\nok 5 - gamma ok\n  ---\n  duration_ms: 0.62264\n  type: 'test'\n  ...\n# Subtest: gamma later\nok 6 - gamma later # SKIP\n  ---\n  duration_ms: 0.108841\n  type: 'test'\n  ...\n1..6\n# tests 6\n# suites 0\n# pass 4\n# fail 1\n# cancelled 0\n# skipped 1\n# todo 0\n# duration_ms 56.620795\n",
+   "stderr": "",
+   "tracked": [
+    "test/alpha.test.mjs",
+    "test/beta.test.mjs",
+    "test/gamma.test.mjs"
+   ],
+   "failing": "test/beta.test.mjs"
+  },
+  {
+   "what": "node dot",
+   "version": "node 24.19.0",
+   "command": "node --test --test-reporter=dot",
+   "status": 1,
+   "stdout": "...X..\n\nFailed tests:\n\n✖ beta breaks (0.701871ms)\n  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:\n  \n  2 !== 3\n  \n      at TestContext.<anonymous> (file:///work/test/beta.test.mjs:3:34)\n      at Test.runInAsyncScope (node:async_hooks:227:14)\n      at Test.run (node:internal/test_runner/test:1382:25)\n      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)\n      at Test.postRun (node:internal/test_runner/test:1522:19)\n      at Test.run (node:internal/test_runner/test:1447:12)\n      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {\n    generatedMessage: true,\n    code: 'ERR_ASSERTION',\n    actual: 2,\n    expected: 3,\n    operator: 'strictEqual',\n    diff: 'simple'\n  }\n",
+   "stderr": "",
+   "tracked": [
+    "test/alpha.test.mjs",
+    "test/beta.test.mjs",
+    "test/gamma.test.mjs"
+   ],
+   "failing": "test/beta.test.mjs"
+  },
+  {
+   "what": "deno",
+   "version": "deno 2.9.6",
+   "command": "deno test test/",
+   "status": 1,
+   "stdout": "\u001b[0m\u001b[38;5;245mrunning 2 tests from ./test/alpha_test.ts\u001b[0m\nalpha adds ... \u001b[0m\u001b[32mok\u001b[0m \u001b[0m\u001b[38;5;245m(524µs)\u001b[0m\nalpha keeps ... \u001b[0m\u001b[32mok\u001b[0m \u001b[0m\u001b[38;5;245m(39µs)\u001b[0m\n\u001b[0m\u001b[38;5;245mrunning 2 tests from ./test/beta_test.ts\u001b[0m\nbeta ok ... \u001b[0m\u001b[32mok\u001b[0m \u001b[0m\u001b[38;5;245m(486µs)\u001b[0m\nbeta breaks ... \u001b[0m\u001b[31mFAILED\u001b[0m \u001b[0m\u001b[38;5;245m(17ms)\u001b[0m\n\u001b[0m\u001b[38;5;245mrunning 2 tests from ./test/gamma_test.ts\u001b[0m\ngamma ok ... \u001b[0m\u001b[32mok\u001b[0m \u001b[0m\u001b[38;5;245m(552µs)\u001b[0m\ngamma later ... \u001b[0m\u001b[33mignored\u001b[0m \u001b[0m\u001b[38;5;245m(0ms)\u001b[0m\n\n\u001b[0m\u001b[1m\u001b[37m\u001b[41m ERRORS \u001b[0m\n\nbeta breaks \u001b[0m\u001b[38;5;245m=> ./test/beta_test.ts:3:6\u001b[0m\n\u001b[0m\u001b[1m\u001b[31merror\u001b[0m: AssertionError: Values are not equal.\n\n\n    \u001b[90m\u001b[1m[Diff]\u001b[22m\u001b[39m \u001b[31m\u001b[1mActual\u001b[22m\u001b[39m / \u001b[32m\u001b[1mExpected\u001b[22m\u001b[39m\n\n\n\u001b[31m\u001b[1m-   2\u001b[22m\u001b[39m\n\u001b[32m\u001b[1m+   3\u001b[22m\u001b[39m\n\n  throw new AssertionError(message);\n\u001b[0m\u001b[31m        ^\u001b[0m\n    at \u001b[0m\u001b[1m\u001b[3massertEquals\u001b[0m (\u001b[0m\u001b[36mhttps://jsr.io/@std/assert/1.0.19/equals.ts\u001b[0m:\u001b[0m\u001b[33m67\u001b[0m:\u001b[0m\u001b[33m9\u001b[0m)\n    at \u001b[0m\u001b[2m\u001b[38;5;245mfile:///work/\u001b[0m\u001b[0m\u001b[36mtest/beta_test.ts\u001b[0m:\u001b[0m\u001b[33m3\u001b[0m:\u001b[0m\u001b[33m32\u001b[0m\n\n\u001b[0m\u001b[1m\u001b[37m\u001b[41m FAILURES \u001b[0m\n\nbeta breaks \u001b[0m\u001b[38;5;245m=> ./test/beta_test.ts:3:6\u001b[0m\n\n\u001b[0m\u001b[31mFAILED\u001b[0m | 4 passed | 1 failed | 1 ignored \u001b[0m\u001b[38;5;245m(90ms)\u001b[0m\n\n",
+   "stderr": "\u001b[0m\u001b[32mCheck\u001b[0m test/alpha_test.ts\n\u001b[0m\u001b[32mCheck\u001b[0m test/beta_test.ts\n\u001b[0m\u001b[32mCheck\u001b[0m test/gamma_test.ts\n\u001b[0m\u001b[1m\u001b[31merror\u001b[0m: Test failed\n",
+   "tracked": [
+    "test/alpha_test.ts",
+    "test/beta_test.ts",
+    "test/gamma_test.ts"
+   ],
+   "failing": "test/beta_test.ts"
+  },
+  {
+   "what": "jest",
+   "version": "jest 30.5.2",
+   "command": "jest",
+   "status": 1,
+   "stdout": "",
+   "stderr": "FAIL test/beta.test.js\n  ● beta breaks\n\n    expect(received).toBe(expected) // Object.is equality\n\n    Expected: 3\n    Received: 2\n\n      1 |\n      2 | test('beta ok', () => expect(2).toBe(2))\n    > 3 | test('beta breaks', () => expect(1 + 1).toBe(3))\n        |                                         ^\n      4 |\n\n      at Object.toBe (test/beta.test.js:3:41)\n\n\nTest Suites: 1 failed, 2 passed, 3 total\nTests:       1 failed, 1 skipped, 4 passed, 6 total\nSnapshots:   0 total\nTime:        0.214 s, estimated 1 s\nRan all test suites.\n",
+   "tracked": [
+    "test/alpha.test.js",
+    "test/beta.test.js",
+    "test/gamma.test.js"
+   ],
+   "failing": "test/beta.test.js"
+  },
+  {
+   "what": "vitest",
+   "version": "vitest 4.1.11",
+   "command": "vitest run",
+   "status": 1,
+   "stdout": "\n RUN  v4.1.11 /work\n\n ❯ test/beta.test.js (2 tests | 1 failed) 7ms\n   × beta breaks 5ms\n\n Test Files  1 failed | 2 passed (3)\n      Tests  1 failed | 4 passed | 1 skipped (6)\n   Start at  08:29:40\n   Duration  135ms (transform 39ms, setup 0ms, import 63ms, tests 12ms, environment 0ms)\n\n",
+   "stderr": "\n⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯\n\n FAIL  test/beta.test.js > beta breaks\nAssertionError: expected 2 to be 3 // Object.is equality\n\n- Expected\n+ Received\n\n- 3\n+ 2\n\n ❯ test/beta.test.js:3:41\n      1| import {test, expect} from 'vitest'\n      2| test('beta ok', () => expect(2).toBe(2))\n      3| test('beta breaks', () => expect(1 + 1).toBe(3))\n       |                                         ^\n      4|\n\n⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯\n\n",
+   "tracked": [
+    "test/alpha.test.js",
+    "test/beta.test.js",
+    "test/gamma.test.js"
+   ],
+   "failing": "test/beta.test.js"
+  },
+  {
+   "what": "mocha",
+   "version": "mocha 12.0.3",
+   "command": "mocha 'test/*.test.cjs'",
+   "status": 1,
+   "stdout": "\n\n  ✔ alpha adds\n  ✔ alpha keeps\n  ✔ beta ok\n  1) beta breaks\n  ✔ gamma ok\n  - gamma later\n\n  4 passing (3ms)\n  1 pending\n  1 failing\n\n  1) beta breaks:\n\n      AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:\n\n2 !== 3\n\n      + expected - actual\n\n      -2\n      +3\n      \n      at Context.<anonymous> (test/beta.test.cjs:3:32)\n      at process.processImmediate (node:internal/timers:534:21)\n\n\n\n",
+   "stderr": "",
+   "tracked": [
+    "test/alpha.test.cjs",
+    "test/beta.test.cjs",
+    "test/gamma.test.cjs"
+   ],
+   "failing": "test/beta.test.cjs"
+  },
+  {
+   "what": "playwright",
+   "version": "@playwright/test 1.61.1",
+   "command": "playwright test",
+   "status": 1,
+   "stdout": "\nRunning 6 tests using 3 workers\n\n  ✓  1 tests/alpha.spec.ts:2:1 › alpha adds (4ms)\n  ✓  2 tests/gamma.spec.ts:2:1 › gamma ok (4ms)\n  -  5 tests/gamma.spec.ts:3:6 › gamma later\n  ✓  4 tests/alpha.spec.ts:3:1 › alpha keeps (1ms)\n  ✓  3 tests/beta.spec.ts:2:1 › beta ok (4ms)\n  ✘  6 tests/beta.spec.ts:3:1 › beta breaks (3ms)\n\n\n  1) tests/beta.spec.ts:3:1 › beta breaks ──────────────────────────────────────────────────────────\n\n    Error: expect(received).toBe(expected) // Object.is equality\n\n    Expected: 3\n    Received: 2\n\n      1 | import {test, expect} from '@playwright/test'\n      2 | test('beta ok', () => expect(2).toBe(2))\n    > 3 | test('beta breaks', () => expect(1 + 1).toBe(3))\n        |                                         ^\n      4 |\n        at /work/tests/beta.spec.ts:3:41\n\n    Error Context: ../test-results/tests-beta-beta-breaks/error-context.md\n\n  1 failed\n    tests/beta.spec.ts:3:1 › beta breaks ───────────────────────────────────────────────────────────\n  1 skipped\n  4 passed (419ms)\n",
+   "stderr": "(node:1459481) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.\n(Use `node --trace-warnings ...` to show where the warning was created)\n(node:1459482) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.\n(Use `node --trace-warnings ...` to show where the warning was created)\n(node:1459488) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.\n(Use `node --trace-warnings ...` to show where the warning was created)\n",
+   "tracked": [
+    "tests/alpha.spec.ts",
+    "tests/beta.spec.ts",
+    "tests/gamma.spec.ts"
+   ],
+   "failing": "tests/beta.spec.ts"
+  },
+  {
+   "what": "cargo",
+   "version": "cargo 1.98.1",
+   "command": "cargo test --quiet 2>&1; exit $?",
+   "status": 101,
+   "stdout": "\nrunning 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n\nrunning 2 tests\n..\ntest result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n\nrunning 2 tests\n. 1/2\nbeta_breaks --- FAILED\n\nfailures:\n\n---- beta_breaks stdout ----\n\nthread 'beta_breaks' (1459526) panicked at tests/beta.rs:4:20:\nassertion `left == right` failed\n  left: 2\n right: 3\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n\n\nfailures:\n    beta_breaks\n\ntest result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\nerror: test failed, to rerun pass `--test beta`\n",
+   "stderr": "",
+   "tracked": [
+    "src/lib.rs",
+    "tests/alpha.rs",
+    "tests/beta.rs",
+    "tests/gamma.rs"
+   ],
+   "failing": "tests/beta.rs"
+  },
+  {
+   "what": "cargo verbose",
+   "version": "cargo 1.98.1",
+   "command": "cargo test",
+   "status": 101,
+   "stdout": "\nrunning 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n\nrunning 2 tests\ntest alpha_adds ... ok\ntest alpha_keeps ... ok\n\ntest result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n\nrunning 2 tests\ntest beta_ok ... ok\ntest beta_breaks ... FAILED\n\nfailures:\n\n---- beta_breaks stdout ----\n\nthread 'beta_breaks' (1459536) panicked at tests/beta.rs:4:20:\nassertion `left == right` failed\n  left: 2\n right: 3\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n\n\nfailures:\n    beta_breaks\n\ntest result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n",
+   "stderr": "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.00s\n     Running unittests src/lib.rs (target/debug/deps/corpus-87bd11ca2a40e05e)\n     Running tests/alpha.rs (target/debug/deps/alpha-47e77da642e33d31)\n     Running tests/beta.rs (target/debug/deps/beta-f929b9b699d2cee4)\nerror: test failed, to rerun pass `--test beta`\n",
+   "tracked": [
+    "src/lib.rs",
+    "tests/alpha.rs",
+    "tests/beta.rs",
+    "tests/gamma.rs"
+   ],
+   "failing": "tests/beta.rs"
+  },
+  {
+   "what": "playwright, 60 tests",
+   "version": "@playwright/test 1.61.1",
+   "command": "playwright test",
+   "status": 1,
+   "stdout": "\nRunning 60 tests using 8 workers\n\n  ✓   1 tests/a.spec.ts:2:1 › a renders 1 (7ms)\n  ✓   2 tests/d.spec.ts:2:1 › d renders 1 (7ms)\n  ✓   9 tests/a.spec.ts:3:1 › a renders 2 (2ms)\n  ✓  10 tests/d.spec.ts:3:1 › d renders 2 (2ms)\n  ✓   3 tests/f.spec.ts:2:1 › f renders 1 (5ms)\n  ✓   4 tests/h.spec.ts:2:1 › h renders 1 (7ms)\n  ✓   5 tests/c.spec.ts:2:1 › c renders 1 (6ms)\n  ✓  11 tests/a.spec.ts:4:1 › a renders 3 (2ms)\n  ✓  13 tests/f.spec.ts:3:1 › f renders 2 (1ms)\n  ✓   6 tests/g.spec.ts:2:1 › g renders 1 (5ms)\n  ✓  12 tests/d.spec.ts:4:1 › d renders 3 (2ms)\n  ✓   8 tests/b.spec.ts:2:1 › b renders 1 (7ms)\n  ✓  14 tests/h.spec.ts:3:1 › h renders 2 (1ms)\n  ✓   7 tests/e.spec.ts:2:1 › e renders 1 (6ms)\n  ✓  15 tests/c.spec.ts:3:1 › c renders 2 (1ms)\n  ✓  17 tests/f.spec.ts:4:1 › f renders 3 (1ms)\n  ✓  16 tests/a.spec.ts:5:1 › a renders 4 (2ms)\n  ✓  19 tests/d.spec.ts:5:1 › d renders 4 (1ms)\n  ✓  20 tests/b.spec.ts:3:1 › b renders 2 (1ms)\n  ✓  18 tests/g.spec.ts:3:1 › g renders 2 (2ms)\n  ✓  22 tests/e.spec.ts:3:1 › e renders 2 (1ms)\n  ✓  23 tests/c.spec.ts:4:1 › c renders 3 (1ms)\n  ✓  24 tests/f.spec.ts:5:1 › f renders 4 (1ms)\n  ✓  27 tests/b.spec.ts:4:1 › b renders 3 (1ms)\n  ✘  21 tests/h.spec.ts:4:1 › h flips 3 (4ms)\n  ✓  25 tests/a.spec.ts:6:1 › a renders 5 (1ms)\n  ✓  26 tests/d.spec.ts:6:1 › d renders 5 (1ms)\n  ✓  28 tests/g.spec.ts:4:1 › g renders 3 (2ms)\n  ✓  29 tests/e.spec.ts:4:1 › e renders 3 (1ms)\n  ✓  30 tests/c.spec.ts:5:1 › c renders 4 (1ms)\n  ✓  32 tests/b.spec.ts:5:1 › b renders 4 (1ms)\n  ✓  34 tests/e.spec.ts:5:1 › e renders 4 (1ms)\n  ✓  31 tests/f.spec.ts:6:1 › f renders 5 (1ms)\n  ✓  35 tests/j.spec.ts:2:1 › j renders 1 (1ms)\n  ✓  36 tests/i.spec.ts:2:1 › i renders 1 (1ms)\n  ✓  33 tests/g.spec.ts:5:1 › g renders 4 (1ms)\n  ✓  37 tests/c.spec.ts:6:1 › c renders 5 (1ms)\n  ✓  38 tests/b.spec.ts:6:1 › b renders 5 (1ms)\n  ✓  40 tests/j.spec.ts:3:1 › j renders 2 (1ms)\n  ✓  43 tests/k.spec.ts:2:1 › k renders 1 (1ms)\n  ✓  41 tests/i.spec.ts:3:1 › i renders 2 (1ms)\n  ✓  39 tests/e.spec.ts:6:1 › e renders 5 (1ms)\n  ✓  42 tests/g.spec.ts:6:1 › g renders 5 (1ms)\n  ✓  44 tests/l.spec.ts:2:1 › l renders 1 (1ms)\n  ✓  45 tests/j.spec.ts:4:1 › j renders 3 (1ms)\n  ✓  47 tests/i.spec.ts:4:1 › i renders 3 (1ms)\n  ✓  46 tests/k.spec.ts:3:1 › k renders 2 (1ms)\n  ✓  49 tests/j.spec.ts:5:1 › j renders 4 (1ms)\n  ✓  48 tests/l.spec.ts:3:1 › l renders 2 (1ms)\n  ✓  50 tests/i.spec.ts:5:1 › i renders 4 (1ms)\n  ✓  52 tests/j.spec.ts:6:1 › j renders 5 (1ms)\n  ✓  51 tests/k.spec.ts:4:1 › k renders 3 (1ms)\n  ✓  54 tests/i.spec.ts:6:1 › i renders 5 (1ms)\n  ✓  53 tests/l.spec.ts:4:1 › l renders 3 (1ms)\n  ✓  55 tests/k.spec.ts:5:1 › k renders 4 (1ms)\n  ✓  56 tests/l.spec.ts:5:1 › l renders 4 (1ms)\n  ✓  57 tests/k.spec.ts:6:1 › k renders 5 (1ms)\n  ✓  58 tests/l.spec.ts:6:1 › l renders 5 (0ms)\n  ✓  59 tests/h.spec.ts:5:1 › h renders 4 (4ms)\n  ✓  60 tests/h.spec.ts:6:1 › h renders 5 (1ms)\n\n\n  1) tests/h.spec.ts:4:1 › h flips 3 ───────────────────────────────────────────────────────────────\n\n    Error: expect(received).toBe(expected) // Object.is equality\n\n    Expected: 1\n    Received: undefined\n\n      2 | test('h renders 1', () => expect(1).toBe(1))\n      3 | test('h renders 2', () => expect(2).toBe(2))\n    > 4 | test('h flips 3', async () => { let seen: number | undefined; setTimeout(() => { seen = 1 }, 5); expect(seen).toBe(1) })\n        |                                                                                                               ^\n      5 | test('h renders 4', () => expect(4).toBe(4))\n      6 | test('h renders 5', () => expect(5).toBe(5))\n      7 |\n        at /work/tests/h.spec.ts:4:111\n\n    Error Context: ../test-results/tests-h-h-flips-3/error-context.md\n\n  1 failed\n    tests/h.spec.ts:4:1 › h flips 3 ────────────────────────────────────────────────────────────────\n  59 passed (984ms)\n",
+   "stderr": "",
+   "tracked": [
+    "tests/a.spec.ts",
+    "tests/b.spec.ts",
+    "tests/c.spec.ts",
+    "tests/d.spec.ts",
+    "tests/e.spec.ts",
+    "tests/f.spec.ts",
+    "tests/g.spec.ts",
+    "tests/h.spec.ts",
+    "tests/i.spec.ts",
+    "tests/j.spec.ts",
+    "tests/k.spec.ts",
+    "tests/l.spec.ts"
+   ],
+   "failing": "tests/h.spec.ts"
+  }
+ ]
+}

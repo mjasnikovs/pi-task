@@ -30,7 +30,8 @@ import {
     classifyCommandRun,
     leadingBin,
     reportedSuffix,
-    spawnCommand,
+    spawnCheck,
+    type CommandRun,
     type CommandRunner
 } from './command-run.js'
 import {resolveRunner, runnerEnv} from './runner-resolve.js'
@@ -99,7 +100,7 @@ export async function runGateEvidence(deps: EvidenceRunDeps): Promise<GateEviden
     if (deps.commands.length === 0) return {commands: []}
     const dir = evidenceDir(deps.cwd, deps.runId)
     await fsp.mkdir(dir, {recursive: true})
-    const run = deps.run ?? spawnCommand
+    const run = deps.run ?? spawnCheck
     const commands: EvidenceCommand[] = []
     for (const [i, v] of deps.commands.entries()) {
         const outputPath = path.join(dir, `${i + 1}.out`)
@@ -126,7 +127,7 @@ export async function runGateEvidence(deps: EvidenceRunDeps): Promise<GateEviden
             evidenceFile(
                 r.ranAs ?? v.cmd,
                 gap === undefined ?
-                    `exit ${r.status}${reportedSuffix({report})}`
+                    `exit ${r.status}${reportedSuffix({report})}${flakeSuffix(r)}`
                 :   `skipped — ${gap}`,
                 r.stdout,
                 r.stderr
@@ -144,6 +145,12 @@ export async function runGateEvidence(deps: EvidenceRunDeps): Promise<GateEviden
         })
     }
     return {commands}
+}
+
+function flakeSuffix(r: CommandRun): string {
+    return r.flakedWith === undefined ?
+            ''
+        :   ` (a first run of this tree ${r.flakedWith}; this re-run passed)`
 }
 
 /** One prompt line per command: what ran, how it ended, and the file the child

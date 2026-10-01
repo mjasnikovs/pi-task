@@ -1,13 +1,18 @@
 import {test, expect, describe} from 'bun:test'
-import {readFileSync} from 'node:fs'
+import {spawnSync} from 'node:child_process'
+import {readFileSync, writeFileSync} from 'node:fs'
 import * as path from 'node:path'
 import {
     classifyCommandRun,
+    confirmingRunner,
+    isQuietTestRow,
     outputTail,
     INFRA_GAP_OUTPUT_RE,
     type CommandRun,
-    type CommandGapId
+    type CommandGapId,
+    type CommandSpec
 } from '../../src/task/command-run.js'
+import {tmpDir} from '../test-utils/tmp-dir.js'
 
 const ran = (over: Partial<CommandRun> = {}): CommandRun => ({
     failedToStart: false,
@@ -451,4 +456,100 @@ describe('outputTail', () => {
         expect(tail.startsWith('…')).toBe(true)
         expect(tail.length).toBe(101)
     })
+})
+
+describe('confirmingRunner — a red is seen twice before it is believed', () => {
+    const repo = (): string => {
+        const cwd = tmpDir('pi-confirm-')
+        spawnSync('git', ['init', '-q'], {cwd})
+        writeFileSync(path.join(cwd, 'a.ts'), 'export const a = 1\n')
+        return cwd
+    }
+    const spec = (cwd: string, signal?: AbortSignal): CommandSpec => ({
+        cwd,
+        bin: 'sh',
+        args: [],
+        timeoutMs: 1000,
+        ...(signal === undefined ? {} : {signal})
+    })
+    const scripted = (...runs: CommandRun[]) => {
+        let calls = 0
+        const run = () => Promise.resolve(runs[Math.min(calls++, runs.length - 1)])
+        return {run, calls: () => calls}
+    }
+    const failed = ran({status: 1, stdout: '54 passed\n1 failed'})
+
+    // mx5-n TASK_0055: one component run of 55 failed, and 13 later runs of the same tree passed.
+    test('a failure the re-run does not repeat is a pass that remembers it', async () => {
+        const s = scripted(failed, ran({stdout: '55 passed'}))
+        const r = await confirmingRunner(s.run)(spec(repo()))
+        expect(classifyCommandRun(r).outcome).toBe('pass')
+        expect(r.flakedWith).toBe('exited 1')
+        expect(s.calls()).toBe(2)
+    })
+
+    test('a failure the re-run repeats is the red, as the re-run reported it', async () => {
+        const again = ran({status: 2, stdout: 'still red'})
+        const s = scripted(failed, again)
+        expect(await confirmingRunner(s.run)(spec(repo()))).toEqual(again)
+        expect(s.calls()).toBe(2)
+    })
+
+    test('a re-run that observed nothing leaves the first failure standing', async () => {
+        const s = scripted(failed, ran({status: null}))
+        expect(await confirmingRunner(s.run)(spec(repo()))).toEqual(failed)
+    })
+
+    test('a pass and a gap run once', async () => {
+        for (const only of [
+            ran(),
+            ran({status: null}),
+            ran({status: 127, stderr: 'x: command not found'}),
+            ran({status: 1, stdout: 'No tests found'})
+        ]) {
+            const s = scripted(only)
+            expect(await confirmingRunner(s.run)(spec(repo()))).toEqual(only)
+            expect(s.calls()).toBe(1)
+        }
+    })
+
+    // A formatter's write-then-diff fails on the tree it was given and passes on its own output.
+    test('a first run that moved the tree is not run again', async () => {
+        const cwd = repo()
+        let calls = 0
+        const run = () => {
+            if (calls++ === 0) writeFileSync(path.join(cwd, 'a.ts'), 'export const a = 2\n')
+            return Promise.resolve(calls === 1 ? failed : ran())
+        }
+        expect(await confirmingRunner(run)(spec(cwd))).toEqual(failed)
+        expect(calls).toBe(1)
+    })
+
+    test('a cancel between the runs keeps the first failure', async () => {
+        const abort = new AbortController()
+        let calls = 0
+        const run = () => {
+            calls++
+            abort.abort()
+            return Promise.resolve(failed)
+        }
+        expect(await confirmingRunner(run)(spec(repo(), abort.signal))).toEqual(failed)
+        expect(calls).toBe(1)
+    })
+
+    test('a flake remembers how the first run failed, even on exit 0', async () => {
+        const s = scripted(ran({stdout: '54 pass\n1 fail'}), ran({stdout: '55 pass'}))
+        const r = await confirmingRunner(s.run)(spec(repo()))
+        expect(r.flakedWith).toBe('exited 0 but reported "1 fail"')
+    })
+
+    test('outside a repository nothing says the tree held still, so a red stands', async () => {
+        const s = scripted(failed, ran())
+        expect(await confirmingRunner(s.run)(spec(tmpDir('pi-confirm-bare-')))).toEqual(failed)
+        expect(s.calls()).toBe(1)
+    })
+})
+
+test('a quiet row ends in CR on a CRLF stream', () => {
+    expect(isQuietTestRow('Check file:///w/a_test.ts\r')).toBe(true)
 })

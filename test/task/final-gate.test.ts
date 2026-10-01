@@ -2002,3 +2002,31 @@ describe('the run cancel reaches the gate children', () => {
         for (const s of seen) expect(s).toBeUndefined()
     })
 })
+
+// A check is confirmed before a red is believed (confirmingRunner); a one-shot
+// script and a debt are not, because a second run is a second chance to pass.
+describe('a red seen once is believed where a re-run would hide it', () => {
+    const failsOnce = (): string => {
+        const stamp = path.join(tmpDir('pi-final-gate-stamp-'), 'ran')
+        return `test -f ${stamp} || { touch ${stamp}; exit 1; }`
+    }
+    const repo = (pkg: object): string => {
+        const dir = makeDir(pkg)
+        spawnSync('git', ['init', '-q'], {cwd: dir})
+        return dir
+    }
+
+    testPosix('a launch script that fails once FAILs the gate', async () => {
+        // A half-applied migrate passes its re-run on the rows its first run wrote.
+        const dir = repo({scripts: {migrate: failsOnce()}})
+        await appendDeclaredScripts(dir, ['migrate'])
+        const out = await runFinalIntegrationGate(dir)
+        expect(out.ok).toBe(false)
+        expect(out.reason).toContain('launch script: `bun run migrate` exited 1')
+    })
+
+    testPosix('a debt VERIFY line that fails once stays open', async () => {
+        const dir = repo({})
+        expect((await runVerifyCommandLine(dir, failsOnce(), 10_000)).outcome).toBe('fail')
+    })
+})

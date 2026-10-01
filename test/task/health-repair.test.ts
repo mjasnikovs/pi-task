@@ -9,7 +9,9 @@ import {
     owingTask,
     planCoversHealthRed
 } from '../../src/task/health-repair.js'
-import type {HealthOutcome} from '../../src/task/repo-health-check.js'
+import {captureHealthOutput, type HealthOutcome} from '../../src/task/repo-health-check.js'
+import {readFileSync} from 'node:fs'
+import * as path from 'node:path'
 
 const CWD = '/home/u/proj'
 const TRACKED = ['src/client/api.ts', 'src/server/index.ts', 'test/api.test.ts', 'go/pkg/x.go']
@@ -486,4 +488,36 @@ describe('buildHealthRepairFence', () => {
         const fence = buildHealthRepairFence({command: 'bun run test', files: []})
         expect(fence).toContain("Running the project's own install or build is allowed")
     })
+})
+
+describe('a red test run names only the files that failed', () => {
+    type Run = {
+        what: string
+        status: number
+        stdout: string
+        stderr: string
+        tracked: string[]
+        failing: string
+    }
+    const {runs} = JSON.parse(
+        readFileSync(path.join(import.meta.dir, '__fixtures__', 'runner-multi-file.json'), 'utf8')
+    ) as {runs: Run[]}
+
+    // mx5-n TASK_0056: a 55-test component run with one failure was blamed on all 17
+    // spec files its pass rows named, and the capture held no failure at all.
+    for (const r of runs) {
+        test(`${r.what}: the failing file, and no file that only passed`, () => {
+            const output = captureHealthOutput(r.stdout, r.stderr)
+            const health: HealthOutcome = {
+                ok: false,
+                reason: 'red',
+                ecosystem: 'node',
+                commands: [
+                    {cmd: 'test', outcome: 'fail', exitCode: r.status, kind: 'test', output}
+                ],
+                output
+            }
+            expect(healthReds(health, '/work', r.tracked)[0]?.files).toEqual([r.failing])
+        })
+    }
 })

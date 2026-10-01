@@ -17,6 +17,7 @@ import {withTmpTaskDir} from '../test-utils/tmp-task-dir.js'
 import {writeTaskFile, readSection} from '../../src/task/task-io.js'
 import {phaseVerifyTooling} from '../../src/task/phases.js'
 import type {PhaseDeps} from '../../src/task/child-runner.js'
+import type {CommandRun, CommandSpec} from '../../src/task/command-run.js'
 import {
     manifestHash,
     openRunContext,
@@ -285,5 +286,54 @@ describe('the open run', () => {
         expect(a.runId.length).toBeGreaterThan(0)
         expect(new RunContext({cwd: '/x'}).runId).not.toBe(a.runId)
         expect(new RunContext({cwd: '/x', runId: 'resumed'}).runId).toBe('resumed')
+    })
+})
+
+describe('checkRunner — a cached red is a confirmed one', () => {
+    const git = (cwd: string, ...args: string[]): string =>
+        spawnSync('git', args, {cwd, encoding: 'utf8'}).stdout
+    const run = (status: number, stdout: string): CommandRun => ({
+        failedToStart: false,
+        status,
+        stdout,
+        stderr: ''
+    })
+    const spec = (cwd: string): CommandSpec => ({
+        cwd,
+        bin: 'sh',
+        args: [],
+        timeoutMs: 1000,
+        label: 'bun run test:ct'
+    })
+
+    // mx5-n TASK_0055: one 54/55 component run was replayed to the checkpoint, the
+    // repair's own gate and the next baseline, while every real run of that tree passed.
+    test('a red the re-run does not repeat is never replayed to a later gate', async () => {
+        await withTmpTaskDir(async cwd => {
+            git(cwd, 'init', '-q')
+            fs.writeFileSync(nodePath.join(cwd, 'a.ts'), 'export const a = 1\n')
+            const rc = new RunContext({cwd})
+            let calls = 0
+            const base = () =>
+                Promise.resolve(++calls === 1 ? run(1, '1 failed') : run(0, '55 passed'))
+            const first = await rc.checkRunner(base)(spec(cwd))
+            const later = await rc.checkRunner(base)(spec(cwd))
+            expect([first.status, later.status]).toEqual([0, 0])
+            expect(first.flakedWith).toBe('exited 1')
+            expect(calls).toBe(2)
+        })
+    })
+
+    test('a red the re-run repeats is cached as red', async () => {
+        await withTmpTaskDir(async cwd => {
+            git(cwd, 'init', '-q')
+            fs.writeFileSync(nodePath.join(cwd, 'a.ts'), 'export const a = 1\n')
+            const rc = new RunContext({cwd})
+            let calls = 0
+            const base = () => Promise.resolve((calls++, run(1, '1 failed')))
+            await rc.checkRunner(base)(spec(cwd))
+            expect((await rc.checkRunner(base)(spec(cwd))).status).toBe(1)
+            expect(calls).toBe(2)
+        })
     })
 })

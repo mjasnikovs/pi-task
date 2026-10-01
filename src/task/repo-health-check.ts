@@ -39,8 +39,9 @@ import {resolveRunner, runnerEnv} from './runner-resolve.js'
 import {
     classifyCommandRun,
     EMPTY_SUITE_GAPS,
+    isQuietTestRow,
     reportedSuffix,
-    spawnCommand,
+    spawnCheck,
     type CommandGapId,
     type CommandRunner
 } from './command-run.js'
@@ -100,14 +101,23 @@ export interface HealthOutcome {
 const HEALTH_OUTPUT_MAX_LINES = 40
 const HEALTH_OUTPUT_MAX_CHARS = 4000
 
-/** Combine a failing command's stderr+stdout into a bounded, first-N-lines snippet. */
+/**
+ * Combine a failing command's stderr+stdout into a bounded, first-N-lines snippet.
+ * A runner's rows for tests that did not fail are dropped first: a component suite
+ * prints one per test before its failure summary, and forty of them filled the
+ * snippet and named every spec file but the one that failed.
+ */
 export function captureHealthOutput(stdout: string, stderr: string): string {
     const combined = [stderr, stdout]
         .map(s => (s ?? '').trim())
         .filter(s => s.length > 0)
         .join('\n')
     if (combined.length === 0) return ''
-    let snippet = combined.split('\n').slice(0, HEALTH_OUTPUT_MAX_LINES).join('\n')
+    let snippet = combined
+        .split('\n')
+        .filter(line => !isQuietTestRow(line))
+        .slice(0, HEALTH_OUTPUT_MAX_LINES)
+        .join('\n')
     if (snippet.length > HEALTH_OUTPUT_MAX_CHARS)
         snippet = `${snippet.slice(0, HEALTH_OUTPUT_MAX_CHARS)}…`
     return snippet
@@ -309,7 +319,7 @@ export async function runRepoHealthCheck(
         ...tests.cmds.map(([bin, args]) => ({bin, args, test: true}))
     ]
     if (!ecosystem || cmds.length === 0) return noCommandOutcome(ecosystem)
-    const run = opts.run ?? spawnCommand
+    const run = opts.run ?? spawnCheck
     const commands: HealthCommandResult[] = []
     for (const {bin, args, test} of cmds) {
         const cmd = `${bin} ${args.join(' ')}`
