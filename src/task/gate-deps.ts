@@ -958,34 +958,16 @@ export function finalGateFixDeps(
         ...(signal === undefined ? {} : {signal}),
         failReason,
         runChild,
-        // The gate re-run is the only arbiter of convergence, and the
-        // shrink guard's discovery is the gate's own (see final-gate.ts).
-        // The run's cancel reaches the re-run too. Without it the whole
-        // `FinalGateOptions.signal` path is inert in the shipped code.
         gate,
         discoverLabels: discoverGateCommandLabels,
         discoverBodies: discoverGateCommandBodies,
         discard: c => discardWorktreeEdits(c, signal),
-        // WRITE-GUARD STACK. This child has free bash, so it needs one.
-        // Diff capture happens at the makeGateChild seam, keyed on the
-        // child's TOOLS; the deletion guard and the probe scan
-        // reject-and-discard inside runFinalGateAutofix. The frozen-path
-        // deny (FinalFixDeps.frozenPaths/revertFrozen) is deliberately NOT
-        // wired here: per-task fences are task-SCOPED — "this task must not
-        // touch a sibling's territory" — so their union across a run can
-        // fence off a file a legitimate whole-repo fix has to touch. Wire it
-        // only when a run-GLOBAL freeze source exists, never a per-task
-        // union.
+        // No frozen-path deny: the union of per-task fences can fence off a
+        // file a whole-repo fix must touch.
         treeChanges: () => collectTreeChanges(cwd, signal),
         probeScan: () => collectAddedLines(cwd, signal).then(findProbeGaming),
-        // IGNORED-PATH CHANNEL: every write guard above reads
-        // `git status --porcelain`, which does not report ignored paths, so
-        // a pass that greens a command by writing credentials into a
-        // gitignored `.env` is structurally invisible to all of them — and
-        // the gate would certify a PASS no fresh clone can reproduce. This
-        // does not reject the write; a local `.env` is often the only way to
-        // make a check run at all. It records it, and downgrades a PASS
-        // proven to depend on it.
+        // The guards above read `git status`, blind to ignored paths. A local
+        // `.env` may be needed, so it is recorded, not rejected.
         ignoredSnapshot: () => collectIgnoredSnapshot(cwd, signal),
         ...(ignoredKnown && ignoredKnown.length > 0 ? {ignoredKnown} : {}),
         gateWithoutIgnored: paths => gatePassesWithoutIgnored(cwd, paths, gate, log),

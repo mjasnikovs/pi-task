@@ -33,7 +33,7 @@ function throwawayIndexPath(): string {
 
 /**
  * Snapshot the worktree content into a tree object. Returns null when git cannot
- * build the tree (an unborn HEAD, a non-repo cwd, a missing binary).
+ * build the tree (an unreadable HEAD, a non-repo cwd, a missing binary).
  */
 export async function worktreeTreeHash(git: GitRunner): Promise<string | null> {
     const tmpIndex = throwawayIndexPath()
@@ -42,9 +42,7 @@ export async function worktreeTreeHash(git: GitRunner): Promise<string | null> {
         // Seeded from HEAD, not empty: `add -A` into an empty index skips a tracked
         // file that matches .gitignore, so an edit to a force-added `dist/` would
         // never move the hash. An unborn HEAD has nothing tracked to lose.
-        const unborn = (await git(['rev-parse', '-q', '--verify', 'HEAD'])).exitCode !== 0
-        const seeded = await git(['read-tree', unborn ? '--empty' : 'HEAD'], env)
-        if (seeded.exitCode !== 0) return null
+        if (!(await seedIndex(git, env))) return null
         const untracked = await git(
             ['rm', '-r', '-q', '--cached', '--ignore-unmatch', '--', '.pi-tasks'],
             env
@@ -57,6 +55,14 @@ export async function worktreeTreeHash(git: GitRunner): Promise<string | null> {
     } finally {
         await fsp.rm(tmpIndex, {force: true}).catch(() => {})
     }
+}
+
+/** HEAD into the throwaway index, or nothing when HEAD is unborn. False when HEAD
+ *  exists but cannot be read: an empty seed would hash it under other rules. */
+async function seedIndex(git: GitRunner, env: Record<string, string>): Promise<boolean> {
+    if ((await git(['read-tree', 'HEAD'], env)).exitCode === 0) return true
+    const unborn = (await git(['rev-parse', '-q', '--verify', 'HEAD'])).exitCode !== 0
+    return unborn && (await git(['read-tree', '--empty'], env)).exitCode === 0
 }
 
 /** The tree object a commit-ish points at — the committed twin of the above. */

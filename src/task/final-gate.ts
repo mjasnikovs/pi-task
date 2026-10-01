@@ -634,7 +634,7 @@ export async function runFinalIntegrationGate(
     } = opts
     const tree = await judgeableTree(cwd, opts.signal)
     const judged = async (v: FinalGateOutcome): Promise<FinalGateOutcome> => {
-        const left = await judgeableTree(cwd, opts.signal)
+        const left = await judgeableTree(cwd, opts.signal, tree)
         return {
             ...v,
             ...(tree === null ? {} : {tree}),
@@ -898,9 +898,15 @@ export async function runFinalIntegrationGate(
     return await judged(tally.verdict(debts))
 }
 
-/** The worktree's hash, or null when git cannot say or a submodule would hide edits. */
-async function judgeableTree(cwd: string, signal?: AbortSignal): Promise<string | null> {
+/** The worktree's hash, or null when git cannot say or a submodule would hide edits.
+ *  `known` is a hash already judged, so it is not scanned for submodules again. */
+async function judgeableTree(
+    cwd: string,
+    signal?: AbortSignal,
+    known?: string | null
+): Promise<string | null> {
     const git = makeGit(cwd, signal)
     const tree = await worktreeTreeHash(git)
-    return tree !== null && (await treeHasGitlink(git, tree)) === false ? tree : null
+    if (tree === null || tree === known) return tree
+    return (await treeHasGitlink(git, tree)) === false ? tree : null
 }
