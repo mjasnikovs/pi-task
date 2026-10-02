@@ -11,6 +11,7 @@ import {describe, expect, test} from 'bun:test'
 import {tmpDir} from '../test-utils/tmp-dir.js'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
+import type {CommandRunner} from '../../src/task/command-run.js'
 import {
     acceptDebtFile,
     annotateDebtConflicts,
@@ -609,6 +610,44 @@ describe('verify-command debt class', () => {
         return cwd
     }
 
+    // mx5-n TASK_0002: an UNOBSERVED reason listed the checks that PASSED, and the
+    // first of them was stored. Its re-run passes, closing a debt nobody observed.
+    test('a reason naming more than one VERIFY command stores none', async () => {
+        const cmds = ['bun run lint', 'bun run build', 'docker compose up -d']
+        const reason =
+            'work unobserved: the docker-compose Postgres bring-up could not be executed. '
+            + 'All other acceptance criteria verified as passing: `bun run build` end-to-end, '
+            + '`bun run lint` exit 0'
+        expect(verifyCommandFromReason(reason, cmds)).toBeNull()
+        // The same command named twice is still one command.
+        expect(
+            verifyCommandFromReason('`bun run lint` failed; rerun `bun run lint` to see it', cmds)
+        ).toBe('bun run lint')
+    })
+
+    // A ledger written before that rule still carries the passing command. The
+    // re-check re-derives it from the stored reason instead of trusting it.
+    test('a stored command the reason no longer singles out does not close the debt', async () => {
+        const spec = SPEC.replace('bunx tsc --noEmit', 'bun run lint\nbun run build')
+        const cwd = await withSpec('TASK_0002', spec)
+        const reason =
+            'work unobserved: the docker-compose bring-up could not run. Passing: '
+            + '`bun run build` end-to-end, `bun run lint` exit 0'
+        fs.writeFileSync(
+            acceptDebtFile(cwd),
+            `TASK_0002\t${reason}\tyolo-accepted\tbun run build\n`,
+            'utf8'
+        )
+        const passesAll: CommandRunner = async () => ({
+            failedToStart: false,
+            status: 0,
+            stdout: '',
+            stderr: ''
+        })
+        const {openDebts} = await deriveOpenDebts(cwd, false, passesAll)
+        expect(openDebts.map(d => d.taskId)).toEqual(['TASK_0002'])
+    })
+
     test('extracts ONLY a backticked span that is a verbatim VERIFY line', async () => {
         const cmds = ['bunx tsc --noEmit', 'AGENT=1 bun test test/listings.test.ts']
         expect(verifyCommandFromReason(REASON, cmds)).toBe('AGENT=1 bun test test/listings.test.ts')
@@ -675,6 +714,43 @@ describe('verify-command debt class', () => {
         expect(
             await classifyVerifyCommand(cwd, '', 'repo health: `bun run test` exited 1')
         ).toBeNull()
+    })
+
+    // A suite reason lists only red commands (describeHealthFailures), so each one
+    // is a witness and all of them must pass before the debt is settled.
+    test('a suite reason naming two red commands stores both, joined', async () => {
+        const cwd = makeCwd()
+        fs.writeFileSync(
+            path.join(cwd, 'package.json'),
+            JSON.stringify({scripts: {test: 'bun test', 'test:ct': 'playwright test'}})
+        )
+        const reason = 'test suite: `bun run test` exited 1; `bun run test:ct` exited 1'
+        expect(await classifyVerifyCommand(cwd, '', reason)).toBe('bun run test && bun run test:ct')
+    })
+
+    // The re-check cannot re-judge a command against a spec it cannot read, or one
+    // whose VERIFY no longer holds it: the record-time claim stands.
+    test('a stored command survives a re-check that cannot re-judge it', async () => {
+        const passesAll: CommandRunner = async () => ({
+            failedToStart: false,
+            status: 0,
+            stdout: '',
+            stderr: ''
+        })
+        for (const spec of [
+            null,
+            SPEC.replace('AGENT=1 bun test test/listings.test.ts', 'bun test')
+        ]) {
+            const cwd = spec === null ? makeCwd() : await withSpec('TASK_0009', spec)
+            fs.mkdirSync(path.join(cwd, '.pi-tasks'), {recursive: true})
+            fs.writeFileSync(
+                acceptDebtFile(cwd),
+                `TASK_0009\t${REASON}\tyolo-accepted\tAGENT=1 bun test test/listings.test.ts\n`,
+                'utf8'
+            )
+            const {openDebts} = await deriveOpenDebts(cwd, false, passesAll)
+            expect(openDebts).toEqual([])
+        }
     })
 
     test('one command is re-run once, and it settles every debt that names it', async () => {

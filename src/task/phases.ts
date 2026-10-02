@@ -47,7 +47,8 @@ import {
     CRITIQUE_PROMPT,
     CRITIQUE_TRIAGE_PROMPT,
     VERIFY_TOOLING_PROMPT,
-    MAX_GRILL_QUESTIONS
+    MAX_GRILL_QUESTIONS,
+    composeRetryEmphasis
 } from './prompts.js'
 import {
     appendGateRecord,
@@ -1301,6 +1302,9 @@ export async function phaseCompose(
     )
 }
 
+/** A rewrite that failed validation twice; the compose draft is the fallback. */
+class CritiqueRejected extends Error {}
+
 export async function phaseCritique(
     deps: PhaseDeps,
     spec: string,
@@ -1412,18 +1416,23 @@ export async function phaseCritique(
                 // Theater retry gets a targeted hint (the generic emphasis line
                 // says "previous attempt had no VERIFY block", which is wrong
                 // here — it had one, it just never ran the deliverable).
-                return problem === 'verify_grep_theater' ?
-                        prependHint(GREP_THEATER_RETRY_HINT, base)
+                if (problem === 'verify_grep_theater') {
+                    return prependHint(GREP_THEATER_RETRY_HINT, base)
+                }
+                return problem !== null && problem !== 'no_verify_block' ?
+                        prependHint(composeRetryEmphasis(problem).trim(), base)
                     :   base
             },
             text => {
                 // The rewrite (thinking on) sometimes prepends narration before
-                // GOAL; the prompt forbids it but this validator only checks for
-                // a VERIFY block. Strip it so the delivered spec starts at GOAL.
+                // GOAL, though the prompt forbids it. Held to compose's shape bar:
+                // the implementer reads this text as its whole job.
                 const stripped = stripSpecPreamble(text)
                 if (parseVerifyBlock(stripped) === null) {
                     return {ok: false, problem: 'no_verify_block'}
                 }
+                const shape = validateSpecShape(stripped)
+                if (shape !== null) return {ok: false, problem: shape}
                 // Detector-backed closure: a rewrite HANDED a defect and shipping
                 // it anyway is a failed rewrite. Only probes that actually fired
                 // are re-checked — a defect the draft never had is not the
@@ -1435,7 +1444,7 @@ export async function phaseCritique(
                 }
                 return {ok: true, value: stripped}
             },
-            problem => new Error(problem)
+            problem => new CritiqueRejected(problem)
         )
     } finally {
         deps.recordSubStep?.('rewrite', Date.now() - tRewrite)
@@ -1448,23 +1457,27 @@ export async function critiqueWithFallback(d: PhaseDeps, p: PhaseContext): Promi
     try {
         return await phaseCritique(d, p.spec, p.refined, p.qa, p.planContext, p.research)
     } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err)
-        if (msg !== 'no_verify_block' && msg !== 'verify_grep_theater') throw err
+        if (!(err instanceof CritiqueRejected)) throw err
+        const msg = err.message
         // Fall back to the compose draft — but only if it actually carries a
         // runnable VERIFY block. Critique reaches its rewrite path precisely
         // when the compose draft lacked one (triage is skipped in that case),
         // so returning that same draft would persist a VERIFY-less spec the
         // handoff gate rejects and resume can't heal. Compose now enforces a
         // parseable VERIFY, so this should hold; keep the guard so a regression
-        // fails the run cleanly instead of shipping a broken spec. A draft that
+        // fails the run cleanly instead of shipping a broken spec. Whatever the
+        // rewrite's own problem was, what ends the run is that no spec carries a
+        // runnable VERIFY, which is the failure the classifier knows. A draft that
         // carries the SAME defect the rewrite failed to fix is still delivered —
         // it is the validated-shape fallback, and failing the run costs more.
-        if (parseVerifyBlock(p.spec) === null) throw err
+        if (parseVerifyBlock(p.spec) === null) throw new Error('no_verify_block', {cause: err})
         notifyRun(
             p.ctx,
             msg === 'verify_grep_theater' ?
                 'Critique rewrite kept a grep-only VERIFY — using compose draft. Consider adding a command that RUNS the deliverable.'
-            :   "Critique couldn't produce a VERIFY block — using compose draft. Edit the spec manually if needed.",
+            : msg === 'no_verify_block' ?
+                "Critique couldn't produce a VERIFY block — using compose draft. Edit the spec manually if needed."
+            :   `Critique rewrite was malformed (${msg}) — using compose draft.`,
             'warning'
         )
         return p.spec

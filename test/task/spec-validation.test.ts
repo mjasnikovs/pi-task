@@ -114,6 +114,46 @@ describe('stripSpecPreamble', () => {
         expect(stripSpecPreamble(s)).toBe(s)
     })
 
+    // mx5-n TASK_0019: the critique rewrite quoted the old VERIFY block inside its
+    // narration. The fence is closed before GOAL, so this is narration, not a wrapper.
+    test('drops narration that quotes a closed fenced block before GOAL', () => {
+        const spec = 'GOAL\nx\nCONSTRAINTS\n- y\nACCEPTANCE\n- w\nVERIFY:\n```sh\nbun test\n```'
+        const s = [
+            'Now I have a complete picture.',
+            '',
+            'Looking at the original VERIFY:',
+            '```sh',
+            'bun run lint',
+            'bun test',
+            '```',
+            '',
+            'Now let me write the rewritten spec:',
+            '',
+            spec
+        ].join('\n')
+        expect(stripSpecPreamble(s)).toBe(spec)
+    })
+
+    test('a heredoc inside the quoted fence does not block the strip', () => {
+        const spec = 'GOAL\nx\nCONSTRAINTS\n- y\nACCEPTANCE\n- w\nVERIFY:\n```sh\nls\n```'
+        const s = [
+            'The old VERIFY was:',
+            '```sh',
+            "cat <<'EOF' > f.json",
+            '{}',
+            'EOF',
+            '```',
+            '',
+            spec
+        ].join('\n')
+        expect(stripSpecPreamble(s)).toBe(spec)
+    })
+
+    test('does NOT strip when GOAL sits inside a fence the preamble left open', () => {
+        const s = 'Here it is:\n```markdown\nGOAL\nx\n```'
+        expect(stripSpecPreamble(s)).toBe(s)
+    })
+
     test('a stripped preamble then passes validateSpecShape', () => {
         const s =
             'Here is the spec:\nGOAL\nx\nCONSTRAINTS\n- y\nACCEPTANCE\n- w\nVERIFY:\n```sh\nls\n```'

@@ -2683,6 +2683,74 @@ describe('critiqueWithFallback VERIFY-less draft guard', () => {
     })
 })
 
+describe('critique rewrite must deliver a well-shaped spec', () => {
+    const draft =
+        'GOAL\n  x\n\nCONSTRAINTS\n  - a\n\nACCEPTANCE\n  - b\n\nVERIFY:\n```sh\nnpm test\n```\n'
+    // The rewrite dropped CONSTRAINTS. Its VERIFY block parses, which was all the
+    // critique validator checked.
+    const missingSection = 'GOAL\n  x\n\nACCEPTANCE\n  - b\n\nVERIFY:\n```sh\nnpm test\n```\n'
+
+    const makeP = (spec: string): PhaseContext => ({
+        cwd: '',
+        id: 'TASK_TEST',
+        ctx: stubCtx,
+        widgetState: stubWidgetState,
+        rawPrompt: '',
+        refined: 'refined',
+        research: '',
+        qa: 'qa',
+        spec
+    })
+
+    test('a malformed rewrite is retried with the shape problem named', async () => {
+        await withTmpTaskDir(async cwd => {
+            const prompts: string[] = []
+            let rewrites = 0
+            const spawn = fakeSpawnByPrompt(args => {
+                const prompt = args[args.length - 1]
+                prompts.push(prompt)
+                if (prompt.includes('triaging an implementation spec')) {
+                    return agentEndResponse('ACCEPTANCE: vague')
+                }
+                rewrites++
+                return agentEndResponse(rewrites === 1 ? missingSection : draft)
+            })
+            const deps = {cwd, taskId: 'TASK_TEST', signal: new AbortController().signal, spawn}
+            const out = await phaseCritique(deps, draft, 'refined', 'qa')
+            expect(out).toBe(draft.trim())
+            expect(rewrites).toBe(2)
+            expect(prompts.at(-1)).toContain('missing the CONSTRAINTS section')
+        })
+    })
+
+    // With no runnable VERIFY in the draft there is nothing to fall back to, and the
+    // failure must stay one the run classifies (and can resume from).
+    test('no fallback draft: the failure is the classified no_verify_block', async () => {
+        await withTmpTaskDir(async cwd => {
+            const spawn = fakeSpawnByPrompt(() => agentEndResponse(missingSection))
+            const deps = {cwd, taskId: 'TASK_TEST', signal: new AbortController().signal, spawn}
+            const noVerify = 'GOAL\n  x\n\nCONSTRAINTS\n  - a\n\nACCEPTANCE\n  - b\n\nVERIFY:\n'
+            await expect(critiqueWithFallback(deps, makeP(noVerify))).rejects.toThrow(
+                /^no_verify_block$/
+            )
+        })
+    })
+
+    test('two malformed rewrites fall back to the compose draft', async () => {
+        await withTmpTaskDir(async cwd => {
+            const spawn = fakeSpawnByPrompt(args =>
+                agentEndResponse(
+                    args[args.length - 1].includes('triaging an implementation spec') ?
+                        'ACCEPTANCE: vague'
+                    :   missingSection
+                )
+            )
+            const deps = {cwd, taskId: 'TASK_TEST', signal: new AbortController().signal, spawn}
+            expect(await critiqueWithFallback(deps, makeP(draft))).toBe(draft)
+        })
+    })
+})
+
 describe('phaseResearch service enrichment', () => {
     test('searchFn is called per service from EXTERNAL-DEPENDENCIES section', async () => {
         await withTmpTaskDir(async cwd => {

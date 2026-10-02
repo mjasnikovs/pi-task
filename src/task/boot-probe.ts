@@ -23,7 +23,7 @@ import {existsSync, readFileSync} from 'node:fs'
 import * as net from 'node:net'
 import * as path from 'node:path'
 import type {RenderOutcome} from './render-check.js'
-import {runRenderCheck} from './render-check.js'
+import {httpAnswer, runRenderCheck} from './render-check.js'
 import {resolveRunner, runnerEnv, isCommandNotFound} from './runner-resolve.js'
 import {outputTail} from './command-run.js'
 import {ownGroupSpawnOptions, reapProcessGroup} from '../shared/child-process.js'
@@ -567,22 +567,9 @@ export async function preferredDeclaredPort(cwd: string): Promise<number | null>
  * Does anything answer HTTP on 127.0.0.1:`port`? Any response at all counts — a
  * status IS a listener, and a live server answering 404 on an unknown path is the
  * ordinary case — so only a connection error or a timeout is a no.
- * Runs in a throwaway child of our own runtime so it needs no curl on PATH and
- * stays synchronous inside the boot poll.
  */
 function defaultHttpProbe(port: number): boolean {
-    const script =
-        `fetch('http://127.0.0.1:${port}/').then(()=>process.exit(0),()=>process.exit(1));`
-        + `setTimeout(()=>process.exit(1),2000)`
-    try {
-        const r = spawnSync(process.execPath, ['-e', script], {
-            encoding: 'utf8',
-            timeout: 5000
-        })
-        return !r.error && r.status === 0
-    } catch {
-        return false
-    }
+    return httpAnswer(`http://127.0.0.1:${port}/`, 5000) !== null
 }
 
 /** Process-group id of `pid`, or null if it cannot be read. */
@@ -815,6 +802,10 @@ export async function runBootCheck(
         // interval body must not re-enter while one is in flight — a second session
         // would race the first for the same still-booting child.
         let probing = false
+        // The latest error answer. A server still building may answer one, so it
+        // is asked again each tick; one still answering it when the window closes
+        // never rendered.
+        let lastUnready: string | null = null
         const poll =
             expectServer ?
                 setInterval(() => {
@@ -840,6 +831,10 @@ export async function runBootCheck(
                     }
                     const url = `http://127.0.0.1:${port}/`
                     const rr = probe(url)
+                    if (rr.outcome === 'unready') {
+                        lastUnready = `listens on :${port} but ${rr.detail}`
+                        return
+                    }
                     if (rr.outcome === 'fail') {
                         return failAndKill(`listens on :${port} but ${rr.detail}`)
                     }
@@ -885,6 +880,7 @@ export async function runBootCheck(
                 timer = setTimeout(onGrace, 500)
                 return
             }
+            if (lastUnready !== null) return failAndKill(lastUnready)
             if (expectServer && !listenerSeen) {
                 // Blind here (no enumeration tool, and the assigned port never
                 // answered) ⇒ we cannot tell "never listened" from "ignores PORT".

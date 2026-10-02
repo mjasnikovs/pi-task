@@ -544,32 +544,39 @@ export async function classifyVerifyCommand(
  * red suite was then reported open for the rest of the run after it went green.
  *
  * Provenance is the manifest: the span must equal a command `discoverTestCommands`
- * produced, exactly as the VERIFY-block match must equal a parsed line.
+ * produced, exactly as the VERIFY-block match must equal a parsed line. A suite
+ * reason lists only red commands, so every one it names is joined into the stored
+ * command: the debt is settled only when all of them pass.
  */
 function suiteCommandFromReason(cwd: string, reason: string): string | null {
     if (failClassOfReason(reason) !== 'test-suite') return null
-    const hit = verifyCommandFromReason(
+    const named = commandsNamedIn(
         reason,
         discoverTestCommands(cwd).cmds.map(([bin, args]) => `${bin} ${args.join(' ')}`)
     )
-    return hit !== null && isStorableCommand(hit) ? hit : null
+    const joined = named.join(' && ')
+    return named.length > 0 && isStorableCommand(joined) ? joined : null
+}
+
+/** The candidates a reason quotes verbatim in backticks, distinct, in reason order. */
+function commandsNamedIn(reason: string, candidates: readonly string[]): string[] {
+    const known = new Set(candidates.map(c => c.trim()).filter(c => c.length > 0))
+    const named = new Set<string>()
+    for (const m of reason.matchAll(/`([^`]+)`/g)) {
+        const span = m[1]!.trim()
+        if (known.has(span)) named.add(span)
+    }
+    return [...named]
 }
 
 export function verifyCommandFromReason(
     reason: string,
     verifyCommands: readonly string[]
 ): string | null {
-    const byText = new Map<string, string>()
-    for (const c of verifyCommands) {
-        const t = c.trim()
-        if (t.length > 0 && !byText.has(t)) byText.set(t, t)
-    }
-    if (byText.size === 0) return null
-    for (const m of reason.matchAll(/`([^`]+)`/g)) {
-        const hit = byText.get(m[1]!.trim())
-        if (hit !== undefined) return hit
-    }
-    return null
+    // Prose cannot say WHICH of two named commands failed: a reason that lists
+    // what passed beside what did not would key the debt to a passing command.
+    const named = commandsNamedIn(reason, verifyCommands)
+    return named.length === 1 ? named[0]! : null
 }
 
 /**
@@ -788,6 +795,30 @@ export function describeDebt(d: AcceptDebt): string {
 }
 
 /**
+ * A ledger written before the one-command rule may key a debt to a command its
+ * reason lists as PASSING. Such a command is dropped when the owning spec shows
+ * the ambiguity: the reason names another of its VERIFY lines too. Anything the
+ * re-check cannot re-judge (a suite debt, an unreadable spec, a command the VERIFY
+ * no longer holds) keeps the record-time claim.
+ */
+async function dropAmbiguousCommand(cwd: string, d: AcceptDebt): Promise<AcceptDebt> {
+    const cmd = d.verifyCommand
+    if (cmd === undefined || d.resolvedBy !== undefined) return d
+    if (failClassOfReason(d.reason) === 'test-suite') return d
+    let lines: string[]
+    try {
+        const spec = await fsp.readFile(taskFilePath(cwd, d.taskId.trim()), 'utf8')
+        lines = parseVerifyBlockStrict(spec)?.map(c => c.raw) ?? []
+    } catch {
+        return d
+    }
+    const named = commandsNamedIn(d.reason, lines)
+    if (!named.includes(cmd) || named.length === 1) return d
+    const {verifyCommand: _ambiguous, ...rest} = d
+    return rest
+}
+
+/**
  * ACCEPT-debt re-check: read the ledger of tasks
  * the user accepted despite a verify-FAIL and re-check each against the CURRENT
  * tree. A static-class debt whose statics now pass is provably RESOLVED (a later
@@ -814,7 +845,9 @@ export async function deriveOpenDebts(
     run: CommandRunner = spawnCommand,
     signal?: AbortSignal
 ): Promise<{openDebts: AcceptDebt[]; debtNote?: string; trail?: string[]}> {
-    const all = await readAcceptDebts(cwd)
+    const stored = await readAcceptDebts(cwd)
+    const all = await Promise.all(stored.map(d => dropAmbiguousCommand(cwd, d)))
+    const dropped = all.some((d, i) => d !== stored[i])
     // Closed debts are kept as the record of what fixed them, and never re-checked.
     const closed = all.filter(d => d.resolvedBy !== undefined)
     const {
@@ -835,7 +868,7 @@ export async function deriveOpenDebts(
             rerunVerify: cmd => rerunDebtVerifyCommand(cwd, cmd, run, signal)
         }
     )
-    if (resolved.length > 0) await writeAcceptDebts(cwd, [...closed, ...openRaw])
+    if (resolved.length > 0 || dropped) await writeAcceptDebts(cwd, [...closed, ...openRaw])
     // Conflicting-claim annotation: an existence-as-failure debt whose
     // named file is another task's committed deliverable is a plan defect — surface
     // the contradiction with the debt so nobody (human or child) treats the claim as

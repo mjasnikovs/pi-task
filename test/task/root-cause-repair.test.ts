@@ -106,6 +106,23 @@ describe('accusation extraction', () => {
         // Backticked prose is not a command.
         expect(extractFailingCommand('the `syntax error at or near $1` shows up')).toBeUndefined()
     })
+
+    // A health reason lists only red commands, so the repair must re-run all of them.
+    test('a health reason pins every red command it lists', () => {
+        expect(
+            extractFailingCommand('test suite: `bun run test` exited 1; `bun run test:ct` exited 1')
+        ).toBe('bun run test && bun run test:ct')
+    })
+
+    // mx5-n TASK_0002 shape: the first command quoted is one the text says PASSED.
+    test('a text naming two commands pins neither', () => {
+        expect(
+            extractFailingCommand(
+                'work did not verify: `bun test test/db.test.ts` exits 1; '
+                    + '`bun run build` and `bun run lint` pass'
+            )
+        ).toBeUndefined()
+    })
 })
 
 describe('findRepairCandidate — run 14 fixture', () => {

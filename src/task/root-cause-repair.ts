@@ -32,6 +32,7 @@
  * and is never re-spawned, which is what keeps this from looping.
  */
 import {makeLedger} from './ledger.js'
+import {failClassOfReason, isHealthClass} from './verify-work.js'
 
 /** A path-like token: at least one directory separator, ending in a file name. */
 const PATH_TOKEN_RE = /(?:[\w.@-]+\/)+[\w.@-]+\.\w+/g
@@ -169,19 +170,25 @@ export function summariseDefect(clause: string, file?: string): string {
 }
 
 /**
- * A runnable command quoted in the FAIL text — the repair task's VERIFY, per the
- * requirement that it re-run the exact command the debt failed on. Only the first
+ * The runnable command quoted in the FAIL text — the repair task's VERIFY, per the
+ * requirement that it re-run the exact command the debt failed on. Only a
  * backticked token that STARTS like a shell command (optionally env-prefixed)
- * qualifies, so prose in backticks is never mistaken for a command.
+ * qualifies, so prose in backticks is never mistaken for a command. A health
+ * reason lists only red commands, so all of them are pinned; prose cannot say
+ * which of two quoted commands failed, so it pins one or none.
  */
 export function extractFailingCommand(text: string): string | undefined {
     const RUNNER =
         /^(?:[A-Z][A-Z0-9_]*=\S+\s+)*(?:bun|npm|pnpm|yarn|npx|node|deno|make|cargo|go|python3?|pytest|dotnet|mvn|gradle)\b\s+\S/
+    const named = new Set<string>()
     for (const m of text.matchAll(/`([^`\n]+)`/g)) {
         const cmd = m[1].trim()
-        if (RUNNER.test(cmd)) return cmd
+        if (RUNNER.test(cmd)) named.add(cmd)
     }
-    return undefined
+    if (isHealthClass(failClassOfReason(text))) {
+        return named.size > 0 ? [...named].join(' && ') : undefined
+    }
+    return named.size === 1 ? [...named][0] : undefined
 }
 
 export interface RootCauseInput {

@@ -348,6 +348,48 @@ describe('runBootCheck — unobservable listener degrades, never false-FAILs (ru
         expect((r as {detail: string}).detail).toContain('EMPTY')
     })
 
+    // mx5-n: the dev server answered 503 "Client build missing" for the whole boot.
+    // An error answer is retried while the grace window lasts, then FAILs.
+    testPosix('a page that stays an HTTP error past the grace window FAILs', async () => {
+        let probes = 0
+        const r = await runBootCheck(os.tmpdir(), alive, 1500, {
+            expectServer: true,
+            deps: {
+                ...blind,
+                pickPort: async () => 45676,
+                httpProbe: () => true,
+                renderProbe: () => {
+                    probes++
+                    return {
+                        outcome: 'unready',
+                        detail: 'answered HTTP 503 ("Client build missing")'
+                    }
+                }
+            }
+        })
+        expect(probes).toBeGreaterThan(1)
+        expect(r.outcome).toBe('fail')
+        expect((r as {detail: string}).detail).toContain('HTTP 503')
+    })
+
+    testPosix('a page that recovers from an HTTP error inside the window is judged', async () => {
+        let probes = 0
+        const r = await runBootCheck(os.tmpdir(), alive, 5000, {
+            expectServer: true,
+            deps: {
+                ...blind,
+                pickPort: async () => 45677,
+                httpProbe: () => true,
+                renderProbe: () =>
+                    ++probes < 3 ?
+                        {outcome: 'unready', detail: 'answered HTTP 503'}
+                    :   {outcome: 'pass', detail: 'rendered visible text'}
+            }
+        })
+        expect(r.outcome).toBe('pass')
+        expect(probes).toBe(3)
+    })
+
     testPosix('the boot child is told the reserved port via PORT', async () => {
         const r = await runBootCheck(
             os.tmpdir(),

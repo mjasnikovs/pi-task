@@ -10,6 +10,7 @@ import {describe, expect, test} from 'bun:test'
 import {tmpDir} from '../test-utils/tmp-dir.js'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
+import {spawn} from 'node:child_process'
 import {
     findHeadlessBrowser,
     judgeRenderedDom,
@@ -121,6 +122,62 @@ describe('runRenderCheck', () => {
         expect(r.outcome).toBe('fail')
         expect((r as {detail: string}).detail).toContain('EMPTY')
     })
+
+    // mx5-n: the server's 503 text "Client build missing" was judged a rendered page.
+    /** A server in its own process: the check blocks this one while it fetches. */
+    const serve = async (handler: string): Promise<{url: string; stop: () => void}> => {
+        const server = spawn(process.execPath, [
+            '-e',
+            `require('http').createServer(${handler})`
+                + `.listen(0, '127.0.0.1', function () { console.log(this.address().port) })`
+        ])
+        const port = await new Promise<string>(resolve =>
+            server.stdout.once('data', d => resolve(String(d).trim()))
+        )
+        return {url: `http://127.0.0.1:${port}/`, stop: () => server.kill()}
+    }
+    const buildMissing = 'Client build missing — run bun run build.'
+    const answer503 = `(q, r) => { r.writeHead(503); r.end(${JSON.stringify(buildMissing)}) }`
+
+    spawnFlow('an HTTP 5xx answer is unready, never a rendered page', async () => {
+        const server = await serve(answer503)
+        try {
+            const r = runRenderCheck(
+                server.url,
+                fakeBrowser(`<html><body>${buildMissing}</body></html>`)
+            )
+            expect(r.outcome).toBe('unready')
+            expect((r as {detail: string}).detail).toContain('HTTP 503')
+        } finally {
+            server.stop()
+        }
+    })
+
+    // The status needs no browser, so a box without one still sees the 503.
+    spawnFlow('an HTTP 5xx answer is unready even with no browser on the box', async () => {
+        const server = await serve(answer503)
+        try {
+            expect(runRenderCheck(server.url, null).outcome).toBe('unready')
+        } finally {
+            server.stop()
+        }
+    })
+
+    // A healthy status is read from the headers alone: a root that streams forever
+    // must not hold the probe until its timeout.
+    spawnFlow(
+        'a 2xx root whose body never ends is judged without waiting on the body',
+        async () => {
+            const server = await serve(`(q, r) => { r.writeHead(200); r.write('x') }`)
+            try {
+                const b = fakeBrowser('<html><body><h1>Listings</h1></body></html>')
+                expect(runRenderCheck(server.url, b).outcome).toBe('pass')
+            } finally {
+                server.stop()
+            }
+        },
+        10_000
+    )
 
     test('no browser found → skip (env gap, never a false FAIL)', () => {
         const r = runRenderCheck('http://127.0.0.1:3000/', null)

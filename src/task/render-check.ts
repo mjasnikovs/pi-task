@@ -33,6 +33,8 @@ export type RenderOutcome =
     | {outcome: 'pass'; detail: string}
     | {outcome: 'fail'; detail: string}
     | {outcome: 'skip'; note: string}
+    /** The server answered with an error status: worth asking again while it boots. */
+    | {outcome: 'unready'; detail: string}
 
 /** PATH names tried in order for a system Chrome-family binary. */
 const CHROME_PATH_CANDIDATES = [
@@ -210,17 +212,56 @@ export function withConsoleEvidence(detail: string, stderr: string): string {
 }
 
 /**
+ * The root's HTTP answer: its status, plus a short text excerpt of the body when
+ * the status is a server error. Null when nothing answered within `budgetMs`. The
+ * body of a healthy answer is never read: a root that streams must not hold the
+ * probe. Spawned rather than awaited because the caller is synchronous.
+ */
+export function httpAnswer(url: string, budgetMs: number): {status: number; text: string} | null {
+    const script =
+        `fetch(${JSON.stringify(url)}).then(async r => {`
+        + `const t = r.status < 500 ? '' : (await r.text()).replace(/<[^>]*>/g, ' ').replace(/\\s+/g, ' ').trim();`
+        + `console.log(JSON.stringify({status: r.status, text: t.slice(0, 120)}))`
+        + `}, () => console.log('null')).then(() => process.exit(0))`
+    const r = spawnSync(process.execPath, ['-e', script], {encoding: 'utf8', timeout: budgetMs})
+    try {
+        return JSON.parse((r.stdout ?? '').trim() || 'null')
+    } catch {
+        return null
+    }
+}
+
+/**
  * Load `url` once in a headless Chrome and judge the rendered DOM. Blocking
  * (spawnSync) by design — the caller holds the booted server alive exactly for
  * this window. `browser` is injectable for tests; the default is discovery.
+ *
+ * The status is asked first: `--dump-dom` hides it, and an error page has text
+ * (mx5-n's "Client build missing" 503 was judged a rendered app). It needs no
+ * browser, so a box without one still sees it. Both steps share one budget.
  */
 export function runRenderCheck(url: string, browser?: string | null): RenderOutcome {
+    const started = Date.now()
+    if (/^https?:/i.test(url)) {
+        const answer = httpAnswer(url, RENDER_TIMEOUT_MS)
+        if (answer !== null && answer.status >= 500) {
+            const text = answer.text ? ` ("${answer.text}")` : ''
+            return {
+                outcome: 'unready',
+                detail: `answered HTTP ${answer.status}${text} — an error response, not a rendered app`
+            }
+        }
+    }
     const bin = browser === undefined ? findHeadlessBrowser() : browser
     if (!bin) {
         return {
             outcome: 'skip',
             note: 'no headless Chrome-family browser found on this box (PATH, CHROME_BIN, Playwright cache)'
         }
+    }
+    const budgetLeft = RENDER_TIMEOUT_MS - (Date.now() - started)
+    if (budgetLeft <= 0) {
+        return {outcome: 'skip', note: 'the page sent no answer within the render timeout'}
     }
     const r = spawnSync(
         bin,
@@ -238,7 +279,7 @@ export function runRenderCheck(url: string, browser?: string | null): RenderOutc
             '--dump-dom',
             url
         ],
-        {encoding: 'utf8', timeout: RENDER_TIMEOUT_MS, env: {...process.env}}
+        {encoding: 'utf8', timeout: budgetLeft, env: {...process.env}}
     )
     if (r.error || r.status === null) {
         return {outcome: 'skip', note: `browser did not run (${r.error?.message ?? 'timeout'})`}

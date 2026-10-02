@@ -75,21 +75,24 @@ export function isCritiqueClean(text: string): boolean {
 /**
  * Drop any preamble the model emitted before the spec's GOAL header. The
  * thinking model sometimes narrates ("Now I have all the context. Here's the
- * rewritten spec:") before GOAL — the prompts forbid it, but the critique
- * validator only checks for a VERIFY block, so it leaked into the delivered
- * spec. We slice from the first line that begins a GOAL section so the spec
- * starts at GOAL. No GOAL line → returned unchanged (validation then flags it).
+ * rewritten spec:") before GOAL, though the prompts forbid it. We slice from the
+ * first line that begins a GOAL section so the spec starts at GOAL. No GOAL line →
+ * returned unchanged (validation then flags it).
  */
 export function stripSpecPreamble(spec: string): string {
     const lines = spec.split('\n')
     const idx = lines.findIndex(l => /^GOAL\b/i.test(l))
     if (idx <= 0) return spec
-    // Only strip plain narration. If the lead-in is a markdown fence or a
-    // cat-heredoc wrapper, leave it untouched — that's a malformation
-    // validateSpecShape must reject (and compose must retry on), not something
-    // to silently unwrap into a passing spec.
-    const preamble = lines.slice(0, idx)
-    if (preamble.some(l => /^\s*```/.test(l) || /^\s*cat\s*<</.test(l))) return spec
+    // Only strip narration. A fence the preamble leaves OPEN means GOAL sits inside
+    // a wrapper, and a cat heredoc is a wrapper too: both are malformations the
+    // validator must reject, not unwrap. A fence the narration opens and closes is
+    // a quotation (mx5-n TASK_0019 quoted the old VERIFY block).
+    let inFence = false
+    for (const l of lines.slice(0, idx)) {
+        if (/^\s*```/.test(l)) inFence = !inFence
+        else if (!inFence && /^\s*cat\s*<</.test(l)) return spec
+    }
+    if (inFence) return spec
     return lines.slice(idx).join('\n')
 }
 
