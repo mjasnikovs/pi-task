@@ -648,6 +648,34 @@ describe('verify-command debt class', () => {
         expect(openDebts.map(d => d.taskId)).toEqual(['TASK_0002'])
     })
 
+    // The first judge keeps the claim. A later spec that shows the ambiguity
+    // re-judges against a spec the record was never made against.
+    test('a legacy command its spec no longer holds is judged once', async () => {
+        const cwd = await withSpec('TASK_0003', SPEC)
+        const reason = '`bun run build` exited 1; `bun run lint` exit 0'
+        fs.writeFileSync(
+            acceptDebtFile(cwd),
+            `TASK_0003\t${reason}\tyolo-accepted\tbun run build\n`,
+            'utf8'
+        )
+        const exits =
+            (status: number): CommandRunner =>
+            async () => ({
+                failedToStart: false,
+                status,
+                stdout: '',
+                stderr: ''
+            })
+        await deriveOpenDebts(cwd, false, exits(1))
+        fs.writeFileSync(
+            path.join(cwd, '.pi-tasks', 'TASK_0003.md'),
+            SPEC.replace('bunx tsc --noEmit', 'bun run build\nbun run lint'),
+            'utf8'
+        )
+        const {openDebts} = await deriveOpenDebts(cwd, false, exits(0))
+        expect(openDebts).toEqual([])
+    })
+
     // Re-judging is for ledgers keyed by the old rule. A command keyed by this one
     // was singled out against the spec of its day, which a later edit cannot undo.
     test('a command keyed by the one-command rule survives a later spec edit', async () => {
@@ -852,6 +880,61 @@ describe('verify-command debt class', () => {
         )
         expect(runs).toEqual(['bun run test'])
         expect(open).toHaveLength(1)
+    })
+
+    test('the trail names the suite part that was red, not the joined command', async () => {
+        const {trail} = await recheckAcceptDebts(
+            [
+                {
+                    taskId: 'T1',
+                    reason: 'test suite: `bun run test` exited 1',
+                    origin: 'inherited-health',
+                    verifyCommand: 'bun run test'
+                },
+                {
+                    taskId: 'T2',
+                    reason: 'test suite: `bun run test` exited 1; `bun run test:e2e` exited 1',
+                    origin: 'inherited-health',
+                    verifyCommand: 'bun run test && bun run test:e2e'
+                }
+            ],
+            {
+                staticOk: false,
+                suiteCommands: ['bun run test', 'bun run test:e2e'],
+                rerunVerify: async cmd =>
+                    cmd === 'bun run test' ? {outcome: 'pass'} : {outcome: 'fail', detail: 'exit 1'}
+            }
+        )
+        expect(trail.find(t => t.startsWith('T2'))).toContain(
+            're-ran `bun run test:e2e`: it FAILED'
+        )
+    })
+
+    // A joined suite takes as long as its parts run in turn: one command, one charge.
+    test('a joined suite debt costs one re-run of the budget', async () => {
+        const runs: string[] = []
+        const {resolved} = await recheckAcceptDebts(
+            [
+                {
+                    taskId: 'T1',
+                    reason: 'test suite: `bun run test` exited 1; `bun run test:e2e` exited 1',
+                    origin: 'inherited-health',
+                    verifyCommand: 'bun run test && bun run test:e2e'
+                },
+                {taskId: 'T2', reason: '`bun run lint` exited 1', verifyCommand: 'bun run lint'},
+                {taskId: 'T3', reason: '`bun run build` exited 1', verifyCommand: 'bun run build'}
+            ],
+            {
+                staticOk: false,
+                suiteCommands: ['bun run test', 'bun run test:e2e'],
+                rerunVerify: async cmd => {
+                    runs.push(cmd)
+                    return {outcome: 'pass'}
+                }
+            }
+        )
+        expect(runs).toHaveLength(4)
+        expect(resolved).toHaveLength(3)
     })
 
     // A VERIFY line may chain its own steps: `cd web` must run before the suite.

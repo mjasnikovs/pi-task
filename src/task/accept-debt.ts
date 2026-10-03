@@ -206,9 +206,9 @@ export interface AcceptDebt {
      */
     verifyCommand?: string
     /**
-     * Set when `verifyCommand` was keyed by the rule that the reason names it alone.
-     * Only a record without it, from a ledger older than that rule, is re-judged:
-     * a re-judge reads today's spec, not the one the record was made against.
+     * Set when `verifyCommand` was keyed by the rule that the reason names it alone,
+     * or a legacy record has been re-judged once. A re-judge reads today's spec, not
+     * the one the record was made against, so it never runs twice.
      */
     singled?: true
     /**
@@ -299,32 +299,17 @@ function serialize(d: AcceptDebt): string {
     // only for the non-accepted classes, so old readers/files round-trip unchanged.
     // The 4th verify-command field forces the origin field to be written (positional
     // format) — 'accepted' spelled out there parses back to the same absent origin.
-    // The 5th field likewise forces an (empty) 4th, and the 6th an (empty) 5th.
-    if (d.singled && d.verifyCommand) {
-        return [
-            d.taskId,
-            d.reason,
-            d.origin ?? 'accepted',
-            d.verifyCommand,
-            d.resolvedBy ?? '',
-            SINGLED_FIELD
-        ].join(FIELD_SEP)
-    }
-    if (d.resolvedBy !== undefined && d.resolvedBy.length > 0) {
-        return [
-            d.taskId,
-            d.reason,
-            d.origin ?? 'accepted',
-            d.verifyCommand ?? '',
-            d.resolvedBy
-        ].join(FIELD_SEP)
-    }
-    if (d.verifyCommand !== undefined && d.verifyCommand.length > 0) {
-        return [d.taskId, d.reason, d.origin ?? 'accepted', d.verifyCommand].join(FIELD_SEP)
-    }
-    return d.origin && d.origin !== 'accepted' ?
-            `${d.taskId}${FIELD_SEP}${d.reason}${FIELD_SEP}${d.origin}`
-        :   `${d.taskId}${FIELD_SEP}${d.reason}`
+    const fields = [
+        d.taskId,
+        d.reason,
+        d.origin ?? 'accepted',
+        d.verifyCommand ?? '',
+        d.resolvedBy ?? '',
+        d.singled && d.verifyCommand ? SINGLED_FIELD : ''
+    ]
+    while (fields.length > 2 && fields.at(-1) === '') fields.pop()
+    if (fields.length === 3 && fields[2] === 'accepted') fields.pop()
+    return fields.join(FIELD_SEP)
 }
 
 const SINGLED_FIELD = 'singled'
@@ -359,10 +344,9 @@ async function appendDebt(cwd: string, entry: AcceptDebt): Promise<void> {
         // Classify AT RECORD TIME, against the spec as it stands when the defect is
         // recorded. Doing it later would read a spec a subsequent task
         // may have rewritten — the provenance claim has to be made where it is true.
-        const verifyCommand =
-            entry.verifyCommand ?? (await classifyVerifyCommand(cwd, entry.taskId, entry.reason))
-        if (entry.verifyCommand === undefined && verifyCommand !== null) {
-            entry = {...entry, verifyCommand, singled: true}
+        if (entry.verifyCommand === undefined) {
+            const verifyCommand = await classifyVerifyCommand(cwd, entry.taskId, entry.reason)
+            if (verifyCommand !== null) entry = {...entry, verifyCommand, singled: true}
         }
         await ledger.append(cwd, [entry])
     } catch {
@@ -678,22 +662,6 @@ export async function recheckAcceptDebts(
         const parts = cmd.split(SUITE_JOIN)
         return parts.length > 1 && parts.every(p => suite.has(p)) ? parts : [cmd]
     }
-    /** Null when the budget is spent before `cmd` could run. */
-    const runOnce = async (cmd: string, d: AcceptDebt): Promise<VerifyRerunResult | null> => {
-        const already = ran.get(cmd)
-        if (already !== undefined) return already
-        if (rerunsLeft <= 0 || opts.rerunVerify === undefined) return null
-        rerunsLeft -= 1
-        let r: VerifyRerunResult
-        try {
-            r = await opts.rerunVerify(cmd, d)
-        } catch {
-            // A harness fault observes nothing, so it proves nothing.
-            r = {outcome: 'gap', detail: 're-run harness fault'}
-        }
-        ran.set(cmd, r)
-        return r
-    }
     for (const d of debts) {
         if (d.origin === 'cross-task-deletion') {
             const p = extractDeletedDebtPath(d.reason)
@@ -722,11 +690,31 @@ export async function recheckAcceptDebts(
         // One command, one run. A run that inherits a red suite records the same
         // `bun run test` against every task in it, and re-running it once per debt
         // would spend the whole budget proving the same thing and leave the rest
-        // open. The budget counts commands, which is what it was for.
+        // open. The budget counts stored commands, which is what it was for: a joined
+        // suite takes as long as its parts run in turn.
+        let charged = false
         let r: VerifyRerunResult | null = null
+        let decidedBy = cmd
         for (const part of partsOf(cmd)) {
-            r = await runOnce(part, d)
-            if (r === null || r.outcome !== 'pass') break
+            r = ran.get(part) ?? null
+            if (r === null) {
+                if (!charged) {
+                    if (rerunsLeft <= 0) break
+                    rerunsLeft -= 1
+                    charged = true
+                }
+                try {
+                    r = await opts.rerunVerify(part, d)
+                } catch {
+                    // A harness fault observes nothing, so it proves nothing.
+                    r = {outcome: 'gap', detail: 're-run harness fault'}
+                }
+                ran.set(part, r)
+            }
+            if (r.outcome !== 'pass') {
+                decidedBy = part
+                break
+            }
         }
         if (r === null) {
             trail.push(
@@ -736,7 +724,7 @@ export async function recheckAcceptDebts(
             open.push(d)
             continue
         }
-        settle(d, cmd, r)
+        settle(d, decidedBy, r)
     }
     return {open, resolved, trail}
 }
@@ -838,27 +826,26 @@ export function describeDebt(d: AcceptDebt): string {
 /**
  * A ledger written before the one-command rule may key a debt to a command its
  * reason lists as PASSING. Such a command is dropped when the owning spec shows
- * the ambiguity: the reason names another of its VERIFY lines too. One the spec
- * shows alone is marked singled, so it is judged once. Anything the re-check
- * cannot re-judge (a suite debt, an unreadable spec, a command the VERIFY no
- * longer holds) keeps the record-time claim.
+ * the ambiguity: the reason names another of its VERIFY lines too. Any other
+ * record keeps the record-time claim and is marked singled, so it is judged once.
  */
 async function rejudgeLegacyCommand(cwd: string, d: AcceptDebt): Promise<AcceptDebt> {
     const cmd = d.verifyCommand
     if (cmd === undefined || d.singled || d.resolvedBy !== undefined) return d
     if (failClassOfReason(d.reason) === 'test-suite') return d
-    let lines: string[]
+    let lines: string[] = []
     try {
         const spec = await fsp.readFile(taskFilePath(cwd, d.taskId.trim()), 'utf8')
         lines = parseVerifyBlockStrict(spec)?.map(c => c.raw) ?? []
     } catch {
-        return d
+        // Unreadable: nothing shows the ambiguity, so the record-time claim stands.
     }
     const named = commandsNamedIn(d.reason, lines)
-    if (!named.includes(cmd)) return d
-    if (named.length === 1) return {...d, singled: true}
-    const {verifyCommand: _ambiguous, ...rest} = d
-    return rest
+    if (named.includes(cmd) && named.length > 1) {
+        const {verifyCommand: _ambiguous, ...rest} = d
+        return rest
+    }
+    return {...d, singled: true}
 }
 
 /**

@@ -394,6 +394,31 @@ describe('runBootCheck — unobservable listener degrades, never false-FAILs (ru
         expect((r as {detail: string}).detail).toContain('HTTP 503')
     })
 
+    testPosix('a leader that exits 0 leaves no member of its group behind', async () => {
+        const dir = tmpDir('pi-boot-unready-')
+        const seen = path.join(dir, 'probed')
+        const pidFile = path.join(dir, 'server.pid')
+        const fixture =
+            `const {spawn}=require('child_process');const fs=require('fs');`
+            + `const c=spawn(process.execPath,['-e','setTimeout(()=>{},600000)'],{stdio:'ignore'});`
+            + `fs.writeFileSync(${JSON.stringify(pidFile)},String(c.pid));`
+            + `setInterval(() => fs.existsSync(${JSON.stringify(seen)}) && process.exit(0), 50)`
+        const r = await runBootCheck(dir, nodeScript(fixture), 60_000, {
+            expectServer: true,
+            deps: {
+                ...blind,
+                pickPort: async () => 45678,
+                httpProbe: () => true,
+                renderProbe: () => {
+                    fs.writeFileSync(seen, '')
+                    return {outcome: 'unready', detail: 'answered HTTP 503'}
+                }
+            }
+        })
+        expect(r.outcome).toBe('fail')
+        await gone(Number(fs.readFileSync(pidFile, 'utf8').trim()))
+    })
+
     testPosix('a page that recovers from an HTTP error inside the window is judged', async () => {
         let probes = 0
         const r = await runBootCheck(os.tmpdir(), alive, 5000, {

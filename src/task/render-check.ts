@@ -140,13 +140,19 @@ export function judgeRenderedDom(html: string): {ok: boolean; detail: string} {
     }
 }
 
-/** The body's markup without the elements and comments a reader never sees. */
+/** The body's markup, without what a reader never sees. */
 function visibleMarkup(html: string): string {
     const bodyMatch = /<body\b[^>]*>([\s\S]*)<\/body>/i.exec(html)
     // No <body> at all in a dumped DOM → the browser rendered something degenerate;
     // judge the whole document rather than fail on shape.
-    const body = bodyMatch ? bodyMatch[1] : html
-    return body
+    return withoutHidden(bodyMatch ? bodyMatch[1] : html)
+}
+
+// withoutHidden and textOf also run as source in httpAnswer's child: keep them self-contained.
+
+/** Drops the elements and comments a reader never sees. */
+function withoutHidden(markup: string): string {
+    return markup
         .replace(/<(script|style|template|noscript)\b[\s\S]*?<\/\1>/gi, '')
         .replace(/<!--[\s\S]*?-->/g, '')
 }
@@ -220,6 +226,8 @@ export function withConsoleEvidence(detail: string, stderr: string): string {
     return `${detail} — console output during the load: ${clampOutput(lines.join(' | '))}`
 }
 
+const EXCERPT_LENGTH = 120
+
 /**
  * The root's HTTP answer: its status, plus a short text excerpt of the body when
  * the status is a server error and `excerpt` is wanted. Null when nothing answered
@@ -233,12 +241,15 @@ export function httpAnswer(
     {excerpt = true}: {excerpt?: boolean} = {}
 ): {status: number; text: string} | null {
     // The status line is written before the body is read: a body that stalls until
-    // the timeout kills the child must not take the status with it.
+    // the timeout kills the child must not take the status with it. The excerpt is
+    // cut in the child, because process.exit drops the unflushed tail of a long write.
+    // The whole document is read, so a page whose only words are its <title> keeps them.
     const script =
-        `fetch(${JSON.stringify(url)}).then(async r => {`
+        `${withoutHidden};${textOf};`
+        + `fetch(${JSON.stringify(url)}).then(async r => {`
         + `process.stdout.write(r.status + '\\n');`
         + (excerpt ?
-            `if (r.status >= 500) process.stdout.write(JSON.stringify(await r.text()));`
+            `if (r.status >= 500) process.stdout.write(textOf(withoutHidden(await r.text())).slice(0, ${EXCERPT_LENGTH}));`
         :   '')
         + `}, () => {}).then(() => process.exit(0))`
     const r = spawnSync(process.execPath, ['-e', script], {encoding: 'utf8', timeout: budgetMs})
@@ -247,14 +258,7 @@ export function httpAnswer(
     if (newline <= 0) return null
     const status = Number(out.slice(0, newline))
     if (!Number.isInteger(status)) return null
-    let text = ''
-    try {
-        const body: unknown = JSON.parse(out.slice(newline + 1))
-        if (typeof body === 'string') text = textOf(visibleMarkup(body)).slice(0, 120)
-    } catch {
-        // No body, or one cut off mid-read: the status alone is the answer.
-    }
-    return {status, text}
+    return {status, text: out.slice(newline + 1)}
 }
 
 /**

@@ -902,7 +902,7 @@ export async function runBootCheck(
         child.on('exit', (status, signal) => {
             leaderExited = true
             if (status === 0) {
-                if (lastUnready !== null) return settle({outcome: 'fail', detail: lastUnready})
+                if (lastUnready !== null) return failAndKill(lastUnready)
                 if (expectServer && !listenerSeen) {
                     if (!canEnumerate) {
                         return settle({outcome: 'pass', renderNote: UNOBSERVED_LISTENER_NOTE})

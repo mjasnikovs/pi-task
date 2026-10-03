@@ -187,6 +187,28 @@ describe('runRenderCheck', () => {
         }
     })
 
+    // A whole body sent back through the pipe was cut off at process exit.
+    spawnFlow('a 5xx with a body of megabytes still gives its excerpt', async () => {
+        const head = JSON.stringify(`<html><body><h1>${buildMissing}</h1><script>`)
+        const page = `${head} + 'x'.repeat(3_000_000) + '</script></body></html>'`
+        const server = await serve(`(q, r) => { r.writeHead(503); r.end(${page}) }`)
+        try {
+            expect(httpAnswer(server.url, 10_000)?.text).toBe(buildMissing)
+        } finally {
+            server.stop()
+        }
+    })
+
+    spawnFlow('a 5xx page whose only words are its title gives the title', async () => {
+        const page = `<html><head><title>${buildMissing}</title></head><body><div id="root"></div><script>boot()</script></body></html>`
+        const server = await serve(`(q, r) => { r.writeHead(503); r.end(${JSON.stringify(page)}) }`)
+        try {
+            expect(httpAnswer(server.url, 10_000)?.text).toBe(buildMissing)
+        } finally {
+            server.stop()
+        }
+    })
+
     // A healthy status is read from the headers alone: a root that streams forever
     // must not hold the probe until its timeout.
     spawnFlow(
