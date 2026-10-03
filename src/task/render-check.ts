@@ -124,17 +124,8 @@ const VISUAL_ELEMENT_RE = /<(?:img|svg|canvas|video|audio|input|button|textarea|
  * against real captured DOMs; `detail` describes what was (or wasn't) found.
  */
 export function judgeRenderedDom(html: string): {ok: boolean; detail: string} {
-    const bodyMatch = /<body\b[^>]*>([\s\S]*)<\/body>/i.exec(html)
-    // No <body> at all in a dumped DOM → the browser rendered something degenerate;
-    // judge the whole document rather than fail on shape.
-    const body = bodyMatch ? bodyMatch[1] : html
-    const visible = body
-        .replace(/<(script|style|template|noscript)\b[\s\S]*?<\/\1>/gi, '')
-        .replace(/<!--[\s\S]*?-->/g, '')
-    const text = visible
-        .replace(/<[^>]*>/g, ' ')
-        .replace(/\s+/g, ' ')
-        .trim()
+    const visible = visibleMarkup(html)
+    const text = textOf(visible)
     if (text.length > 0) {
         return {ok: true, detail: `rendered visible text ("${text.slice(0, 80)}")`}
     }
@@ -147,6 +138,24 @@ export function judgeRenderedDom(html: string): {ok: boolean; detail: string} {
             'the rendered body is EMPTY after client JS executed — no visible text, no '
             + 'visual or interactive elements (the blank-page class: HTTP serves, nothing mounts)'
     }
+}
+
+/** The body's markup without the elements and comments a reader never sees. */
+function visibleMarkup(html: string): string {
+    const bodyMatch = /<body\b[^>]*>([\s\S]*)<\/body>/i.exec(html)
+    // No <body> at all in a dumped DOM → the browser rendered something degenerate;
+    // judge the whole document rather than fail on shape.
+    const body = bodyMatch ? bodyMatch[1] : html
+    return body
+        .replace(/<(script|style|template|noscript)\b[\s\S]*?<\/\1>/gi, '')
+        .replace(/<!--[\s\S]*?-->/g, '')
+}
+
+function textOf(markup: string): string {
+    return markup
+        .replace(/<[^>]*>/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim()
 }
 
 /** Wall-clock cap for the whole browser run; virtual-time budget for the page JS. */
@@ -213,22 +222,39 @@ export function withConsoleEvidence(detail: string, stderr: string): string {
 
 /**
  * The root's HTTP answer: its status, plus a short text excerpt of the body when
- * the status is a server error. Null when nothing answered within `budgetMs`. The
- * body of a healthy answer is never read: a root that streams must not hold the
- * probe. Spawned rather than awaited because the caller is synchronous.
+ * the status is a server error and `excerpt` is wanted. Null when nothing answered
+ * within `budgetMs`. The body of a healthy answer is never read: a root that streams
+ * must not hold the probe. Spawned rather than awaited because the caller is
+ * synchronous.
  */
-export function httpAnswer(url: string, budgetMs: number): {status: number; text: string} | null {
+export function httpAnswer(
+    url: string,
+    budgetMs: number,
+    {excerpt = true}: {excerpt?: boolean} = {}
+): {status: number; text: string} | null {
+    // The status line is written before the body is read: a body that stalls until
+    // the timeout kills the child must not take the status with it.
     const script =
         `fetch(${JSON.stringify(url)}).then(async r => {`
-        + `const t = r.status < 500 ? '' : (await r.text()).replace(/<[^>]*>/g, ' ').replace(/\\s+/g, ' ').trim();`
-        + `console.log(JSON.stringify({status: r.status, text: t.slice(0, 120)}))`
-        + `}, () => console.log('null')).then(() => process.exit(0))`
+        + `process.stdout.write(r.status + '\\n');`
+        + (excerpt ?
+            `if (r.status >= 500) process.stdout.write(JSON.stringify(await r.text()));`
+        :   '')
+        + `}, () => {}).then(() => process.exit(0))`
     const r = spawnSync(process.execPath, ['-e', script], {encoding: 'utf8', timeout: budgetMs})
+    const out = r.stdout ?? ''
+    const newline = out.indexOf('\n')
+    if (newline <= 0) return null
+    const status = Number(out.slice(0, newline))
+    if (!Number.isInteger(status)) return null
+    let text = ''
     try {
-        return JSON.parse((r.stdout ?? '').trim() || 'null')
+        const body: unknown = JSON.parse(out.slice(newline + 1))
+        if (typeof body === 'string') text = textOf(visibleMarkup(body)).slice(0, 120)
     } catch {
-        return null
+        // No body, or one cut off mid-read: the status alone is the answer.
     }
+    return {status, text}
 }
 
 /**

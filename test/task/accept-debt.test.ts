@@ -648,6 +648,30 @@ describe('verify-command debt class', () => {
         expect(openDebts.map(d => d.taskId)).toEqual(['TASK_0002'])
     })
 
+    // Re-judging is for ledgers keyed by the old rule. A command keyed by this one
+    // was singled out against the spec of its day, which a later edit cannot undo.
+    test('a command keyed by the one-command rule survives a later spec edit', async () => {
+        const cwd = await withSpec('TASK_0009', SPEC)
+        const reason = `${REASON}; \`bun run build\` was not tried`
+        await recordDebt(cwd, 'TASK_0009', reason, 'yolo-accepted')
+        expect((await readAcceptDebts(cwd))[0]?.verifyCommand).toBe(
+            'AGENT=1 bun test test/listings.test.ts'
+        )
+        fs.writeFileSync(
+            path.join(cwd, '.pi-tasks', 'TASK_0009.md'),
+            SPEC.replace('bunx tsc --noEmit', 'bunx tsc --noEmit\nbun run build'),
+            'utf8'
+        )
+        const passesAll: CommandRunner = async () => ({
+            failedToStart: false,
+            status: 0,
+            stdout: '',
+            stderr: ''
+        })
+        const {openDebts} = await deriveOpenDebts(cwd, false, passesAll)
+        expect(openDebts).toEqual([])
+    })
+
     test('extracts ONLY a backticked span that is a verbatim VERIFY line', async () => {
         const cmds = ['bunx tsc --noEmit', 'AGENT=1 bun test test/listings.test.ts']
         expect(verifyCommandFromReason(REASON, cmds)).toBe('AGENT=1 bun test test/listings.test.ts')
@@ -667,10 +691,12 @@ describe('verify-command debt class', () => {
         const [debt] = await readAcceptDebts(cwd)
         expect(debt.verifyCommand).toBe('AGENT=1 bun test test/listings.test.ts')
         expect(debt.origin).toBe('yolo-accepted')
-        // 4 tab-separated fields on disk, and legacy 2/3-field records still parse.
-        expect(fs.readFileSync(acceptDebtFile(cwd), 'utf8').split('\t')).toHaveLength(4)
+        expect(debt.singled).toBe(true)
+        // 6 tab-separated fields on disk, and legacy 2/3/4-field records still parse.
+        expect(fs.readFileSync(acceptDebtFile(cwd), 'utf8').split('\t')).toHaveLength(6)
         const legacy = parseAcceptDebts('T1\treason only\nT2\tanother\tyolo-accepted')
         expect(legacy.map(d => d.verifyCommand)).toEqual([undefined, undefined])
+        expect(parseAcceptDebts('T4\twhy\taccepted\tbun test')[0].singled).toBeUndefined()
         // The plain 'accepted' origin survives the positional 4-field shape.
         const accepted = parseAcceptDebts('T3\twhy\taccepted\tbun test')
         expect(accepted[0].origin).toBeUndefined()
@@ -773,6 +799,83 @@ describe('verify-command debt class', () => {
         expect(runs).toBe(1)
         expect(open).toEqual([])
         expect(resolved).toHaveLength(4)
+    })
+
+    // A joined suite debt shares its parts with the debts that name one of them.
+    test('a joined suite command re-runs each part once across debts', async () => {
+        const debts: AcceptDebt[] = [
+            {
+                taskId: 'T1',
+                reason: 'test suite: `bun run test` exited 1',
+                origin: 'inherited-health',
+                verifyCommand: 'bun run test'
+            },
+            {
+                taskId: 'T2',
+                reason: 'test suite: `bun run test` exited 1; `bun run test:e2e` exited 1',
+                origin: 'inherited-health',
+                verifyCommand: 'bun run test && bun run test:e2e'
+            }
+        ]
+        const runs: string[] = []
+        const {resolved} = await recheckAcceptDebts(debts, {
+            staticOk: false,
+            suiteCommands: ['bun run test', 'bun run test:e2e'],
+            rerunVerify: async cmd => {
+                runs.push(cmd)
+                return {outcome: 'pass'}
+            }
+        })
+        expect(runs).toEqual(['bun run test', 'bun run test:e2e'])
+        expect(resolved).toHaveLength(2)
+    })
+
+    test('a joined suite command stays open on its first red part', async () => {
+        const runs: string[] = []
+        const {open} = await recheckAcceptDebts(
+            [
+                {
+                    taskId: 'T2',
+                    reason: 'test suite: `bun run test` exited 1; `bun run test:e2e` exited 1',
+                    origin: 'inherited-health',
+                    verifyCommand: 'bun run test && bun run test:e2e'
+                }
+            ],
+            {
+                staticOk: false,
+                suiteCommands: ['bun run test', 'bun run test:e2e'],
+                rerunVerify: async cmd => {
+                    runs.push(cmd)
+                    return {outcome: 'fail', detail: 'exit 1'}
+                }
+            }
+        )
+        expect(runs).toEqual(['bun run test'])
+        expect(open).toHaveLength(1)
+    })
+
+    // A VERIFY line may chain its own steps: `cd web` must run before the suite.
+    test('a stored command that is not a joined suite runs whole', async () => {
+        const runs: string[] = []
+        await recheckAcceptDebts(
+            [
+                {
+                    taskId: 'T3',
+                    reason: 'test suite: `cd web && bun run test` exited 1',
+                    origin: 'inherited-health',
+                    verifyCommand: 'cd web && bun run test'
+                }
+            ],
+            {
+                staticOk: false,
+                suiteCommands: ['bun run test'],
+                rerunVerify: async cmd => {
+                    runs.push(cmd)
+                    return {outcome: 'pass'}
+                }
+            }
+        )
+        expect(runs).toEqual(['cd web && bun run test'])
     })
 
     // ─── Unfailable commands ────────────────────────────────────────────────

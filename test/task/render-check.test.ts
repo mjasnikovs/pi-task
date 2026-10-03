@@ -13,6 +13,7 @@ import * as path from 'node:path'
 import {spawn} from 'node:child_process'
 import {
     findHeadlessBrowser,
+    httpAnswer,
     judgeRenderedDom,
     parseConsoleLines,
     playwrightCachedChromium,
@@ -158,6 +159,29 @@ describe('runRenderCheck', () => {
         const server = await serve(answer503)
         try {
             expect(runRenderCheck(server.url, null).outcome).toBe('unready')
+        } finally {
+            server.stop()
+        }
+    })
+
+    // The status is in the headers. An error body that stalls must not hide it.
+    spawnFlow('a 5xx whose body never ends still reports its status', async () => {
+        const server = await serve(`(q, r) => { r.writeHead(503); r.write('building') }`)
+        try {
+            expect(httpAnswer(server.url, 2000)?.status).toBe(503)
+        } finally {
+            server.stop()
+        }
+    })
+
+    spawnFlow('the 5xx excerpt is the page text, not its stylesheet', async () => {
+        const page =
+            '<html><head><style>body{margin:0;font-family:system-ui}</style></head>'
+            + `<body><h1>${buildMissing}</h1></body></html>`
+        const server = await serve(`(q, r) => { r.writeHead(503); r.end(${JSON.stringify(page)}) }`)
+        try {
+            const r = runRenderCheck(server.url, null)
+            expect((r as {detail: string}).detail).toContain(`("${buildMissing}")`)
         } finally {
             server.stop()
         }

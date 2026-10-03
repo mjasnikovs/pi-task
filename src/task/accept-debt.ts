@@ -206,6 +206,12 @@ export interface AcceptDebt {
      */
     verifyCommand?: string
     /**
+     * Set when `verifyCommand` was keyed by the rule that the reason names it alone.
+     * Only a record without it, from a ledger older than that rule, is re-judged:
+     * a re-judge reads today's spec, not the one the record was made against.
+     */
+    singled?: true
+    /**
      * The task whose verified work CLOSED this debt (a health repair whose check
      * went green — see closeHealthDebts). A closed debt stays in the ledger as the
      * record of what fixed it, and no re-check reads it again.
@@ -245,6 +251,7 @@ export function parseAcceptDebts(raw: string): AcceptDebt[] {
         // Absent in every legacy record, and absent in most new ones.
         const verifyCommand = parts[3]?.trim()
         const resolvedBy = parts[4]?.trim()
+        const singled = parts[5]?.trim() === SINGLED_FIELD
         out.push({
             taskId: parts[0]!.trim(),
             reason: parts[1]!.trim(),
@@ -253,6 +260,7 @@ export function parseAcceptDebts(raw: string): AcceptDebt[] {
             // parse to the same record.
             ...(isKnownOrigin(origin) && origin !== 'accepted' ? {origin} : {}),
             ...(verifyCommand !== undefined && verifyCommand.length > 0 ? {verifyCommand} : {}),
+            ...(singled && verifyCommand ? {singled} : {}),
             ...(resolvedBy !== undefined && resolvedBy.length > 0 ? {resolvedBy} : {})
         })
     }
@@ -291,7 +299,17 @@ function serialize(d: AcceptDebt): string {
     // only for the non-accepted classes, so old readers/files round-trip unchanged.
     // The 4th verify-command field forces the origin field to be written (positional
     // format) — 'accepted' spelled out there parses back to the same absent origin.
-    // The 5th field likewise forces an (empty) 4th.
+    // The 5th field likewise forces an (empty) 4th, and the 6th an (empty) 5th.
+    if (d.singled && d.verifyCommand) {
+        return [
+            d.taskId,
+            d.reason,
+            d.origin ?? 'accepted',
+            d.verifyCommand,
+            d.resolvedBy ?? '',
+            SINGLED_FIELD
+        ].join(FIELD_SEP)
+    }
     if (d.resolvedBy !== undefined && d.resolvedBy.length > 0) {
         return [
             d.taskId,
@@ -308,6 +326,8 @@ function serialize(d: AcceptDebt): string {
             `${d.taskId}${FIELD_SEP}${d.reason}${FIELD_SEP}${d.origin}`
         :   `${d.taskId}${FIELD_SEP}${d.reason}`
 }
+
+const SINGLED_FIELD = 'singled'
 
 /** Dedup key: same origin + task + reason is one debt (no double-record). */
 function debtKey(d: AcceptDebt): string {
@@ -341,7 +361,9 @@ async function appendDebt(cwd: string, entry: AcceptDebt): Promise<void> {
         // may have rewritten — the provenance claim has to be made where it is true.
         const verifyCommand =
             entry.verifyCommand ?? (await classifyVerifyCommand(cwd, entry.taskId, entry.reason))
-        if (verifyCommand !== null && verifyCommand !== undefined) entry = {...entry, verifyCommand}
+        if (entry.verifyCommand === undefined && verifyCommand !== null) {
+            entry = {...entry, verifyCommand, singled: true}
+        }
         await ledger.append(cwd, [entry])
     } catch {
         // best-effort ledger
@@ -550,12 +572,16 @@ export async function classifyVerifyCommand(
  */
 function suiteCommandFromReason(cwd: string, reason: string): string | null {
     if (failClassOfReason(reason) !== 'test-suite') return null
-    const named = commandsNamedIn(
-        reason,
-        discoverTestCommands(cwd).cmds.map(([bin, args]) => `${bin} ${args.join(' ')}`)
-    )
-    const joined = named.join(' && ')
+    const named = commandsNamedIn(reason, suiteManifest(cwd))
+    const joined = named.join(SUITE_JOIN)
     return named.length > 0 && isStorableCommand(joined) ? joined : null
+}
+
+const SUITE_JOIN = ' && '
+
+/** The repo's test commands, spelled as a reason quotes them. */
+function suiteManifest(cwd: string): string[] {
+    return discoverTestCommands(cwd).cmds.map(([bin, args]) => `${bin} ${args.join(' ')}`)
 }
 
 /** The candidates a reason quotes verbatim in backticks, distinct, in reason order. */
@@ -623,6 +649,9 @@ export async function recheckAcceptDebts(
          * nothing tracked" (`inv-no-write`).
          */
         rerunVerify?: (command: string, debt: AcceptDebt) => Promise<VerifyRerunResult>
+        /** The repo's test commands. A suite debt stores those it names joined, and
+         *  each part is run alone so debts naming the same part share its run. */
+        suiteCommands?: readonly string[]
     }
 ): Promise<{open: AcceptDebt[]; resolved: AcceptDebt[]; trail: string[]}> {
     const open: AcceptDebt[] = []
@@ -643,6 +672,27 @@ export async function recheckAcceptDebts(
                 :   `INCONCLUSIVE${r.detail ? ` (${r.detail})` : ''}, nothing was observed`)
         )
         open.push(d)
+    }
+    const suite = new Set(opts.suiteCommands ?? [])
+    const partsOf = (cmd: string): string[] => {
+        const parts = cmd.split(SUITE_JOIN)
+        return parts.length > 1 && parts.every(p => suite.has(p)) ? parts : [cmd]
+    }
+    /** Null when the budget is spent before `cmd` could run. */
+    const runOnce = async (cmd: string, d: AcceptDebt): Promise<VerifyRerunResult | null> => {
+        const already = ran.get(cmd)
+        if (already !== undefined) return already
+        if (rerunsLeft <= 0 || opts.rerunVerify === undefined) return null
+        rerunsLeft -= 1
+        let r: VerifyRerunResult
+        try {
+            r = await opts.rerunVerify(cmd, d)
+        } catch {
+            // A harness fault observes nothing, so it proves nothing.
+            r = {outcome: 'gap', detail: 're-run harness fault'}
+        }
+        ran.set(cmd, r)
+        return r
     }
     for (const d of debts) {
         if (d.origin === 'cross-task-deletion') {
@@ -673,12 +723,12 @@ export async function recheckAcceptDebts(
         // `bun run test` against every task in it, and re-running it once per debt
         // would spend the whole budget proving the same thing and leave the rest
         // open. The budget counts commands, which is what it was for.
-        const already = ran.get(cmd)
-        if (already !== undefined) {
-            settle(d, cmd, already)
-            continue
+        let r: VerifyRerunResult | null = null
+        for (const part of partsOf(cmd)) {
+            r = await runOnce(part, d)
+            if (r === null || r.outcome !== 'pass') break
         }
-        if (rerunsLeft <= 0) {
+        if (r === null) {
             trail.push(
                 `${d.taskId}: NOT re-checked — the per-run re-run budget `
                     + `(${MAX_VERIFY_RERUNS}) is spent; the debt stays open`
@@ -686,15 +736,6 @@ export async function recheckAcceptDebts(
             open.push(d)
             continue
         }
-        rerunsLeft -= 1
-        let r: VerifyRerunResult
-        try {
-            r = await opts.rerunVerify(cmd, d)
-        } catch {
-            // A harness fault observes nothing, so it proves nothing.
-            r = {outcome: 'gap', detail: 're-run harness fault'}
-        }
-        ran.set(cmd, r)
         settle(d, cmd, r)
     }
     return {open, resolved, trail}
@@ -797,13 +838,14 @@ export function describeDebt(d: AcceptDebt): string {
 /**
  * A ledger written before the one-command rule may key a debt to a command its
  * reason lists as PASSING. Such a command is dropped when the owning spec shows
- * the ambiguity: the reason names another of its VERIFY lines too. Anything the
- * re-check cannot re-judge (a suite debt, an unreadable spec, a command the VERIFY
- * no longer holds) keeps the record-time claim.
+ * the ambiguity: the reason names another of its VERIFY lines too. One the spec
+ * shows alone is marked singled, so it is judged once. Anything the re-check
+ * cannot re-judge (a suite debt, an unreadable spec, a command the VERIFY no
+ * longer holds) keeps the record-time claim.
  */
-async function dropAmbiguousCommand(cwd: string, d: AcceptDebt): Promise<AcceptDebt> {
+async function rejudgeLegacyCommand(cwd: string, d: AcceptDebt): Promise<AcceptDebt> {
     const cmd = d.verifyCommand
-    if (cmd === undefined || d.resolvedBy !== undefined) return d
+    if (cmd === undefined || d.singled || d.resolvedBy !== undefined) return d
     if (failClassOfReason(d.reason) === 'test-suite') return d
     let lines: string[]
     try {
@@ -813,7 +855,8 @@ async function dropAmbiguousCommand(cwd: string, d: AcceptDebt): Promise<AcceptD
         return d
     }
     const named = commandsNamedIn(d.reason, lines)
-    if (!named.includes(cmd) || named.length === 1) return d
+    if (!named.includes(cmd)) return d
+    if (named.length === 1) return {...d, singled: true}
     const {verifyCommand: _ambiguous, ...rest} = d
     return rest
 }
@@ -846,8 +889,8 @@ export async function deriveOpenDebts(
     signal?: AbortSignal
 ): Promise<{openDebts: AcceptDebt[]; debtNote?: string; trail?: string[]}> {
     const stored = await readAcceptDebts(cwd)
-    const all = await Promise.all(stored.map(d => dropAmbiguousCommand(cwd, d)))
-    const dropped = all.some((d, i) => d !== stored[i])
+    const all = await Promise.all(stored.map(d => rejudgeLegacyCommand(cwd, d)))
+    const rejudged = all.some((d, i) => d !== stored[i])
     // Closed debts are kept as the record of what fixed them, and never re-checked.
     const closed = all.filter(d => d.resolvedBy !== undefined)
     const {
@@ -865,10 +908,11 @@ export async function deriveOpenDebts(
             // VERIFY-COMMAND class: a debt that NAMES a command is settled
             // by running that command, under the gate's own env-gap contract and behind
             // the no-write guard below.
-            rerunVerify: cmd => rerunDebtVerifyCommand(cwd, cmd, run, signal)
+            rerunVerify: cmd => rerunDebtVerifyCommand(cwd, cmd, run, signal),
+            suiteCommands: suiteManifest(cwd)
         }
     )
-    if (resolved.length > 0 || dropped) await writeAcceptDebts(cwd, [...closed, ...openRaw])
+    if (resolved.length > 0 || rejudged) await writeAcceptDebts(cwd, [...closed, ...openRaw])
     // Conflicting-claim annotation: an existence-as-failure debt whose
     // named file is another task's committed deliverable is a plan defect — surface
     // the contradiction with the debt so nobody (human or child) treats the claim as

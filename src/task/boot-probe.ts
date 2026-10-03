@@ -569,7 +569,7 @@ export async function preferredDeclaredPort(cwd: string): Promise<number | null>
  * ordinary case — so only a connection error or a timeout is a no.
  */
 function defaultHttpProbe(port: number): boolean {
-    return httpAnswer(`http://127.0.0.1:${port}/`, 5000) !== null
+    return httpAnswer(`http://127.0.0.1:${port}/`, 5000, {excerpt: false}) !== null
 }
 
 /** Process-group id of `pid`, or null if it cannot be read. */
@@ -902,6 +902,7 @@ export async function runBootCheck(
         child.on('exit', (status, signal) => {
             leaderExited = true
             if (status === 0) {
+                if (lastUnready !== null) return settle({outcome: 'fail', detail: lastUnready})
                 if (expectServer && !listenerSeen) {
                     if (!canEnumerate) {
                         return settle({outcome: 'pass', renderNote: UNOBSERVED_LISTENER_NOTE})

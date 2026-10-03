@@ -238,12 +238,16 @@ export async function findRepairCandidate(input: RootCauseInput): Promise<Repair
         owner = null
     }
     if (!owner || owner === current) return null
+    // A health reason is minted from the red commands; the rationale is model prose.
+    const verifyCommand = extractFailingCommand(
+        isHealthClass(failClassOfReason(input.failReason)) ? input.failReason : text
+    )
     return {
         file: accused.file,
         owner,
         defect: summariseDefect(accused.clause, accused.file),
         blamedTask: current,
-        ...(extractFailingCommand(text) ? {verifyCommand: extractFailingCommand(text)} : {})
+        ...(verifyCommand ? {verifyCommand} : {})
     }
 }
 

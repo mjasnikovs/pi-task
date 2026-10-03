@@ -140,6 +140,22 @@ describe('findRepairCandidate — run 14 fixture', () => {
         expect(c?.defect).toContain('TRUNCATE')
     })
 
+    // The rationale is the judge's prose: a command it suggests is not one the
+    // health check saw red.
+    test("a health FAIL pins its own red commands, not the rationale's", async () => {
+        const c = await findRepairCandidate({
+            failReason: 'test suite: `bun run test` exited 1',
+            rationale:
+                'test/teardown.ts has a pre-existing bug in its TRUNCATE statements; '
+                + 'run `npm install` then `bun run build`',
+            currentTaskId: 'TASK_0013',
+            touched: ['test/invite.test.ts'],
+            introducedBy: introducedBy
+        })
+        expect(c?.file).toBe('test/teardown.ts')
+        expect(c?.verifyCommand).toBe('bun run test')
+    })
+
     test('TASK_0019 attributes its FAIL to the same file', async () => {
         const c = await findRepairCandidate({
             failReason: TASK_0019_FAIL,
