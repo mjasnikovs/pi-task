@@ -219,12 +219,15 @@ describe('linux, darwin: the reap against a process table the test writes', () =
         expect(sent).toEqual(['SIGTERM 7', 'SIGKILL 7'])
     })
 
+    // Revealed by the clock, not by the SIGKILL: the pass that sends it may be the
+    // one the reap gives up on, and no scan would follow it.
     test('a leftover discovered after the grace is still signalled', async () => {
         const sent: string[] = []
+        const start = performance.now()
         await reapWith(
             fakeProcs(
                 sent,
-                () => (sent.some(s => s.startsWith('SIGKILL')) ? [7, 8] : [7]),
+                () => (performance.now() - start >= graceMs ? [7, 8] : [7]),
                 pid => ({startedAt: 'A', ended: sent.includes(`SIGKILL ${pid}`)})
             )
         )
