@@ -708,25 +708,24 @@ export async function recheckAcceptDebts(
         // open. The budget counts stored commands, which is what it was for: a joined
         // suite takes as long as its parts run in turn.
         let charged = false
-        let spent = false
-        let r: VerifyRerunResult = {outcome: 'pass'}
+        let r: VerifyRerunResult | undefined
         let decidedBy = cmd
         for (const part of partsOf(cmd)) {
-            if (!ran.has(part) && !charged) {
-                if (rerunsLeft <= 0) {
-                    spent = true
-                    break
+            r = ran.get(part)
+            if (r === undefined) {
+                if (!charged) {
+                    if (rerunsLeft <= 0) break
+                    rerunsLeft -= 1
+                    charged = true
                 }
-                rerunsLeft -= 1
-                charged = true
+                r = await rerun(opts.rerunVerify, part, d)
             }
-            r = ran.get(part) ?? (await rerun(opts.rerunVerify, part, d))
             if (r.outcome !== 'pass') {
                 decidedBy = part
                 break
             }
         }
-        if (spent) {
+        if (r === undefined) {
             trail.push(
                 `${d.taskId}: NOT re-checked — the per-run re-run budget `
                     + `(${MAX_VERIFY_RERUNS}) is spent; the debt stays open`

@@ -427,6 +427,16 @@ describe('the boot reap', () => {
         expect(exited).toEqual([false, true])
     })
 
+    // A SIGTERM that went nowhere leaves no group, and the pid may be someone else's.
+    test('no SIGKILL follows a SIGTERM that did not land', async () => {
+        const sent: NodeJS.Signals[] = []
+        await passThenExitOn('linux', (_pid, signal) => {
+            sent.push(signal)
+            return false
+        })
+        expect(sent).toEqual(['SIGTERM'])
+    })
+
     test('win32: taskkill once, while the boot child still lives', async () => {
         const tk = fakeSystem32()
         try {

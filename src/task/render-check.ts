@@ -142,17 +142,30 @@ export function judgeRenderedDom(html: string): {ok: boolean; detail: string} {
 
 /** The body's markup, without what a reader never sees. */
 function visibleMarkup(html: string): string {
-    const bodyMatch = /<body\b[^>]*>([\s\S]*)<\/body>/i.exec(html)
     // No <body> at all in a dumped DOM → the browser rendered something degenerate;
     // judge the whole document rather than fail on shape.
-    return withoutHidden(bodyMatch ? bodyMatch[1] : html)
+    return withoutHidden(bodyOf(html) ?? html)
 }
 
 // pageText and what it calls also run as source in httpAnswer's child: keep them self-contained.
 
 /** The words a reader sees, from the head when the body has none. */
 function pageText(html: string): string {
-    return textOf(visibleMarkup(html)) || textOf(withoutHidden(html))
+    const body = bodyOf(html)
+    return (body !== null && textOf(withoutHidden(body))) || textOf(withoutHidden(html))
+}
+
+/** From the first <body> tag to the last </body>, or to the end: HTML lets a page omit it. */
+function bodyOf(html: string): string | null {
+    // Not one regex: `([\s\S]*)<\/body>` backtracks the rest of the page for each opener.
+    const opener = /<body\b/i.exec(html)
+    const tagEnd = opener ? html.indexOf('>', opener.index) : -1
+    if (tagEnd === -1) return null
+    const closer = /<\/body>/gi
+    closer.lastIndex = tagEnd + 1
+    let end = html.length
+    for (let m = closer.exec(html); m !== null; m = closer.exec(html)) end = m.index
+    return html.slice(tagEnd + 1, end)
 }
 
 /** Drops the elements and comments a reader never sees. */
@@ -181,10 +194,16 @@ function withoutHidden(markup: string): string {
 }
 
 function textOf(markup: string): string {
-    return markup
-        .replace(/<[^>]*>/g, ' ')
-        .replace(/\s+/g, ' ')
-        .trim()
+    // Not /<[^>]*>/g: each `<` after the last `>` would rescan the rest of the page.
+    let text = ''
+    let from = 0
+    for (let open = markup.indexOf('<'); open !== -1; open = markup.indexOf('<', from)) {
+        const close = markup.indexOf('>', open)
+        if (close === -1) break
+        text += `${markup.slice(from, open)} `
+        from = close + 1
+    }
+    return (text + markup.slice(from)).replace(/\s+/g, ' ').trim()
 }
 
 /** Wall-clock cap for the whole browser run; virtual-time budget for the page JS. */
@@ -267,7 +286,7 @@ export function httpAnswer(
     // the timeout kills the child must not take the status with it. The excerpt is
     // cut in the child, because process.exit drops the unflushed tail of a long write.
     const script =
-        `${pageText};${visibleMarkup};${withoutHidden};${textOf};`
+        `${pageText};${bodyOf};${withoutHidden};${textOf};`
         + `fetch(${JSON.stringify(url)}).then(async r => {`
         + `process.stdout.write(r.status + '\\n');`
         + (excerpt ?

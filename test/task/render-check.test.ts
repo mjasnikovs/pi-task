@@ -231,6 +231,34 @@ describe('runRenderCheck', () => {
         }
     })
 
+    // HTML lets a page leave </body> out.
+    spawnFlow('a 5xx page with no closing body tag gives the body, not its title', async () => {
+        const page = `<html><head><title>503 Service Unavailable</title></head><body><h1>${buildMissing}</h1>`
+        const server = await serve(`(q, r) => { r.writeHead(503); r.end(${JSON.stringify(page)}) }`)
+        try {
+            expect(httpAnswer(server.url, 10_000)?.text).toBe(buildMissing)
+        } finally {
+            server.stop()
+        }
+    })
+
+    for (const [what, unit] of [
+        ['body openers and no closer', '<body>'],
+        ['less-than signs and no later greater-than', 'a<b']
+    ] as const) {
+        spawnFlow(`a 5xx page of many ${what} still gives its excerpt`, async () => {
+            const head = JSON.stringify(`<html><body><h1>${buildMissing}</h1>`)
+            const tail = JSON.stringify(unit)
+            const page = `${head} + (${tail} + 'x'.repeat(${100 - unit.length})).repeat(30_000)`
+            const server = await serve(`(q, r) => { r.writeHead(503); r.end(${page}) }`)
+            try {
+                expect(httpAnswer(server.url, 10_000)?.text).toStartWith(buildMissing)
+            } finally {
+                server.stop()
+            }
+        })
+    }
+
     // A healthy status is read from the headers alone: a root that streams forever
     // must not hold the probe until its timeout.
     spawnFlow(
