@@ -321,9 +321,9 @@ export interface BootDeps {
     /**
      * Tear down the child's whole process group. Injected with `spawnBoot`, because
      * a fake child has no group to kill and a real `process.kill(pid)` against a
-     * fake pid would signal something else entirely.
+     * fake pid would signal something else entirely. Returns whether a signal went out.
      */
-    killGroup?: (pid: number, signal: NodeJS.Signals, leaderExited: boolean) => void
+    killGroup?: (pid: number, signal: NodeJS.Signals, leaderExited: boolean) => boolean
     /** Which platform's spawn options, served-app rule and reap to use. Tests drive
      *  the win32 arm from a POSIX host; production leaves it to `process.platform`. */
     platform?: NodeJS.Platform
@@ -780,18 +780,20 @@ export async function runBootCheck(
             // CALLER's own process group, so a pid of 0 turns a best-effort
             // teardown into self-termination. Node's spawn never yields 0, but
             // `spawnBoot` is a seam now and a fake or future child could.
-            if (!child.pid) return
-            reapGroup(child.pid, sig, leaderExited)
+            return !!child.pid && reapGroup(child.pid, sig, leaderExited)
+        }
+        const reap = () => {
+            if (killGroup('SIGTERM')) {
+                setTimeout(() => killGroup('SIGKILL'), BOOT_KILL_GRACE_MS).unref()
+            }
         }
         const passAndKill = (renderNote?: string) => {
             settle(renderNote ? {outcome: 'pass', renderNote} : {outcome: 'pass'})
-            killGroup('SIGTERM')
-            setTimeout(() => killGroup('SIGKILL'), BOOT_KILL_GRACE_MS).unref()
+            reap()
         }
         const failAndKill = (detail: string) => {
             settle({outcome: 'fail', detail})
-            killGroup('SIGTERM')
-            setTimeout(() => killGroup('SIGKILL'), BOOT_KILL_GRACE_MS).unref()
+            reap()
         }
         // Served apps only: poll for a listening socket owned by our process group.
         // As soon as one appears the boot has demonstrably served → run the render
@@ -887,13 +889,9 @@ export async function runBootCheck(
                 // Survival rule, stamped UNOBSERVED — an observer limitation is not
                 // an app defect.
                 if (!canEnumerate) return passAndKill(UNOBSERVED_LISTENER_NOTE)
-                settle({
-                    outcome: 'fail',
-                    detail: `still running after ${graceMs}ms but never opened a listening socket — the spec/dependencies promise an HTTP server`
-                })
-                killGroup('SIGTERM')
-                setTimeout(() => killGroup('SIGKILL'), BOOT_KILL_GRACE_MS).unref()
-                return
+                return failAndKill(
+                    `still running after ${graceMs}ms but never opened a listening socket — the spec/dependencies promise an HTTP server`
+                )
             }
             passAndKill()
         }
@@ -901,8 +899,10 @@ export async function runBootCheck(
         child.on('error', () => settle({outcome: 'skip', spawnFailed: true}))
         child.on('exit', (status, signal) => {
             leaderExited = true
+            // Whatever the leader backgrounded outlives it and keeps the port.
+            if (!settled) reap()
             if (status === 0) {
-                if (lastUnready !== null) return failAndKill(lastUnready)
+                if (lastUnready !== null) return settle({outcome: 'fail', detail: lastUnready})
                 if (expectServer && !listenerSeen) {
                     if (!canEnumerate) {
                         return settle({outcome: 'pass', renderNote: UNOBSERVED_LISTENER_NOTE})

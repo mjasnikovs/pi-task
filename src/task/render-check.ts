@@ -148,13 +148,36 @@ function visibleMarkup(html: string): string {
     return withoutHidden(bodyMatch ? bodyMatch[1] : html)
 }
 
-// withoutHidden and textOf also run as source in httpAnswer's child: keep them self-contained.
+// pageText and what it calls also run as source in httpAnswer's child: keep them self-contained.
+
+/** The words a reader sees, from the head when the body has none. */
+function pageText(html: string): string {
+    return textOf(visibleMarkup(html)) || textOf(withoutHidden(html))
+}
 
 /** Drops the elements and comments a reader never sees. */
 function withoutHidden(markup: string): string {
-    return markup
-        .replace(/<(script|style|template|noscript)\b[\s\S]*?<\/\1>/gi, '')
-        .replace(/<!--[\s\S]*?-->/g, '')
+    // Not a lazy regex: each opener with no closer would rescan the rest of the
+    // page, quadratic in a multi-MB 5xx body. A closer missing once is missing for good.
+    const opener = /<(script|style|template|noscript)\b|<!--/gi
+    const noCloser = new Set<string>()
+    let kept = ''
+    let from = 0
+    for (let m = opener.exec(markup); m !== null; m = opener.exec(markup)) {
+        const closer = m[1] ? `</${m[1]}>` : '-->'
+        const key = closer.toLowerCase()
+        if (noCloser.has(key)) continue
+        const find = new RegExp(closer, 'gi')
+        find.lastIndex = opener.lastIndex
+        if (find.exec(markup) === null) {
+            noCloser.add(key)
+            continue
+        }
+        kept += markup.slice(from, m.index)
+        from = find.lastIndex
+        opener.lastIndex = from
+    }
+    return kept + markup.slice(from)
 }
 
 function textOf(markup: string): string {
@@ -243,13 +266,12 @@ export function httpAnswer(
     // The status line is written before the body is read: a body that stalls until
     // the timeout kills the child must not take the status with it. The excerpt is
     // cut in the child, because process.exit drops the unflushed tail of a long write.
-    // The whole document is read, so a page whose only words are its <title> keeps them.
     const script =
-        `${withoutHidden};${textOf};`
+        `${pageText};${visibleMarkup};${withoutHidden};${textOf};`
         + `fetch(${JSON.stringify(url)}).then(async r => {`
         + `process.stdout.write(r.status + '\\n');`
         + (excerpt ?
-            `if (r.status >= 500) process.stdout.write(textOf(withoutHidden(await r.text())).slice(0, ${EXCERPT_LENGTH}));`
+            `if (r.status >= 500) process.stdout.write(pageText(await r.text()).slice(0, ${EXCERPT_LENGTH}));`
         :   '')
         + `}, () => {}).then(() => process.exit(0))`
     const r = spawnSync(process.execPath, ['-e', script], {encoding: 'utf8', timeout: budgetMs})

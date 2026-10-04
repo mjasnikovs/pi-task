@@ -676,6 +676,35 @@ describe('verify-command debt class', () => {
         expect(openDebts).toEqual([])
     })
 
+    // A failed read shows nothing, so the record waits for a spec it can be judged by.
+    test('a legacy command whose spec could not be read is judged when it can be', async () => {
+        const cwd = makeCwd()
+        fs.mkdirSync(path.join(cwd, '.pi-tasks'), {recursive: true})
+        const reason = '`bun run build` exited 1; `bun run lint` exit 0'
+        fs.writeFileSync(
+            acceptDebtFile(cwd),
+            `TASK_0003\t${reason}\tyolo-accepted\tbun run build\n`,
+            'utf8'
+        )
+        const exits =
+            (status: number): CommandRunner =>
+            async () => ({
+                failedToStart: false,
+                status,
+                stdout: '',
+                stderr: ''
+            })
+        await deriveOpenDebts(cwd, false, exits(1))
+        fs.writeFileSync(
+            path.join(cwd, '.pi-tasks', 'TASK_0003.md'),
+            SPEC.replace('bunx tsc --noEmit', 'bun run build\nbun run lint'),
+            'utf8'
+        )
+        const {openDebts} = await deriveOpenDebts(cwd, false, exits(0))
+        expect(openDebts).toHaveLength(1)
+        expect(openDebts[0]!.verifyCommand).toBeUndefined()
+    })
+
     // Re-judging is for ledgers keyed by the old rule. A command keyed by this one
     // was singled out against the spec of its day, which a later edit cannot undo.
     test('a command keyed by the one-command rule survives a later spec edit', async () => {

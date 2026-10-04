@@ -83,7 +83,10 @@ function fakeChild(o: FakeChildOptions = {}) {
             ),
         deps: (over: BootDeps = {}): BootDeps => ({
             spawnBoot: () => child,
-            killGroup: (pid, signal) => killed.push({pid, signal}),
+            killGroup: (pid, signal) => {
+                killed.push({pid, signal})
+                return true
+            },
             ...over
         })
     }
@@ -353,12 +356,13 @@ describe('teardown', () => {
         expect(f.killed[0]).toEqual({pid: 9931, signal: 'SIGTERM'})
     })
 
-    test('a child that already exited is not signalled', async () => {
+    // What the child backgrounded outlives it, holding the port the next boot needs.
+    test('a child that exits has its group swept', async () => {
         const f = fakeChild({pid: 9931})
         const p = runBootCheck('/tmp/x', CMD, 60_000, {deps: f.deps()})
         f.exit(0)
         await p
-        expect(f.killed).toHaveLength(0)
+        expect(f.killed[0]).toEqual({pid: 9931, signal: 'SIGTERM'})
     })
 })
 
@@ -416,7 +420,10 @@ describe('the boot reap', () => {
     // An injected reap replaces the real one, so it has to be told what that one knows.
     test('an injected killGroup learns whether the boot child had exited', async () => {
         const exited: boolean[] = []
-        await passThenExitOn('linux', (_pid, _signal, leaderExited) => exited.push(leaderExited))
+        await passThenExitOn('linux', (_pid, _signal, leaderExited) => {
+            exited.push(leaderExited)
+            return true
+        })
         expect(exited).toEqual([false, true])
     })
 

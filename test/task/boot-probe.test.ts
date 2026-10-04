@@ -419,6 +419,35 @@ describe('runBootCheck — unobservable listener degrades, never false-FAILs (ru
         await gone(Number(fs.readFileSync(pidFile, 'utf8').trim()))
     })
 
+    const leavesChild = (dir: string, exit: number): [string, string[]] => {
+        const pidFile = path.join(dir, 'server.pid')
+        return nodeScript(
+            `const {spawn}=require('child_process');const fs=require('fs');`
+                + `const c=spawn(process.execPath,['-e','setTimeout(()=>{},600000)'],{stdio:'ignore'});`
+                + `fs.writeFileSync(${JSON.stringify(pidFile)},String(c.pid));process.exit(${exit})`
+        )
+    }
+
+    for (const [what, exit, expectServer] of [
+        ['passes', 0, false],
+        ['never listened', 0, true],
+        ['exited 1', 1, false]
+    ] as const) {
+        testPosix(`a leader that ${what} leaves no member of its group behind`, async () => {
+            const dir = tmpDir('pi-boot-exit-')
+            await runBootCheck(dir, leavesChild(dir, exit), 60_000, {
+                expectServer,
+                deps: {
+                    ...blind,
+                    enumerationCapable: () => true,
+                    httpProbe: () => false,
+                    pickPort: async () => 45679
+                }
+            })
+            await gone(Number(fs.readFileSync(path.join(dir, 'server.pid'), 'utf8').trim()))
+        })
+    }
+
     testPosix('a page that recovers from an HTTP error inside the window is judged', async () => {
         let probes = 0
         const r = await runBootCheck(os.tmpdir(), alive, 5000, {

@@ -643,6 +643,21 @@ export async function recheckAcceptDebts(
     const trail: string[] = []
     let rerunsLeft = MAX_VERIFY_RERUNS
     const ran = new Map<string, VerifyRerunResult>()
+    const rerun = async (
+        rerunVerify: NonNullable<typeof opts.rerunVerify>,
+        cmd: string,
+        d: AcceptDebt
+    ): Promise<VerifyRerunResult> => {
+        let r: VerifyRerunResult
+        try {
+            r = await rerunVerify(cmd, d)
+        } catch {
+            // A harness fault observes nothing, so it proves nothing.
+            r = {outcome: 'gap', detail: 're-run harness fault'}
+        }
+        ran.set(cmd, r)
+        return r
+    }
     const settle = (d: AcceptDebt, cmd: string, r: VerifyRerunResult): void => {
         if (r.outcome === 'pass') {
             resolved.push(d)
@@ -693,30 +708,25 @@ export async function recheckAcceptDebts(
         // open. The budget counts stored commands, which is what it was for: a joined
         // suite takes as long as its parts run in turn.
         let charged = false
-        let r: VerifyRerunResult | null = null
+        let spent = false
+        let r: VerifyRerunResult = {outcome: 'pass'}
         let decidedBy = cmd
         for (const part of partsOf(cmd)) {
-            r = ran.get(part) ?? null
-            if (r === null) {
-                if (!charged) {
-                    if (rerunsLeft <= 0) break
-                    rerunsLeft -= 1
-                    charged = true
+            if (!ran.has(part) && !charged) {
+                if (rerunsLeft <= 0) {
+                    spent = true
+                    break
                 }
-                try {
-                    r = await opts.rerunVerify(part, d)
-                } catch {
-                    // A harness fault observes nothing, so it proves nothing.
-                    r = {outcome: 'gap', detail: 're-run harness fault'}
-                }
-                ran.set(part, r)
+                rerunsLeft -= 1
+                charged = true
             }
+            r = ran.get(part) ?? (await rerun(opts.rerunVerify, part, d))
             if (r.outcome !== 'pass') {
                 decidedBy = part
                 break
             }
         }
-        if (r === null) {
+        if (spent) {
             trail.push(
                 `${d.taskId}: NOT re-checked — the per-run re-run budget `
                     + `(${MAX_VERIFY_RERUNS}) is spent; the debt stays open`
@@ -827,18 +837,19 @@ export function describeDebt(d: AcceptDebt): string {
  * A ledger written before the one-command rule may key a debt to a command its
  * reason lists as PASSING. Such a command is dropped when the owning spec shows
  * the ambiguity: the reason names another of its VERIFY lines too. Any other
- * record keeps the record-time claim and is marked singled, so it is judged once.
+ * record judged against a spec keeps the record-time claim and is marked singled,
+ * so it is judged once. A suite debt, or one whose spec cannot be read, is not judged.
  */
 async function rejudgeLegacyCommand(cwd: string, d: AcceptDebt): Promise<AcceptDebt> {
     const cmd = d.verifyCommand
     if (cmd === undefined || d.singled || d.resolvedBy !== undefined) return d
     if (failClassOfReason(d.reason) === 'test-suite') return d
-    let lines: string[] = []
+    let lines: string[]
     try {
         const spec = await fsp.readFile(taskFilePath(cwd, d.taskId.trim()), 'utf8')
         lines = parseVerifyBlockStrict(spec)?.map(c => c.raw) ?? []
     } catch {
-        // Unreadable: nothing shows the ambiguity, so the record-time claim stands.
+        return d
     }
     const named = commandsNamedIn(d.reason, lines)
     if (named.includes(cmd) && named.length > 1) {
