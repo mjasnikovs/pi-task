@@ -116,7 +116,18 @@ export function findHeadlessBrowser(): string | null {
 }
 
 /** Elements whose presence means the page rendered CONCRETE UI even with no text. */
-const VISUAL_ELEMENT_RE = /<(?:img|svg|canvas|video|audio|input|button|textarea|select|iframe)\b/i
+const VISUAL_ELEMENTS = new Set([
+    'img',
+    'svg',
+    'canvas',
+    'video',
+    'audio',
+    'input',
+    'button',
+    'textarea',
+    'select',
+    'iframe'
+])
 
 /**
  * Judge a RENDERED (post-JS) DOM: the body must carry visible text or concrete
@@ -124,12 +135,11 @@ const VISUAL_ELEMENT_RE = /<(?:img|svg|canvas|video|audio|input|button|textarea|
  * against real captured DOMs; `detail` describes what was (or wasn't) found.
  */
 export function judgeRenderedDom(html: string): {ok: boolean; detail: string} {
-    const visible = visibleMarkup(html)
-    const text = textOf(visible)
-    if (text.length > 0) {
-        return {ok: true, detail: `rendered visible text ("${text.slice(0, 80)}")`}
+    const page = readPage(html)
+    if (page.shown.length > 0) {
+        return {ok: true, detail: `rendered visible text ("${page.shown.slice(0, 80)}")`}
     }
-    if (VISUAL_ELEMENT_RE.test(visible)) {
+    if (page.tags.some(tag => VISUAL_ELEMENTS.has(tag))) {
         return {ok: true, detail: 'rendered visual/interactive elements (no text)'}
     }
     return {
@@ -140,73 +150,109 @@ export function judgeRenderedDom(html: string): {ok: boolean; detail: string} {
     }
 }
 
-/** The body's markup, without what a reader never sees. */
-function visibleMarkup(html: string): string {
-    const shown = withoutHidden(html)
-    // No <body> at all in a dumped DOM → the browser rendered something degenerate;
-    // judge the whole document rather than fail on shape.
-    return bodyOf(shown) ?? shown
-}
-
 // pageText and what it calls also run as source in httpAnswer's child: keep them self-contained.
 
-/** The words a reader sees, from the title when nothing else has any. */
+/** The words a reader sees, from the title and head when nothing else has any. */
 function pageText(html: string): string {
-    // Hidden markup goes first: a `<body` inside a head script must not start the body.
-    const shown = withoutHidden(html)
-    // HTML lets a page omit the <body> tag; the title is not what it shows.
-    return textOf(bodyOf(shown) ?? withoutHidden(shown, 'title')) || textOf(shown)
+    const page = readPage(html)
+    return page.shown || page.elsewhere
 }
 
-/** From the first <body> tag to the last </body>, or to the end: HTML lets a page omit it. */
-function bodyOf(html: string): string | null {
-    // Not one regex: `([\s\S]*)<\/body>` backtracks the rest of the page for each opener.
-    const opener = /<body\b/i.exec(html)
-    const tagEnd = opener ? html.indexOf('>', opener.index) : -1
-    if (tagEnd === -1) return null
-    const closer = /<\/body>/gi
-    closer.lastIndex = tagEnd + 1
-    let end = html.length
-    for (let m = closer.exec(html); m !== null; m = closer.exec(html)) end = m.index
-    return html.slice(tagEnd + 1, end)
-}
-
-/** Drops the elements and comments a reader never sees. */
-function withoutHidden(markup: string, elements = 'script|style|template|noscript'): string {
-    // Not a lazy regex: each opener with no closer would rescan the rest of the
-    // page, quadratic in a multi-MB 5xx body. A closer missing once is missing for good.
-    const opener = new RegExp(`<(${elements})\\b|<!--`, 'gi')
+/**
+ * A page read tag by tag, as a browser reads it: a `<body` or `<!--` inside an
+ * attribute, a title or a script is text, not markup. What is shown runs from the
+ * first <body> tag to the last </body>, or to the end. A page with no <body> tag
+ * shows all but its title: HTML lets it omit the tag.
+ */
+function readPage(html: string): {shown: string; elsewhere: string; tags: string[]} {
+    const unseen = new Set(['script', 'style', 'template', 'noscript'])
+    const rawText = new Set([...unseen, 'title', 'textarea'])
+    const runs: string[] = []
+    const titles = new Set<number>()
+    const tags: Array<{at: number; name: string}> = []
+    // A closer missing once is missing for good: looking again would rescan the
+    // rest of the page for each opener, quadratic in a multi-MB 5xx body.
     const noCloser = new Set<string>()
-    let kept = ''
-    let from = 0
-    for (let m = opener.exec(markup); m !== null; m = opener.exec(markup)) {
-        const closer = m[1] ? `</${m[1]}>` : '-->'
-        const key = closer.toLowerCase()
-        if (noCloser.has(key)) continue
-        const find = new RegExp(closer, 'gi')
-        find.lastIndex = opener.lastIndex
-        if (find.exec(markup) === null) {
-            noCloser.add(key)
+    const tagName = /[a-z][^\s/>]*/iy
+    let bodyStart = -1
+    let bodyEnd = -1
+    let at = 0
+    for (let lt = html.indexOf('<', at); lt !== -1; lt = html.indexOf('<', at)) {
+        runs.push(html.slice(at, lt))
+        at = lt + 1
+        if (html.startsWith('!--', at)) {
+            const end = noCloser.has('-->') ? -1 : html.indexOf('-->', at + 3)
+            if (end === -1) noCloser.add('-->')
+            at = end === -1 ? at + 3 : end + 3
             continue
         }
-        kept += markup.slice(from, m.index)
-        from = find.lastIndex
-        opener.lastIndex = from
+        const closing = html[at] === '/'
+        tagName.lastIndex = closing ? at + 1 : at
+        const name = tagName.exec(html)?.[0].toLowerCase()
+        if (name === undefined) {
+            if (!closing && html[at] !== '!' && html[at] !== '?') {
+                runs.push('<')
+                continue
+            }
+            const end = html.indexOf('>', at)
+            at = end === -1 ? html.length : end + 1
+            continue
+        }
+        const end = tagEnd(html, tagName.lastIndex)
+        if (end === -1) {
+            // A browser drops a tag the page never finishes, and all after it.
+            at = html.length
+            break
+        }
+        at = end + 1
+        if (closing) {
+            if (name === 'body' && bodyStart !== -1) bodyEnd = runs.length
+            continue
+        }
+        if (name === 'body' && bodyStart === -1) bodyStart = runs.length
+        tags.push({at: runs.length, name})
+        if (!rawText.has(name) || noCloser.has(name)) continue
+        const closer = new RegExp(`</${name}[\\s/>]`, 'gi')
+        closer.lastIndex = at
+        const found = closer.exec(html)
+        if (found === null) {
+            noCloser.add(name)
+            continue
+        }
+        if (name === 'title') titles.add(runs.length)
+        if (!unseen.has(name)) runs.push(html.slice(at, found.index))
+        const closerEnd = html.indexOf('>', found.index)
+        at = closerEnd === -1 ? html.length : closerEnd + 1
     }
-    return kept + markup.slice(from)
+    runs.push(html.slice(at))
+    const last = bodyEnd === -1 ? runs.length : bodyEnd
+    const inBody = (i: number) => bodyStart === -1 || (i >= bodyStart && i < last)
+    const shown: string[] = []
+    const elsewhere: string[] = []
+    runs.forEach((run, i) => (inBody(i) && !titles.has(i) ? shown : elsewhere).push(run))
+    const words = (parts: string[]) => parts.join(' ').replace(/\s+/g, ' ').trim()
+    return {
+        shown: words(shown),
+        elsewhere: words(elsewhere),
+        tags: tags.filter(tag => inBody(tag.at)).map(tag => tag.name)
+    }
 }
 
-function textOf(markup: string): string {
-    // Not /<[^>]*>/g: each `<` after the last `>` would rescan the rest of the page.
-    let text = ''
-    let from = 0
-    for (let open = markup.indexOf('<'); open !== -1; open = markup.indexOf('<', from)) {
-        const close = markup.indexOf('>', open)
-        if (close === -1) break
-        text += `${markup.slice(from, open)} `
-        from = close + 1
+/** Where the tag whose attributes start at `from` ends, or -1 when it never does. */
+function tagEnd(html: string, from: number): number {
+    // A quoted value may hold `>`: it does not end the tag.
+    const stop = /[>"']/g
+    stop.lastIndex = from
+    for (let m = stop.exec(html); m !== null; m = stop.exec(html)) {
+        if (m[0] === '>') return m.index
+        let before = m.index - 1
+        while (before > from && ' \t\n\f\r'.includes(html[before]!)) before--
+        if (html[before] !== '=') continue
+        const close = html.indexOf(m[0], m.index + 1)
+        if (close === -1) return -1
+        stop.lastIndex = close + 1
     }
-    return (text + markup.slice(from)).replace(/\s+/g, ' ').trim()
+    return -1
 }
 
 /** Wall-clock cap for the whole browser run; virtual-time budget for the page JS. */
@@ -282,14 +328,14 @@ const EXCERPT_LENGTH = 120
  */
 export function httpAnswer(
     url: string,
-    budgetMs: number,
+    budgetMs = RENDER_TIMEOUT_MS,
     {excerpt = true}: {excerpt?: boolean} = {}
 ): {status: number; text: string} | null {
     // The status line is written before the body is read: a body that stalls until
     // the timeout kills the child must not take the status with it. The excerpt is
     // cut in the child, because process.exit drops the unflushed tail of a long write.
     const script =
-        `${pageText};${bodyOf};${withoutHidden};${textOf};`
+        `${pageText};${readPage};${tagEnd};`
         + `fetch(${JSON.stringify(url)}).then(async r => {`
         + `process.stdout.write(r.status + '\\n');`
         + (excerpt ?

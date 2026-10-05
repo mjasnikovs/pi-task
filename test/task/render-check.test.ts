@@ -65,6 +65,29 @@ describe('judgeRenderedDom', () => {
             judgeRenderedDom('<html><head><title>App</title></head><body><div id="root"></div>').ok
         ).toBe(false)
     })
+
+    test('the title is not rendered content when the page has no <body> tag', () => {
+        expect(
+            judgeRenderedDom('<html><head><title>App</title></head><div id="root"></div></html>').ok
+        ).toBe(false)
+    })
+
+    // A serializer that leaves `<` raw in attribute values hands these back.
+    for (const opener of ['<!--', '<script>']) {
+        test(`a ${opener} inside a head attribute does not hide the body`, () => {
+            const dom =
+                `<html><head><meta name="x" content="a${opener}b"></head>`
+                + '<body><h1>Hi</h1><!-- c --><script>x</script></body></html>'
+            expect(judgeRenderedDom(dom).ok).toBe(true)
+        })
+    }
+
+    test('a <body> inside a head attribute does not start the body', () => {
+        const dom =
+            '<html><head><meta name="d" content="use <body> tags"><title>App</title></head>'
+            + '<body><div id="root"></div></body></html>'
+        expect(judgeRenderedDom(dom).ok).toBe(false)
+    })
 })
 
 describe('findHeadlessBrowser', () => {
@@ -199,7 +222,7 @@ describe('runRenderCheck', () => {
         const page = `${head} + 'x'.repeat(3_000_000) + '</script></body></html>'`
         const server = await serve(`(q, r) => { r.writeHead(503); r.end(${page}) }`)
         try {
-            expect(httpAnswer(server.url, 10_000)?.text).toBe(buildMissing)
+            expect(httpAnswer(server.url)?.text).toBe(buildMissing)
         } finally {
             server.stop()
         }
@@ -209,7 +232,7 @@ describe('runRenderCheck', () => {
         const page = `<html><head><title>${buildMissing}</title></head><body><div id="root"></div><script>boot()</script></body></html>`
         const server = await serve(`(q, r) => { r.writeHead(503); r.end(${JSON.stringify(page)}) }`)
         try {
-            expect(httpAnswer(server.url, 10_000)?.text).toBe(buildMissing)
+            expect(httpAnswer(server.url)?.text).toBe(buildMissing)
         } finally {
             server.stop()
         }
@@ -219,7 +242,7 @@ describe('runRenderCheck', () => {
         const page = `<html><head><title>503 Service Unavailable</title></head><body><h1>${buildMissing}</h1></body></html>`
         const server = await serve(`(q, r) => { r.writeHead(503); r.end(${JSON.stringify(page)}) }`)
         try {
-            expect(httpAnswer(server.url, 10_000)?.text).toBe(buildMissing)
+            expect(httpAnswer(server.url)?.text).toBe(buildMissing)
         } finally {
             server.stop()
         }
@@ -231,7 +254,7 @@ describe('runRenderCheck', () => {
         const page = `${head} + ('<style>' + 'x'.repeat(93)).repeat(30_000)`
         const server = await serve(`(q, r) => { r.writeHead(503); r.end(${page}) }`)
         try {
-            expect(httpAnswer(server.url, 10_000)?.text).toStartWith(buildMissing)
+            expect(httpAnswer(server.url)?.text).toStartWith(buildMissing)
         } finally {
             server.stop()
         }
@@ -242,7 +265,7 @@ describe('runRenderCheck', () => {
         const page = `<html><head><title>503 Service Unavailable</title></head><body><h1>${buildMissing}</h1>`
         const server = await serve(`(q, r) => { r.writeHead(503); r.end(${JSON.stringify(page)}) }`)
         try {
-            expect(httpAnswer(server.url, 10_000)?.text).toBe(buildMissing)
+            expect(httpAnswer(server.url)?.text).toBe(buildMissing)
         } finally {
             server.stop()
         }
@@ -253,7 +276,7 @@ describe('runRenderCheck', () => {
         const page = `<html><head><title>503 Service Unavailable</title></head><h1>${buildMissing}</h1>`
         const server = await serve(`(q, r) => { r.writeHead(503); r.end(${JSON.stringify(page)}) }`)
         try {
-            expect(httpAnswer(server.url, 10_000)?.text).toBe(buildMissing)
+            expect(httpAnswer(server.url)?.text).toBe(buildMissing)
         } finally {
             server.stop()
         }
@@ -263,7 +286,17 @@ describe('runRenderCheck', () => {
         const page = `<html><head><script>el.innerHTML = '<body class=x>'</script></head><body><h1>${buildMissing}</h1>`
         const server = await serve(`(q, r) => { r.writeHead(503); r.end(${JSON.stringify(page)}) }`)
         try {
-            expect(httpAnswer(server.url, 10_000)?.text).toBe(buildMissing)
+            expect(httpAnswer(server.url)?.text).toBe(buildMissing)
+        } finally {
+            server.stop()
+        }
+    })
+
+    spawnFlow('a comment opener in the title does not swallow the body', async () => {
+        const page = `<html><head><title>a <!-- b</title></head><body><h1>${buildMissing}</h1><!-- x --></body></html>`
+        const server = await serve(`(q, r) => { r.writeHead(503); r.end(${JSON.stringify(page)}) }`)
+        try {
+            expect(httpAnswer(server.url)?.text).toBe(buildMissing)
         } finally {
             server.stop()
         }
@@ -271,6 +304,9 @@ describe('runRenderCheck', () => {
 
     for (const [what, unit] of [
         ['body openers and no closer', '<body>'],
+        ['comment openers and no closer', '<!--'],
+        ['title openers and no closer', '<title>'],
+        ['quoted attributes and no closing quote', '<a b="'],
         ['less-than signs and no later greater-than', 'a<b']
     ] as const) {
         spawnFlow(`a 5xx page of many ${what} still gives its excerpt`, async () => {
@@ -279,7 +315,7 @@ describe('runRenderCheck', () => {
             const page = `${head} + (${tail} + 'x'.repeat(${100 - unit.length})).repeat(30_000)`
             const server = await serve(`(q, r) => { r.writeHead(503); r.end(${page}) }`)
             try {
-                expect(httpAnswer(server.url, 10_000)?.text).toStartWith(buildMissing)
+                expect(httpAnswer(server.url)?.text).toStartWith(buildMissing)
             } finally {
                 server.stop()
             }
