@@ -88,6 +88,41 @@ describe('judgeRenderedDom', () => {
             + '<body><div id="root"></div></body></html>'
         expect(judgeRenderedDom(dom).ok).toBe(false)
     })
+
+    // Each `shows` is what Chromium's innerText reads from the same page.
+    for (const [what, dom, shows] of [
+        [
+            'a quote inside an unquoted value',
+            '<body><img alt=x=" title>Shown text</body>',
+            'Shown text'
+        ],
+        ['the empty comment <!-->', '<body><!-->A<!-- x -->B</body>', 'AB'],
+        ['the empty comment <!--->', '<body><!--->A<!-- x -->B</body>', 'AB'],
+        ['a comment closed by --!>', '<body><!-- x --!>A</body>', 'A'],
+        ['a comment never closed', '<body>Hi<!-- never closed Bye</body>', 'Hi'],
+        ['a script never closed', '<body>A<script>x</body>B', 'A'],
+        ['an <!-- inside xmp', '<body><xmp><!--</xmp>hidden?<!-- c -->V</body>', '<!-- hidden?V'],
+        ['an <!-- inside iframe', '<body><iframe><!--</iframe>A<!-- c -->V</body>', 'AV'],
+        ['an <!-- inside noembed', '<body><noembed><!--</noembed>A<!-- c -->V</body>', 'AV'],
+        ['an <!-- inside noframes', '<body><noframes><!--</noframes>A<!-- c -->V</body>', 'AV'],
+        ['a nested template', '<body><template><template></template>LEAK</template>V</body>', 'V'],
+        ['a comment between words', '<body>Hello<!-- -->World</body>', 'HelloWorld'],
+        ['a script between words', '<body>Build<script>x</script>Missing</body>', 'BuildMissing'],
+        ['a bare less-than sign', '<body>1<2</body>', '1<2'],
+        ['a > inside a closer attribute', '<body><script>a</script x=">">V</body>', 'V'],
+        ['text after </body>', '<html><body>A</body> B</html> C', 'A B C'],
+        ['text in the head', '<html><head><title>T</title> X </head><body> B</body></html>', 'X B']
+    ] as const) {
+        test(`${what} shows what a browser shows`, () => {
+            expect(judgeRenderedDom(dom).detail).toBe(`rendered visible text ("${shows}")`)
+        })
+    }
+
+    test('a nested template shows nothing', () => {
+        expect(
+            judgeRenderedDom('<body><template><template></template>LEAK</template></body>').ok
+        ).toBe(false)
+    })
 })
 
 describe('findHeadlessBrowser', () => {

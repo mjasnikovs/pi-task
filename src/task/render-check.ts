@@ -139,7 +139,7 @@ export function judgeRenderedDom(html: string): {ok: boolean; detail: string} {
     if (page.shown.length > 0) {
         return {ok: true, detail: `rendered visible text ("${page.shown.slice(0, 80)}")`}
     }
-    if (page.tags.some(tag => VISUAL_ELEMENTS.has(tag))) {
+    if ([...VISUAL_ELEMENTS].some(tag => page.tags.has(tag))) {
         return {ok: true, detail: 'rendered visual/interactive elements (no text)'}
     }
     return {
@@ -152,50 +152,40 @@ export function judgeRenderedDom(html: string): {ok: boolean; detail: string} {
 
 // pageText and what it calls also run as source in httpAnswer's child: keep them self-contained.
 
-/** The words a reader sees, from the title and head when nothing else has any. */
+/** The words a reader sees, or the title when nothing else has any. */
 function pageText(html: string): string {
     const page = readPage(html)
-    return page.shown || page.elsewhere
+    return page.shown || page.title
 }
 
-/**
- * A page read tag by tag, as a browser reads it: a `<body` or `<!--` inside an
- * attribute, a title or a script is text, not markup. What is shown runs from the
- * first <body> tag to the last </body>, or to the end. A page with no <body> tag
- * shows all but its title: HTML lets it omit the tag.
- */
-function readPage(html: string): {shown: string; elsewhere: string; tags: string[]} {
-    const unseen = new Set(['script', 'style', 'template', 'noscript'])
-    const rawText = new Set([...unseen, 'title', 'textarea'])
-    const runs: string[] = []
-    const titles = new Set<number>()
-    const tags: Array<{at: number; name: string}> = []
-    // A closer missing once is missing for good: looking again would rescan the
-    // rest of the page for each opener, quadratic in a multi-MB 5xx body.
-    const noCloser = new Set<string>()
-    const tagName = /[a-z][^\s/>]*/iy
-    let bodyStart = -1
-    let bodyEnd = -1
+/** A page read as a browser tokenizes it: markup, comments, scripts and templates are not shown. */
+function readPage(html: string): {shown: string; title: string; tags: Set<string>} {
+    const unseen = new Set(['script', 'style', 'noscript', 'iframe', 'noembed', 'noframes'])
+    const rawText = new Set([...unseen, 'title', 'textarea', 'xmp'])
+    const tagName = /[a-z][^\t\n\f\r />]*/iy
+    const tags = new Set<string>()
+    let shown = ''
+    let title: string | null = null
+    let templates = 0
     let at = 0
-    for (let lt = html.indexOf('<', at); lt !== -1; lt = html.indexOf('<', at)) {
-        runs.push(html.slice(at, lt))
+    const show = (text: string) => {
+        if (templates === 0) shown += text
+    }
+    for (let lt = html.indexOf('<'); lt !== -1; lt = html.indexOf('<', at)) {
+        show(html.slice(at, lt))
         at = lt + 1
         if (html.startsWith('!--', at)) {
-            const end = noCloser.has('-->') ? -1 : html.indexOf('-->', at + 3)
-            if (end === -1) noCloser.add('-->')
-            at = end === -1 ? at + 3 : end + 3
+            at = commentEnd(html, at + 3)
             continue
         }
         const closing = html[at] === '/'
         tagName.lastIndex = closing ? at + 1 : at
         const name = tagName.exec(html)?.[0].toLowerCase()
         if (name === undefined) {
-            if (!closing && html[at] !== '!' && html[at] !== '?') {
-                runs.push('<')
-                continue
-            }
-            const end = html.indexOf('>', at)
-            at = end === -1 ? html.length : end + 1
+            if (closing || html[at] === '!' || html[at] === '?') {
+                const end = html.indexOf('>', at)
+                at = end === -1 ? html.length : end + 1
+            } else show('<')
             continue
         }
         const end = tagEnd(html, tagName.lastIndex)
@@ -205,54 +195,71 @@ function readPage(html: string): {shown: string; elsewhere: string; tags: string
             break
         }
         at = end + 1
-        if (closing) {
-            if (name === 'body' && bodyStart !== -1) bodyEnd = runs.length
+        if (name === 'template') {
+            templates = Math.max(0, templates + (closing ? -1 : 1))
             continue
         }
-        if (name === 'body' && bodyStart === -1) bodyStart = runs.length
-        tags.push({at: runs.length, name})
-        if (!rawText.has(name) || noCloser.has(name)) continue
-        const closer = new RegExp(`</${name}[\\s/>]`, 'gi')
+        if (!closing && templates === 0) tags.add(name)
+        if (closing || !rawText.has(name)) {
+            show(' ')
+            continue
+        }
+        // An element never closed holds the rest of the page.
+        const closer = new RegExp(`</${name}[\\t\\n\\f\\r />]`, 'gi')
         closer.lastIndex = at
         const found = closer.exec(html)
-        if (found === null) {
-            noCloser.add(name)
-            continue
-        }
-        if (name === 'title') titles.add(runs.length)
-        if (!unseen.has(name)) runs.push(html.slice(at, found.index))
-        const closerEnd = html.indexOf('>', found.index)
+        const text = html.slice(at, found?.index ?? html.length)
+        if (name === 'title') {
+            if (templates === 0) title ??= text
+        } else if (!unseen.has(name)) show(` ${text} `)
+        const closerEnd = found ? tagEnd(html, found.index + name.length + 2) : -1
         at = closerEnd === -1 ? html.length : closerEnd + 1
     }
-    runs.push(html.slice(at))
-    const last = bodyEnd === -1 ? runs.length : bodyEnd
-    const inBody = (i: number) => bodyStart === -1 || (i >= bodyStart && i < last)
-    const shown: string[] = []
-    const elsewhere: string[] = []
-    runs.forEach((run, i) => (inBody(i) && !titles.has(i) ? shown : elsewhere).push(run))
-    const words = (parts: string[]) => parts.join(' ').replace(/\s+/g, ' ').trim()
-    return {
-        shown: words(shown),
-        elsewhere: words(elsewhere),
-        tags: tags.filter(tag => inBody(tag.at)).map(tag => tag.name)
-    }
+    show(html.slice(at))
+    return {shown: words(shown), title: words(title ?? ''), tags}
+}
+
+function words(text: string): string {
+    return text.replace(/\s+/g, ' ').trim()
+}
+
+/** Where the comment whose text starts at `from` ends, or the page's end when it never does. */
+function commentEnd(html: string, from: number): number {
+    // `<!-->` and `<!--->` are whole comments.
+    if (html[from] === '>') return from + 1
+    if (html.startsWith('->', from)) return from + 2
+    const closer = /--!?>/g
+    closer.lastIndex = from
+    return closer.exec(html) === null ? html.length : closer.lastIndex
 }
 
 /** Where the tag whose attributes start at `from` ends, or -1 when it never does. */
 function tagEnd(html: string, from: number): number {
-    // A quoted value may hold `>`: it does not end the tag.
-    const stop = /[>"']/g
-    stop.lastIndex = from
-    for (let m = stop.exec(html); m !== null; m = stop.exec(html)) {
-        if (m[0] === '>') return m.index
-        let before = m.index - 1
-        while (before > from && ' \t\n\f\r'.includes(html[before]!)) before--
-        if (html[before] !== '=') continue
-        const close = html.indexOf(m[0], m.index + 1)
-        if (close === -1) return -1
-        stop.lastIndex = close + 1
+    const between = /[\t\n\f\r /]*/y
+    const attributeName = /[^\t\n\f\r />][^\t\n\f\r />=]*[\t\n\f\r ]*/y
+    const valueStart = /=[\t\n\f\r ]*/y
+    // Only a value that opens with a quote is quoted: `alt=x="` is one unquoted value.
+    const unquoted = /[^\t\n\f\r >]*/y
+    const skip = (re: RegExp, at: number) => {
+        re.lastIndex = at
+        re.exec(html)
+        return re.lastIndex
     }
-    return -1
+    let at = skip(between, from)
+    while (at < html.length && html[at] !== '>') {
+        at = skip(attributeName, at)
+        if (html[at] === '=') {
+            at = skip(valueStart, at)
+            const quote = html[at]
+            if (quote === '"' || quote === "'") {
+                const close = html.indexOf(quote, at + 1)
+                if (close === -1) return -1
+                at = close + 1
+            } else at = skip(unquoted, at)
+        }
+        at = skip(between, at)
+    }
+    return at < html.length ? at : -1
 }
 
 /** Wall-clock cap for the whole browser run; virtual-time budget for the page JS. */
@@ -335,7 +342,7 @@ export function httpAnswer(
     // the timeout kills the child must not take the status with it. The excerpt is
     // cut in the child, because process.exit drops the unflushed tail of a long write.
     const script =
-        `${pageText};${readPage};${tagEnd};`
+        `${pageText};${readPage};${words};${commentEnd};${tagEnd};`
         + `fetch(${JSON.stringify(url)}).then(async r => {`
         + `process.stdout.write(r.status + '\\n');`
         + (excerpt ?
