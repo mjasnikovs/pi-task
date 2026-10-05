@@ -142,17 +142,20 @@ export function judgeRenderedDom(html: string): {ok: boolean; detail: string} {
 
 /** The body's markup, without what a reader never sees. */
 function visibleMarkup(html: string): string {
+    const shown = withoutHidden(html)
     // No <body> at all in a dumped DOM → the browser rendered something degenerate;
     // judge the whole document rather than fail on shape.
-    return withoutHidden(bodyOf(html) ?? html)
+    return bodyOf(shown) ?? shown
 }
 
 // pageText and what it calls also run as source in httpAnswer's child: keep them self-contained.
 
-/** The words a reader sees, from the head when the body has none. */
+/** The words a reader sees, from the title when nothing else has any. */
 function pageText(html: string): string {
-    const body = bodyOf(html)
-    return (body !== null && textOf(withoutHidden(body))) || textOf(withoutHidden(html))
+    // Hidden markup goes first: a `<body` inside a head script must not start the body.
+    const shown = withoutHidden(html)
+    // HTML lets a page omit the <body> tag; the title is not what it shows.
+    return textOf(bodyOf(shown) ?? withoutHidden(shown, 'title')) || textOf(shown)
 }
 
 /** From the first <body> tag to the last </body>, or to the end: HTML lets a page omit it. */
@@ -169,10 +172,10 @@ function bodyOf(html: string): string | null {
 }
 
 /** Drops the elements and comments a reader never sees. */
-function withoutHidden(markup: string): string {
+function withoutHidden(markup: string, elements = 'script|style|template|noscript'): string {
     // Not a lazy regex: each opener with no closer would rescan the rest of the
     // page, quadratic in a multi-MB 5xx body. A closer missing once is missing for good.
-    const opener = /<(script|style|template|noscript)\b|<!--/gi
+    const opener = new RegExp(`<(${elements})\\b|<!--`, 'gi')
     const noCloser = new Set<string>()
     let kept = ''
     let from = 0

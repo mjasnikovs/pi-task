@@ -59,6 +59,12 @@ describe('judgeRenderedDom', () => {
         expect(judgeRenderedDom('<div>Loaded</div>').ok).toBe(true)
         expect(judgeRenderedDom('   ').ok).toBe(false)
     })
+
+    test('the title is not rendered content, even with no closing body tag', () => {
+        expect(
+            judgeRenderedDom('<html><head><title>App</title></head><body><div id="root"></div>').ok
+        ).toBe(false)
+    })
 })
 
 describe('findHeadlessBrowser', () => {
@@ -234,6 +240,27 @@ describe('runRenderCheck', () => {
     // HTML lets a page leave </body> out.
     spawnFlow('a 5xx page with no closing body tag gives the body, not its title', async () => {
         const page = `<html><head><title>503 Service Unavailable</title></head><body><h1>${buildMissing}</h1>`
+        const server = await serve(`(q, r) => { r.writeHead(503); r.end(${JSON.stringify(page)}) }`)
+        try {
+            expect(httpAnswer(server.url, 10_000)?.text).toBe(buildMissing)
+        } finally {
+            server.stop()
+        }
+    })
+
+    // HTML lets a page leave the <body> tag out too.
+    spawnFlow('a 5xx page with no body tag gives its text, not its title', async () => {
+        const page = `<html><head><title>503 Service Unavailable</title></head><h1>${buildMissing}</h1>`
+        const server = await serve(`(q, r) => { r.writeHead(503); r.end(${JSON.stringify(page)}) }`)
+        try {
+            expect(httpAnswer(server.url, 10_000)?.text).toBe(buildMissing)
+        } finally {
+            server.stop()
+        }
+    })
+
+    spawnFlow('a body tag inside a head script does not start the body', async () => {
+        const page = `<html><head><script>el.innerHTML = '<body class=x>'</script></head><body><h1>${buildMissing}</h1>`
         const server = await serve(`(q, r) => { r.writeHead(503); r.end(${JSON.stringify(page)}) }`)
         try {
             expect(httpAnswer(server.url, 10_000)?.text).toBe(buildMissing)
