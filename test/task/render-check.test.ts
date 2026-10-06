@@ -111,7 +111,25 @@ describe('judgeRenderedDom', () => {
         ['a bare less-than sign', '<body>1<2</body>', '1<2'],
         ['a > inside a closer attribute', '<body><script>a</script x=">">V</body>', 'V'],
         ['text after </body>', '<html><body>A</body> B</html> C', 'A B C'],
-        ['text in the head', '<html><head><title>T</title> X </head><body> B</body></html>', 'X B']
+        ['text in the head', '<html><head><title>T</title> X </head><body> B</body></html>', 'X B'],
+        ['a closed dialog', '<body><dialog>D</dialog>V</body>', 'V'],
+        ['character references', '<body><p>a &amp; b &#65;&#x42;</p></body>', 'a & b AB'],
+        [
+            'a </script> inside an escaped script',
+            '<body><script><!--<script></script>") --></script>V</body>',
+            'V'
+        ],
+        ['a word split by an inline tag', '<body>Hello<b>World</b></body>', 'HelloWorld'],
+        ['inline elements side by side', '<body><span>A</span><a href=#>B</a></body>', 'AB'],
+        ['an image between words', '<body>A<img src=x>B</body>', 'AB'],
+        ['blocks side by side', '<body><div>A</div><div>B</div></body>', 'A B'],
+        ['a line break', '<body>A<br>B</body>', 'A B'],
+        [
+            'a self-closed svg style',
+            '<body><svg><style/></svg><h1>Client build missing</h1></body>',
+            'Client build missing'
+        ],
+        ['a self-closed math style', '<body><math><style/></math>Hi</body>', 'Hi']
     ] as const) {
         test(`${what} shows what a browser shows`, () => {
             expect(judgeRenderedDom(dom).detail).toBe(`rendered visible text ("${shows}")`)
@@ -123,6 +141,18 @@ describe('judgeRenderedDom', () => {
             judgeRenderedDom('<body><template><template></template>LEAK</template></body>').ok
         ).toBe(false)
     })
+
+    for (const [what, dom] of [
+        ['hidden text', '<body><div id="root"></div><div hidden>Something went wrong</div></body>'],
+        ['a hidden image', '<body><div id="root"></div><div hidden><img src="x.png"></div></body>'],
+        ['a non-breaking space', '<body><div id="root">&nbsp;</div></body>'],
+        ['a hidden input', '<body><div id="root"></div><input type="hidden" name="csrf"></body>'],
+        ['an escaped script', '<body><script><!--<script></script>") --></script></body>']
+    ] as const) {
+        test(`${what} shows nothing`, () => {
+            expect(judgeRenderedDom(dom).ok).toBe(false)
+        })
+    }
 })
 
 describe('findHeadlessBrowser', () => {
@@ -336,6 +366,26 @@ describe('runRenderCheck', () => {
             server.stop()
         }
     })
+
+    for (const [what, page, excerpt] of [
+        [
+            'a shadow root declared in the page',
+            `<body><div><template shadowrootmode="open"><h1>${buildMissing}</h1></template></div></body>`,
+            buildMissing
+        ],
+        ['an icon title', '<body><svg><title>Close</title></svg></body>', '']
+    ] as const) {
+        spawnFlow(`a 5xx page with ${what} gives what a browser shows`, async () => {
+            const server = await serve(
+                `(q, r) => { r.writeHead(503); r.end(${JSON.stringify(page)}) }`
+            )
+            try {
+                expect(httpAnswer(server.url)?.text).toBe(excerpt)
+            } finally {
+                server.stop()
+            }
+        })
+    }
 
     for (const [what, unit] of [
         ['body openers and no closer', '<body>'],
