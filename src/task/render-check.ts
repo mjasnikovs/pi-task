@@ -135,7 +135,7 @@ const VISUAL_ELEMENTS = new Set([
  * against real captured DOMs; `detail` describes what was (or wasn't) found.
  */
 export function judgeRenderedDom(html: string): {ok: boolean; detail: string} {
-    const page = readPage(html)
+    const page = readPage(html, true)
     if (page.shown.length > 0) {
         return {ok: true, detail: `rendered visible text ("${page.shown.slice(0, 80)}")`}
     }
@@ -152,17 +152,22 @@ export function judgeRenderedDom(html: string): {ok: boolean; detail: string} {
 
 // pageText and readPage also run as source in httpAnswer's child: readPage holds its own helpers.
 
-/** The words a reader sees, or the title when nothing else has any. */
+/** The words a reader sees in a raw page, or the title when nothing else has any. */
 function pageText(html: string): string {
-    const page = readPage(html)
+    const page = readPage(html, false)
     return page.shown || page.title
 }
 
 /**
- * A page read as a browser tokenizes it. Markup, comments, scripts, templates and
- * what the browser's own stylesheet hides are not shown.
+ * A page read as a browser builds it. Markup, comments, scripts, templates and
+ * what the browser's own stylesheet hides are not shown. A `dumped` page is a DOM
+ * Chrome serialized: it closes every element itself and holds no shadow roots, so
+ * the parser's own closing rules would misplace what a script nested.
  */
-function readPage(html: string): {shown: string; title: string; tags: Set<string>} {
+function readPage(
+    html: string,
+    dumped: boolean
+): {shown: string; title: string; tags: Set<string>} {
     const unseen = new Set(['script', 'style', 'noscript', 'iframe', 'noembed', 'noframes'])
     const rawText = new Set([...unseen, 'title', 'textarea', 'xmp'])
     const voids = new Set([
@@ -240,7 +245,27 @@ function readPage(html: string): {shown: string; title: string; tags: Set<string
         'thead',
         'tr'
     ])
-    const closesItself = new Set(['dd', 'dt', 'li', 'option'])
+    // Where the parser stops looking for an open element to close.
+    const scope = new Set(['applet', 'caption', 'html', 'table', 'td', 'th', 'marquee', 'object'])
+    const buttonScope = new Set([...scope, 'button'])
+    const notSpecial = new Set(['address', 'div', 'p', 'li', 'dd', 'dt'])
+    const itemScope = new Set(
+        [
+            ...closesP,
+            ...buttonScope,
+            'body',
+            'colgroup',
+            'select',
+            'tbody',
+            'tfoot',
+            'thead',
+            'tr'
+        ].filter(name => !notSpecial.has(name))
+    )
+    const tableScope = new Set(['html', 'table'])
+    const scopes = [scope, buttonScope, itemScope, tableScope]
+    const headings = new Set(['h1', 'h2', 'h3', 'h4', 'h5', 'h6'])
+    const tableSections = new Set(['tbody', 'tfoot', 'thead'])
     const leavesForeign = new Set([
         'b',
         'big',
@@ -288,6 +313,16 @@ function readPage(html: string): {shown: string; title: string; tags: Set<string
         'var'
     ])
     const foreignUnseen = new Set(['desc', 'script', 'style', 'title'])
+    const integrationPoints = new Set([
+        'desc',
+        'foreignobject',
+        'mi',
+        'mn',
+        'mo',
+        'ms',
+        'mtext',
+        'title'
+    ])
     const tagName = /[a-z][^\t\n\f\r />]*/iy
     const between = /[\t\n\f\r /]*/y
     const attributeName = /[^\t\n\f\r />][^\t\n\f\r />=]*/y
@@ -302,7 +337,13 @@ function readPage(html: string): {shown: string; title: string; tags: Set<string
     const reference =
         /&(?:#(\d+);?|#[xX]([\da-fA-F]+);?|(amp|AMP|lt|LT|gt|GT|quot|QUOT|nbsp);?|apos;)/g
     const named: Record<string, string> = {amp: '&', lt: '<', gt: '>', quot: '"', nbsp: '\u00a0'}
-    const attributes = {hidden: false, open: false, shadowRoot: false, type: '', selfClosing: false}
+    const attributes = {
+        hidden: false,
+        open: false,
+        shadowRootMode: '',
+        type: '',
+        selfClosing: false
+    }
 
     const skip = (re: RegExp, from: number) => {
         re.lastIndex = from
@@ -312,8 +353,8 @@ function readPage(html: string): {shown: string; title: string; tags: Set<string
 
     /** Where the tag whose attributes start at `from` ends, or -1 when it never does. Fills `attributes`. */
     function tagEnd(from: number): number {
-        attributes.hidden = attributes.open = attributes.shadowRoot = false
-        attributes.type = ''
+        attributes.hidden = attributes.open = false
+        attributes.type = attributes.shadowRootMode = ''
         let gap = from
         let at = skip(between, from)
         while (at < html.length && html[at] !== '>') {
@@ -321,19 +362,23 @@ function readPage(html: string): {shown: string; title: string; tags: Set<string
             const name = html.slice(at, nameEnd).toLowerCase()
             if (name === 'hidden') attributes.hidden = true
             else if (name === 'open') attributes.open = true
-            else if (name === 'shadowrootmode') attributes.shadowRoot = true
             at = skip(space, nameEnd)
             if (html[at] === '=') {
                 at = skip(valueStart, at)
                 const quote = html[at]
-                const valueAt = at
+                let value: string
                 if (quote === '"' || quote === "'") {
                     const close = html.indexOf(quote, at + 1)
                     if (close === -1) return -1
+                    value = html.slice(at + 1, close)
                     at = close + 1
-                } else at = skip(unquoted, at)
-                if (name === 'type')
-                    attributes.type = html.slice(valueAt, at).replace(/["']/g, '').toLowerCase()
+                } else {
+                    const valueAt = at
+                    at = skip(unquoted, at)
+                    value = html.slice(valueAt, at)
+                }
+                if (name === 'type') attributes.type = value.toLowerCase()
+                else if (name === 'shadowrootmode') attributes.shadowRootMode = value.toLowerCase()
             }
             gap = at
             at = skip(between, at)
@@ -382,8 +427,13 @@ function readPage(html: string): {shown: string; title: string; tags: Set<string
         return -1
     }
 
+    // The spec reads &#128; to &#159; as windows-1252, as the pages that write them mean.
+    const windows1252 =
+        '\u20ac\x81\u201a\u0192\u201e\u2026\u2020\u2021\u02c6\u2030\u0160\u2039\u0152\x8d\u017d\x8f'
+        + '\x90\u2018\u2019\u201c\u201d\u2022\u2013\u2014\u02dc\u2122\u0161\u203a\u0153\x9d\u017e\u0178'
     const character = (code: number) =>
-        code > 0 && code <= 0x10ffff && (code < 0xd800 || code > 0xdfff) ?
+        code >= 0x80 && code <= 0x9f ? windows1252[code - 0x80]!
+        : code > 0 && code <= 0x10ffff && (code < 0xd800 || code > 0xdfff) ?
             String.fromCodePoint(code)
         :   '\ufffd'
     const decode = (text: string) =>
@@ -395,33 +445,152 @@ function readPage(html: string): {shown: string; title: string; tags: Set<string
             )
         :   text
 
+    type Open = {
+        name: string
+        foreign: boolean
+        hides: boolean
+        visible: boolean
+        closedDetails: boolean
+        summarized: boolean
+        shadowHost: boolean
+    }
+    /** A document or a template's content: end tags in one never close elements in the other. */
+    type Fragment = {
+        stack: Open[]
+        /** Where each open name sits in the stack, innermost last. */
+        positions: Map<string, number[]>
+        /** Where each scope's boundaries sit in the stack, innermost last. */
+        bounds: Map<Set<string>, number[]>
+        /** The element a shadow root attached to. A template without one is inert. */
+        host: Open | undefined
+        slotted: boolean
+    }
+    const fragment = (host?: Open): Fragment => ({
+        stack: [],
+        positions: new Map(),
+        bounds: new Map(scopes.map(names => [names, []])),
+        host,
+        slotted: false
+    })
+    const fragments = [fragment()]
+    let current = fragments[0]!
     const tags = new Set<string>()
-    const inertTemplates: boolean[] = []
     let inert = 0
-    let foreign = 0
-    let hidden: {name: string; depth: number; foreign: number} | null = null
+    let hiding = 0
     let shown = ''
     let title: string | null = null
     let at = 0
+    const top = () => current.stack.at(-1)
     const show = (text: string) => {
-        if (inert === 0 && hidden === null) shown += text
+        if (inert === 0 && hiding === 0 && !top()?.closedDetails) shown += text
+    }
+    const inForeign = () => {
+        const node = top()
+        return node !== undefined && node.foreign && !integrationPoints.has(node.name)
     }
     /** Whether the browser's own stylesheet hides the element just opened. */
-    const hiddenByBrowser = (name: string) =>
-        foreign > 0 ?
+    const hiddenByBrowser = (name: string, foreign: boolean) =>
+        foreign ?
             foreignUnseen.has(name)
         :   attributes.hidden
             || (name === 'dialog' && !attributes.open)
             || (name === 'input' && attributes.type === 'hidden')
             || name === 'datalist'
-    const endsHidden = (name: string, closing: boolean, selfClosed: boolean) => {
-        if (hidden === null) return false
-        if (foreign < hidden.foreign) return true
-        if (!closing && hidden.name === 'p' && closesP.has(name)) return true
-        if (!closing && hidden.name === name && closesItself.has(name)) return true
-        if (hidden.name !== name || selfClosed) return false
-        hidden.depth += closing ? -1 : 1
-        return hidden.depth === 0
+
+    function push(node: Open) {
+        const {stack, positions, bounds} = current
+        let ofName = positions.get(node.name)
+        if (ofName === undefined) positions.set(node.name, (ofName = []))
+        ofName.push(stack.length)
+        for (const [names, edges] of bounds) if (names.has(node.name)) edges.push(stack.length)
+        stack.push(node)
+        if (node.hides) hiding++
+    }
+
+    function popTo(position: number) {
+        const {stack, positions, bounds} = current
+        while (stack.length > position) {
+            const node = stack.pop()!
+            positions.get(node.name)!.pop()
+            for (const [names, edges] of bounds) if (names.has(node.name)) edges.pop()
+            if (node.hides) hiding--
+        }
+    }
+    const popTop = () => popTo(current.stack.length - 1)
+
+    /** Where the innermost open `name` sits, if no boundary of `names` stands above it. */
+    function reach(name: string, names: Set<string>): number {
+        const position = current.positions.get(name)?.at(-1) ?? -1
+        const bound = current.bounds.get(names)!.at(-1) ?? -1
+        return position !== -1 && position >= bound ? position : -1
+    }
+    const closeOpen = (name: string, names: Set<string>) => {
+        const position = reach(name, names)
+        if (position !== -1) popTo(position)
+    }
+
+    /** The end tags a raw page leaves the parser to imply when `name` opens. */
+    function closeImplied(name: string) {
+        if (closesP.has(name)) closeOpen('p', buttonScope)
+        if (name === 'li') closeOpen('li', itemScope)
+        else if (name === 'dd' || name === 'dt') {
+            closeOpen('dd', itemScope)
+            closeOpen('dt', itemScope)
+        } else if (headings.has(name) && headings.has(top()?.name ?? '')) popTop()
+        else if (name === 'option' || name === 'optgroup') {
+            if (top()?.name === 'option') popTop()
+            if (name === 'optgroup' && top()?.name === 'optgroup') popTop()
+        } else if (name === 'td' || name === 'th' || name === 'tr' || tableSections.has(name)) {
+            closeOpen('td', tableScope)
+            closeOpen('th', tableScope)
+            if (name !== 'td' && name !== 'th') closeOpen('tr', tableScope)
+            if (tableSections.has(name))
+                for (const section of tableSections) closeOpen(section, tableScope)
+        }
+    }
+
+    function closeTag(name: string) {
+        // The parser keeps body and html open to the end: text after them is still theirs.
+        if (name === 'html' || name === 'head' || name === 'body') return
+        const names =
+            name === 'p' ? buttonScope
+            : name === 'li' || name === 'dd' || name === 'dt' ? itemScope
+            : name === 'table' || name === 'tr' || tableSections.has(name) ? tableScope
+            : scope
+        const position = reach(name, names)
+        if (position === -1) {
+            if (name === 'br') show(' ')
+            return
+        }
+        const node = current.stack[position]!
+        popTo(position)
+        if (node.visible && blocks.has(name)) show(' ')
+    }
+
+    function openTemplate() {
+        const host = top()
+        const mode = attributes.shadowRootMode
+        // A dump holds no shadow roots: a template still in one was never attached.
+        const attaches =
+            !dumped
+            && (mode === 'open' || mode === 'closed')
+            && host !== undefined
+            && !host.shadowHost
+        if (attaches) host.shadowHost = true
+        else inert++
+        fragments.push((current = fragment(attaches ? host : undefined)))
+    }
+
+    function closeTemplate() {
+        popTo(0)
+        const {host, slotted} = fragments.pop()!
+        current = fragments.at(-1)!
+        if (host === undefined) inert--
+        // A shadow root shows its host's own content only through a slot.
+        else if (!slotted && !host.hides) {
+            host.hides = true
+            hiding++
+        }
     }
 
     for (let lt = html.indexOf('<'); lt !== -1; lt = html.indexOf('<', at)) {
@@ -448,43 +617,54 @@ function readPage(html: string): {shown: string; title: string; tags: Set<string
             break
         }
         at = end + 1
-        if (name === 'template') {
-            if (!closing) {
-                const isInert = inert > 0 || !attributes.shadowRoot
-                inertTemplates.push(isInert)
-                if (isInert) inert++
-            } else if (inertTemplates.pop()) inert--
+        if (!closing && inForeign() && leavesForeign.has(name)) while (inForeign()) popTop()
+        const foreign = name === 'svg' || name === 'math' || inForeign()
+        if (name === 'template' && !foreign) {
+            if (!closing) openTemplate()
+            else if (fragments.length > 1) closeTemplate()
             continue
         }
-        const selfClosed =
-            attributes.selfClosing && (foreign > 0 || name === 'svg' || name === 'math')
-        // An svg title or desc holds HTML: a <p> in one stays in the svg.
-        const inForeignText =
-            hidden !== null
-            && hidden.foreign > 0
-            && (hidden.name === 'title' || hidden.name === 'desc')
-        if (foreign > 0 && !closing && leavesForeign.has(name) && !inForeignText) foreign = 0
-        else if (name === 'svg' || name === 'math') {
-            if (closing) foreign = Math.max(0, foreign - 1)
-            else if (!selfClosed) foreign++
+        if (closing) {
+            closeTag(name)
+            continue
         }
-        if (endsHidden(name, closing, selfClosed)) hidden = null
-        const hides = !closing && hiddenByBrowser(name)
-        if (blocks.has(name) && !hides) show(' ')
-        if (closing) continue
-        if (inert === 0 && hidden === null && !hides) tags.add(name)
-        if (foreign === 0 && rawText.has(name)) {
+        if (!dumped && !foreign) closeImplied(name)
+        const parent = top()
+        let hides = hiddenByBrowser(name, foreign)
+        if (parent?.closedDetails) {
+            // A closed details shows its first summary only.
+            if (name === 'summary' && !parent.summarized) parent.summarized = true
+            else hides = true
+        }
+        const visible = inert === 0 && hiding === 0 && !hides
+        if (visible) {
+            tags.add(name)
+            if (blocks.has(name)) shown += ' '
+        }
+        if (!foreign && rawText.has(name)) {
             const close = rawTextEnd(name, at)
             const text = html.slice(at, close === -1 ? html.length : close)
             if (name === 'title') {
                 if (inert === 0) title ??= decode(text)
-            } else if (!unseen.has(name) && !hides)
-                show(` ${name === 'xmp' ? text : decode(text)} `)
+            } else if (visible && !unseen.has(name))
+                shown += ` ${name === 'xmp' ? text : decode(text)} `
             const closerEnd = close === -1 ? -1 : tagEnd(close + name.length + 2)
             at = closerEnd === -1 ? html.length : closerEnd + 1
-        } else if (hides && inert === 0 && hidden === null && !selfClosed && !voids.has(name)) {
-            hidden = {name, depth: 1, foreign}
+            continue
         }
+        if (name === 'slot' && current.host !== undefined) current.slotted = true
+        const childless = foreign ? attributes.selfClosing : voids.has(name)
+        if (childless || name === 'html' || name === 'head') continue
+        if (name === 'body' && current.positions.get('body')?.length) continue
+        push({
+            name,
+            foreign,
+            hides,
+            visible,
+            closedDetails: name === 'details' && !foreign && !attributes.open,
+            summarized: false,
+            shadowHost: false
+        })
     }
     show(decode(html.slice(at)))
     const words = (text: string) => text.replace(/\s+/g, ' ').trim()

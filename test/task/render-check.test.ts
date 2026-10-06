@@ -129,7 +129,13 @@ describe('judgeRenderedDom', () => {
             '<body><svg><style/></svg><h1>Client build missing</h1></body>',
             'Client build missing'
         ],
-        ['a self-closed math style', '<body><math><style/></math>Hi</body>', 'Hi']
+        ['a self-closed math style', '<body><math><style/></math>Hi</body>', 'Hi'],
+        ['a hidden block between words', '<body>A<div hidden="">x</div>B</body>', 'AB'],
+        [
+            'a closed details',
+            '<body><details><summary>Sum</summary>Body</details>After</body>',
+            'Sum After'
+        ]
     ] as const) {
         test(`${what} shows what a browser shows`, () => {
             expect(judgeRenderedDom(dom).detail).toBe(`rendered visible text ("${shows}")`)
@@ -147,7 +153,24 @@ describe('judgeRenderedDom', () => {
         ['a hidden image', '<body><div id="root"></div><div hidden><img src="x.png"></div></body>'],
         ['a non-breaking space', '<body><div id="root">&nbsp;</div></body>'],
         ['a hidden input', '<body><div id="root"></div><input type="hidden" name="csrf"></body>'],
-        ['an escaped script', '<body><script><!--<script></script>") --></script></body>']
+        ['an escaped script', '<body><script><!--<script></script>") --></script></body>'],
+        // Only the DOM API nests these. Chrome dumps them as written.
+        [
+            'a block inside a hidden p',
+            '<body><div id="root"></div><p hidden=""><div>Something went wrong</div></p></body>'
+        ],
+        [
+            'a list inside a hidden item',
+            '<body><div id="root"></div><li hidden="">Admin<ul><li>Users</li></ul></li></body>'
+        ],
+        [
+            'a closed details',
+            '<body><div id="root"></div><details><summary></summary>Error stack</details></body>'
+        ],
+        [
+            'a template a script left in the DOM',
+            '<body><div id="root"><template shadowrootmode="open">Error</template></div></body>'
+        ]
     ] as const) {
         test(`${what} shows nothing`, () => {
             expect(judgeRenderedDom(dom).ok).toBe(false)
@@ -373,7 +396,40 @@ describe('runRenderCheck', () => {
             `<body><div><template shadowrootmode="open"><h1>${buildMissing}</h1></template></div></body>`,
             buildMissing
         ],
-        ['an icon title', '<body><svg><title>Close</title></svg></body>', '']
+        ['an icon title', '<body><svg><title>Close</title></svg></body>', ''],
+        [
+            'a hidden span its parent closes',
+            `<div><span hidden>X</div>${buildMissing}`,
+            buildMissing
+        ],
+        [
+            'a hidden item its list closes',
+            `<ul><li hidden>x</ul><p>${buildMissing}</p>`,
+            buildMissing
+        ],
+        ['a hidden cell', `<table><tr><td hidden>x<td>${buildMissing}</table>`, buildMissing],
+        ['a hidden term', `<dl><dt hidden>T<dd>${buildMissing}</dl>`, buildMissing],
+        [
+            'a list inside a hidden item',
+            `<li hidden>Admin<ul><li>Users</li></ul></li><h1>${buildMissing}</h1>`,
+            buildMissing
+        ],
+        [
+            'an unknown shadow root mode',
+            `<template shadowrootmode="bogus">LEAK</template><h1>${buildMissing}</h1>`,
+            buildMissing
+        ],
+        [
+            'light content a shadow root has no slot for',
+            `<div><template shadowrootmode="open"><h1>${buildMissing}</h1></template>Light</div>`,
+            buildMissing
+        ],
+        [
+            'an end tag inside a template',
+            `<div hidden><template></div></template>LEAK</div><h1>${buildMissing}</h1>`,
+            buildMissing
+        ],
+        ['a windows-1252 reference', '<h1>Build &#150; missing</h1>', 'Build – missing']
     ] as const) {
         spawnFlow(`a 5xx page with ${what} gives what a browser shows`, async () => {
             const server = await serve(
