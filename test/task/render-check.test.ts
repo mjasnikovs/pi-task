@@ -131,6 +131,7 @@ describe('judgeRenderedDom', () => {
         ],
         ['a self-closed math style', '<body><math><style/></math>Hi</body>', 'Hi'],
         ['a hidden block between words', '<body>A<div hidden="">x</div>B</body>', 'AB'],
+        ['a hidden param', '<body><param hidden="">Hi</body>', 'Hi'],
         [
             'a closed details',
             '<body><details><summary>Sum</summary>Body</details>After</body>',
@@ -170,7 +171,12 @@ describe('judgeRenderedDom', () => {
         [
             'a template a script left in the DOM',
             '<body><div id="root"><template shadowrootmode="open">Error</template></div></body>'
-        ]
+        ],
+        [
+            'an HTML element a script put in math',
+            '<body><div id="root"><math><div>Something went wrong</div></math></div></body>'
+        ],
+        ['a hidden body', '<body hidden=""><div id="root">App</div></body>']
     ] as const) {
         test(`${what} shows nothing`, () => {
             expect(judgeRenderedDom(dom).ok).toBe(false)
@@ -429,7 +435,81 @@ describe('runRenderCheck', () => {
             `<div hidden><template></div></template>LEAK</div><h1>${buildMissing}</h1>`,
             buildMissing
         ],
-        ['a windows-1252 reference', '<h1>Build &#150; missing</h1>', 'Build – missing']
+        ['a windows-1252 reference', '<h1>Build &#150; missing</h1>', 'Build – missing'],
+        [
+            'a hidden item a heading is left open in',
+            `<ul><li hidden>x<h3>T</li><li>${buildMissing}</li></ul>`,
+            buildMissing
+        ],
+        [
+            'a hidden definition a section is left open in',
+            `<dl><dd hidden>x<section>y</dd><dd>${buildMissing}</dd></dl>`,
+            buildMissing
+        ],
+        [
+            'a shadow root on an element that cannot host one',
+            `<ul><template shadowrootmode="open">LEAK</template></ul><h1>${buildMissing}</h1>`,
+            buildMissing
+        ],
+        [
+            'light content before its shadow root',
+            `<div>LEAK<template shadowrootmode="open"><h1>${buildMissing}</h1></template></div>`,
+            buildMissing
+        ],
+        [
+            'light content only a named slot could take',
+            `<div><template shadowrootmode="open"><slot name="a"></slot><h1>${buildMissing}</h1></template>LEAK</div>`,
+            buildMissing
+        ],
+        [
+            'a hidden caption',
+            `<table><caption hidden>x<tr><td>${buildMissing}</td></tr></table>`,
+            buildMissing
+        ],
+        ['a heading another heading closes', `<h2 hidden>x</h3>${buildMissing}`, buildMissing],
+        ['a cell outside a table', `<div><td hidden>${buildMissing}</td></div>`, buildMissing],
+        [
+            'an item between two definitions',
+            `<h1>${buildMissing}</h1><dl><dd hidden>a<li>b<dd>LEAK</dl>`,
+            buildMissing
+        ],
+        [
+            'an end tag behind a block',
+            `<h1>${buildMissing}</h1><span hidden>x<div>y</span>LEAK</div>`,
+            buildMissing
+        ],
+        [
+            'hidden formatting a paragraph cut off',
+            `<h1>${buildMissing}</h1><p><b hidden>x</p><p>LEAK`,
+            buildMissing
+        ],
+        [
+            'a table in quirks mode',
+            `<h1>${buildMissing}</h1><p hidden>q<table><tr><td>LEAK</td></tr></table>`,
+            buildMissing
+        ],
+        [
+            'a table in standards mode',
+            `<!doctype html><p hidden>q<table><tr><td>${buildMissing}</td></tr></table>`,
+            buildMissing
+        ],
+        ['a late body tag', `<li hidden>A<body><li>${buildMissing}`, buildMissing],
+        ['a stray </p>', 'Build</p>missing', 'Build missing'],
+        ['a hidden param', `<param hidden>${buildMissing}`, buildMissing],
+        [
+            'text a hidden table moves out',
+            `<table hidden>${buildMissing}<tr><td>x</table>`,
+            buildMissing
+        ],
+        ['loose svg text', `<svg>LEAK</svg><h1>${buildMissing}</h1>`, buildMissing],
+        ['a link a link opener closes', `<a hidden>x<a>${buildMissing}</a>`, buildMissing],
+        ['a </p> inside math', `<math></p>${buildMissing}`, buildMissing],
+        ['an HTML element named like MathML', `<p hidden>x<mi>y<div>${buildMissing}`, buildMissing],
+        [
+            'hidden formatting around more blocks than the parser walks',
+            `<h1>${buildMissing}</h1><b hidden>x${'<div>'.repeat(10)}</b>LEAK`,
+            buildMissing
+        ]
     ] as const) {
         spawnFlow(`a 5xx page with ${what} gives what a browser shows`, async () => {
             const server = await serve(

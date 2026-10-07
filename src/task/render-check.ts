@@ -173,14 +173,19 @@ function readPage(
     const voids = new Set([
         'area',
         'base',
+        'basefont',
+        'bgsound',
         'br',
         'col',
         'embed',
+        'frame',
         'hr',
         'img',
         'input',
+        'keygen',
         'link',
         'meta',
+        'param',
         'source',
         'track',
         'wbr'
@@ -245,27 +250,132 @@ function readPage(
         'thead',
         'tr'
     ])
+    // Boundaries only as SVG or MathML elements: an HTML <mi> is no boundary.
+    const foreignBounds = new Set([
+        'annotation-xml',
+        'desc',
+        'foreignobject',
+        'mi',
+        'mn',
+        'mo',
+        'ms',
+        'mtext',
+        'title'
+    ])
     // Where the parser stops looking for an open element to close.
-    const scope = new Set(['applet', 'caption', 'html', 'table', 'td', 'th', 'marquee', 'object'])
+    const scope = new Set([
+        ...foreignBounds,
+        'applet',
+        'caption',
+        'html',
+        'marquee',
+        'object',
+        'table',
+        'td',
+        'th'
+    ])
     const buttonScope = new Set([...scope, 'button'])
-    const notSpecial = new Set(['address', 'div', 'p', 'li', 'dd', 'dt'])
-    const itemScope = new Set(
-        [
-            ...closesP,
-            ...buttonScope,
-            'body',
-            'colgroup',
-            'select',
-            'tbody',
-            'tfoot',
-            'thead',
-            'tr'
-        ].filter(name => !notSpecial.has(name))
-    )
+    const listScope = new Set([...scope, 'ol', 'ul'])
     const tableScope = new Set(['html', 'table'])
-    const scopes = [scope, buttonScope, itemScope, tableScope]
+    const special = new Set([
+        ...[...closesP].filter(name => name !== 'dialog'),
+        ...scope,
+        'button',
+        'colgroup',
+        'frameset',
+        'select',
+        'tbody',
+        'tfoot',
+        'thead',
+        'tr'
+    ])
+    const itemScope = new Set([...special].filter(name => !['address', 'div', 'p'].includes(name)))
+    const scopes = [scope, buttonScope, listScope, tableScope, itemScope, special]
     const headings = new Set(['h1', 'h2', 'h3', 'h4', 'h5', 'h6'])
     const tableSections = new Set(['tbody', 'tfoot', 'thead'])
+    // Where the parser moves content out in front of the table.
+    const fosters = new Set(['table', 'tbody', 'tfoot', 'thead', 'tr'])
+    const tableParts = new Set([...tableSections, 'caption', 'col', 'colgroup', 'td', 'th', 'tr'])
+    const formatting = new Set([
+        'a',
+        'b',
+        'big',
+        'code',
+        'em',
+        'font',
+        'i',
+        'nobr',
+        's',
+        'small',
+        'strike',
+        'strong',
+        'tt',
+        'u'
+    ])
+    // Formatting a parent left open does not carry into these.
+    const markers = new Set(['applet', 'caption', 'marquee', 'object', 'td', 'th'])
+    // The start tags that do not reopen formatting a block end cut off.
+    const keepsFormattingShut = new Set([
+        ...[...closesP].filter(name => name !== 'xmp'),
+        'base',
+        'basefont',
+        'bgsound',
+        'body',
+        'caption',
+        'col',
+        'colgroup',
+        'frame',
+        'frameset',
+        'head',
+        'html',
+        'iframe',
+        'link',
+        'meta',
+        'noembed',
+        'noframes',
+        'noscript',
+        'param',
+        'rb',
+        'rp',
+        'rt',
+        'rtc',
+        'script',
+        'source',
+        'style',
+        'tbody',
+        'td',
+        'textarea',
+        'tfoot',
+        'th',
+        'thead',
+        'title',
+        'tr',
+        'track'
+    ])
+    const shadowHosts = new Set([
+        'article',
+        'aside',
+        'blockquote',
+        'div',
+        'footer',
+        ...headings,
+        'header',
+        'main',
+        'nav',
+        'p',
+        'section',
+        'span'
+    ])
+    const reservedNames = new Set([
+        'annotation-xml',
+        'color-profile',
+        'font-face',
+        'font-face-format',
+        'font-face-name',
+        'font-face-src',
+        'font-face-uri',
+        'missing-glyph'
+    ])
     const leavesForeign = new Set([
         'b',
         'big',
@@ -323,6 +433,41 @@ function readPage(
         'mtext',
         'title'
     ])
+    // SVG draws text only in <text>, MathML only in its token elements.
+    const drawsText = new Set(['foreignobject', 'mi', 'mn', 'mo', 'ms', 'mtext', 'text'])
+    const svgText = new Set(['a', 'text', 'textpath', 'tspan'])
+    const inSvgText = new Set(['a', 'textpath', 'tspan'])
+    // The public ids the spec renders in quirks mode, where a table leaves a p open.
+    const quirkyPublicId = new RegExp(
+        '^(?:'
+            + [
+                String.raw`\+//silmaril//dtd html pro v0r11 19970101//`,
+                String.raw`-//(?:advasoft ltd|as)//dtd html 3\.0 aswedit \+ extensions//`,
+                String.raw`-//ietf//dtd html(?: 2\.0(?: strict)?(?: level [12])?| 2\.1e| 3\.0| 3\.2(?: final)?| 3|(?: strict)? level [0-3]| strict)?//`,
+                String.raw`-//metrius//dtd metrius presentational//`,
+                String.raw`-//microsoft//dtd internet explorer [23]\.0 (?:html strict|html|tables)//`,
+                String.raw`-//netscape comm\. corp\.//dtd (?:strict )?html//`,
+                String.raw`-//o'reilly and associates//dtd html (?:2\.0|extended 1\.0|extended relaxed 1\.0)//`,
+                String.raw`-//sq//dtd html 2\.0 hotmetal \+ extensions//`,
+                String.raw`-//softquad software//dtd hotmetal pro 6\.0::19990601::extensions to html 4\.0//`,
+                String.raw`-//softquad//dtd hotmetal pro 4\.0::19971010::extensions to html 4\.0//`,
+                String.raw`-//spyglass//dtd html 2\.0 extended//`,
+                String.raw`-//sun microsystems corp\.//dtd hotjava (?:strict )?html//`,
+                String.raw`-//w3c//dtd html (?:3 1995-03-24|3\.2 draft|3\.2 final|3\.2|3\.2s draft|4\.0 frameset|4\.0 transitional|experimental 19960712|experimental 970421)//`,
+                String.raw`-//w3c//dtd w3 html//`,
+                String.raw`-//w3o//dtd w3 html 3\.0//`,
+                String.raw`-//webtechs//dtd mozilla html(?: 2\.0)?//`,
+                String.raw`-//w3o//dtd w3 html strict 3\.0//en//$`,
+                String.raw`-/w3c/dtd html 4\.0 transitional/en$`,
+                'html$'
+            ].join('|')
+            + ')'
+    )
+    const quirkyWithoutSystemId = /^-\/\/w3c\/\/dtd html 4\.01 (?:frameset|transitional)\/\//
+    const doctypeStart = /doctype/iy
+    const doctype =
+        /doctype[\t\n\f\r ]*([^\t\n\f\r >]*)(?:[\t\n\f\r ]+(?:public[\t\n\f\r ]*(?:"([^">]*)"|'([^'>]*)')(?:[\t\n\f\r ]*(?:"([^">]*)"|'([^'>]*)'))?|system[\t\n\f\r ]*(?:"([^">]*)"|'([^'>]*)')))?[\t\n\f\r ]*>/iy
+    const nonSpace = /[^\t\n\f\r ]/
     const tagName = /[a-z][^\t\n\f\r />]*/iy
     const between = /[\t\n\f\r /]*/y
     const attributeName = /[^\t\n\f\r />][^\t\n\f\r />=]*/y
@@ -336,12 +481,14 @@ function readPage(
     // The named references a serializer writes. Any other is a word either way.
     const reference =
         /&(?:#(\d+);?|#[xX]([\da-fA-F]+);?|(amp|AMP|lt|LT|gt|GT|quot|QUOT|nbsp);?|apos;)/g
-    const named: Record<string, string> = {amp: '&', lt: '<', gt: '>', quot: '"', nbsp: '\u00a0'}
+    const named: Record<string, string> = {amp: '&', lt: '<', gt: '>', quot: '"', nbsp: ' '}
     const attributes = {
         hidden: false,
         open: false,
         shadowRootMode: '',
         type: '',
+        slot: undefined as string | undefined,
+        name: '',
         selfClosing: false
     }
 
@@ -354,7 +501,8 @@ function readPage(
     /** Where the tag whose attributes start at `from` ends, or -1 when it never does. Fills `attributes`. */
     function tagEnd(from: number): number {
         attributes.hidden = attributes.open = false
-        attributes.type = attributes.shadowRootMode = ''
+        attributes.type = attributes.shadowRootMode = attributes.name = ''
+        attributes.slot = undefined
         let gap = from
         let at = skip(between, from)
         while (at < html.length && html[at] !== '>') {
@@ -362,6 +510,7 @@ function readPage(
             const name = html.slice(at, nameEnd).toLowerCase()
             if (name === 'hidden') attributes.hidden = true
             else if (name === 'open') attributes.open = true
+            else if (name === 'slot') attributes.slot = ''
             at = skip(space, nameEnd)
             if (html[at] === '=') {
                 at = skip(valueStart, at)
@@ -379,6 +528,8 @@ function readPage(
                 }
                 if (name === 'type') attributes.type = value.toLowerCase()
                 else if (name === 'shadowrootmode') attributes.shadowRootMode = value.toLowerCase()
+                else if (name === 'slot') attributes.slot = value
+                else if (name === 'name') attributes.name = value
             }
             gap = at
             at = skip(between, at)
@@ -427,15 +578,30 @@ function readPage(
         return -1
     }
 
+    /** Whether the doctype at `from` puts the page in quirks mode, or undefined when it is no doctype. */
+    function quirkyDoctype(from: number): boolean | undefined {
+        doctypeStart.lastIndex = from
+        if (!doctypeStart.test(html)) return undefined
+        doctype.lastIndex = from
+        const id = doctype.exec(html)
+        if (id === null || id[1]!.toLowerCase() !== 'html') return true
+        const publicId = (id[2] ?? id[3])?.toLowerCase()
+        const systemId = (id[4] ?? id[5] ?? id[6] ?? id[7])?.toLowerCase()
+        if (systemId === 'http://www.ibm.com/data/dtd/v11/ibmxhtml1-transitional.dtd') return true
+        if (publicId === undefined) return false
+        return (
+            quirkyPublicId.test(publicId)
+            || (systemId === undefined && quirkyWithoutSystemId.test(publicId))
+        )
+    }
+
     // The spec reads &#128; to &#159; as windows-1252, as the pages that write them mean.
-    const windows1252 =
-        '\u20ac\x81\u201a\u0192\u201e\u2026\u2020\u2021\u02c6\u2030\u0160\u2039\u0152\x8d\u017d\x8f'
-        + '\x90\u2018\u2019\u201c\u201d\u2022\u2013\u2014\u02dc\u2122\u0161\u203a\u0153\x9d\u017e\u0178'
+    const windows1252 = '€\x81‚ƒ„…†‡ˆ‰Š‹Œ\x8dŽ\x8f' + '\x90‘’“”•–—˜™š›œ\x9džŸ'
     const character = (code: number) =>
         code >= 0x80 && code <= 0x9f ? windows1252[code - 0x80]!
         : code > 0 && code <= 0x10ffff && (code < 0xd800 || code > 0xdfff) ?
             String.fromCodePoint(code)
-        :   '\ufffd'
+        :   '�'
     const decode = (text: string) =>
         text.includes('&') ?
             text.replace(reference, (ref, decimal?: string, hex?: string, name?: string) =>
@@ -445,44 +611,77 @@ function readPage(
             )
         :   text
 
+    type Slots = {fallback: boolean; named: Set<string>}
     type Open = {
         name: string
         foreign: boolean
+        /** A foreign element draws its text only inside <text>, foreignObject or a MathML token. */
+        draws: boolean
+        hidden: boolean
         hides: boolean
+        /** How much it adds to `hiding` while it is open. */
+        weight: number
+        /** `hiding` where it opened. */
+        hidingBefore: number
         visible: boolean
+        /** On the stack. An element the parser took out of the middle stays in the array, dead. */
+        live: boolean
+        index: number
+        /** In its fragment's list of formatting to reopen. */
+        listed: boolean
         closedDetails: boolean
         summarized: boolean
         shadowHost: boolean
+        /** The slots of its shadow root, once the root is closed. */
+        slots: Slots | undefined
+        slot: string | undefined
+        /** Where its text starts in `shown`. */
+        shownAt: number
+        /** Its children that named a slot before its shadow root came. */
+        slotted: Array<{name: string; from: number; to: number}> | undefined
+        /** Clones the adoption agency put right under it, ahead of its open children. */
+        adopted: Open[] | undefined
     }
     /** A document or a template's content: end tags in one never close elements in the other. */
     type Fragment = {
         stack: Open[]
-        /** Where each open name sits in the stack, innermost last. */
+        /** Where each open name sits in the stack, innermost last. Dead entries are dropped on read. */
         positions: Map<string, number[]>
         /** Where each scope's boundaries sit in the stack, innermost last. */
         bounds: Map<Set<string>, number[]>
+        /** Formatting the parser reopens after a block end cut it off. Null is a cell's boundary. */
+        formatting: Array<Open | null>
         /** The element a shadow root attached to. A template without one is inert. */
         host: Open | undefined
-        slotted: boolean
+        start: number
+        slots: Slots
     }
     const fragment = (host?: Open): Fragment => ({
         stack: [],
         positions: new Map(),
         bounds: new Map(scopes.map(names => [names, []])),
+        formatting: [],
         host,
-        slotted: false
+        start: shown.length,
+        slots: {fallback: false, named: new Set()}
     })
+    let shown = ''
     const fragments = [fragment()]
     let current = fragments[0]!
     const tags = new Set<string>()
+    // Light content a shadow root shows no slot for: ranges of `shown` to drop.
+    const cuts: Array<[number, number]> = []
+    let quirks: boolean | undefined = dumped ? false : undefined
+    let pageHidden = false
     let inert = 0
     let hiding = 0
-    let shown = ''
     let title: string | null = null
     let at = 0
     const top = () => current.stack.at(-1)
     const show = (text: string) => {
-        if (inert === 0 && hiding === 0 && !top()?.closedDetails) shown += text
+        const node = top()
+        if (inert === 0 && hiding === 0 && !node?.closedDetails && (!node?.foreign || node.draws))
+            shown += text
     }
     const inForeign = () => {
         const node = top()
@@ -496,75 +695,303 @@ function readPage(
             || (name === 'dialog' && !attributes.open)
             || (name === 'input' && attributes.type === 'hidden')
             || name === 'datalist'
+    const stops = (node: Open, names: Set<string>) =>
+        names.has(node.name) && node.foreign === foreignBounds.has(node.name)
+    const fills = (slots: Slots, slot: string | undefined) =>
+        slot ? slots.named.has(slot) : slots.fallback
+
+    function element(
+        name: string,
+        foreign: boolean,
+        hidden: boolean,
+        hides: boolean,
+        slot: string | undefined,
+        parent = top()
+    ): Open {
+        if (parent?.closedDetails) {
+            // A closed details shows its first summary only.
+            if (name === 'summary' && !parent.summarized) parent.summarized = true
+            else hides = true
+        }
+        if (
+            foreign
+            && parent?.foreign
+            && parent.draws
+            && svgText.has(parent.name)
+            && !inSvgText.has(name)
+        )
+            hides = true
+        let weight = hides ? 1 : 0
+        const slots = parent?.slots
+        // The host's light content hides as a whole; a child a slot takes shows.
+        if (slots !== undefined && fills(slots, slot) !== slots.fallback)
+            weight += slots.fallback ? 1 : -1
+        return {
+            name,
+            foreign,
+            draws:
+                foreign
+                && name !== 'svg'
+                && name !== 'math'
+                && (drawsText.has(name) || (parent?.foreign === true && parent.draws)),
+            hidden,
+            hides,
+            weight,
+            hidingBefore: 0,
+            visible: inert === 0 && hiding === 0 && !hides,
+            live: false,
+            index: -1,
+            listed: false,
+            closedDetails: name === 'details' && !foreign && !attributes.open,
+            summarized: false,
+            shadowHost: false,
+            slots: undefined,
+            slot,
+            shownAt: 0,
+            slotted: undefined,
+            adopted: undefined
+        }
+    }
 
     function push(node: Open) {
         const {stack, positions, bounds} = current
+        node.index = stack.length
+        node.live = true
+        node.shownAt = shown.length
         let ofName = positions.get(node.name)
         if (ofName === undefined) positions.set(node.name, (ofName = []))
-        ofName.push(stack.length)
-        for (const [names, edges] of bounds) if (names.has(node.name)) edges.push(stack.length)
+        ofName.push(node.index)
+        for (const [names, edges] of bounds) if (stops(node, names)) edges.push(node.index)
         stack.push(node)
-        if (node.hides) hiding++
+        node.hidingBefore = hiding
+        hiding += node.weight
+    }
+
+    /** Takes the top entry off the stack, with no side effect of the element ending. */
+    function pop(): Open {
+        const {stack, positions, bounds} = current
+        const node = stack.pop()!
+        const ofName = positions.get(node.name)!
+        if (ofName.at(-1) === stack.length) ofName.pop()
+        for (const [names, edges] of bounds)
+            if (stops(node, names) && edges.at(-1) === stack.length) edges.pop()
+        if (node.live) remove(node)
+        for (const clone of node.adopted ?? []) if (clone.live) remove(clone)
+        node.adopted = undefined
+        return node
+    }
+
+    function remove(node: Open) {
+        node.live = false
+        hiding -= node.weight
     }
 
     function popTo(position: number) {
-        const {stack, positions, bounds} = current
-        while (stack.length > position) {
-            const node = stack.pop()!
-            positions.get(node.name)!.pop()
-            for (const [names, edges] of bounds) if (names.has(node.name)) edges.pop()
-            if (node.hides) hiding--
+        const {stack} = current
+        while (stack.length > position || stack.at(-1)?.live === false) {
+            const node = stack.at(-1)!
+            const ended = node.live
+            pop()
+            if (!ended || dumped) continue
+            if (markers.has(node.name) && !node.foreign) clearToMarker()
+            const parent = stack[node.index - 1]
+            if (node.slot && parent !== undefined && !parent.shadowHost)
+                (parent.slotted ??= []).push({
+                    name: node.slot,
+                    from: node.shownAt,
+                    to: shown.length
+                })
         }
     }
     const popTop = () => popTo(current.stack.length - 1)
 
     /** Where the innermost open `name` sits, if no boundary of `names` stands above it. */
     function reach(name: string, names: Set<string>): number {
-        const position = current.positions.get(name)?.at(-1) ?? -1
-        const bound = current.bounds.get(names)!.at(-1) ?? -1
+        const {stack, positions, bounds} = current
+        const ofName = positions.get(name)
+        while (ofName?.length && !stack[ofName.at(-1)!]!.live) ofName.pop()
+        const position = ofName?.at(-1) ?? -1
+        const bound = bounds.get(names)!.at(-1) ?? -1
         return position !== -1 && position >= bound ? position : -1
     }
     const closeOpen = (name: string, names: Set<string>) => {
         const position = reach(name, names)
         if (position !== -1) popTo(position)
     }
+    function innermost(names: Iterable<string>, within: Set<string>): number {
+        let position = -1
+        for (const name of names) position = Math.max(position, reach(name, within))
+        return position
+    }
 
-    /** The end tags a raw page leaves the parser to imply when `name` opens. */
-    function closeImplied(name: string) {
-        if (closesP.has(name)) closeOpen('p', buttonScope)
+    function list(node: Open) {
+        const entries = current.formatting
+        let twins = 0
+        // The spec keeps three alike after the last boundary. Only `hidden` tells two apart here.
+        for (let i = entries.length - 1; i >= 0 && entries[i] !== null; i--) {
+            const entry = entries[i]!
+            if (entry.name === node.name && entry.hidden === node.hidden && ++twins === 3) {
+                unlist(i)
+                break
+            }
+        }
+        entries.push(node)
+        node.listed = true
+    }
+    function unlist(index: number) {
+        current.formatting[index]!.listed = false
+        current.formatting.splice(index, 1)
+    }
+    function listed(name: string): number {
+        const entries = current.formatting
+        for (let i = entries.length - 1; i >= 0 && entries[i] !== null; i--)
+            if (entries[i]!.name === name) return i
+        return -1
+    }
+    function clearToMarker() {
+        for (let entry = current.formatting.pop(); entry; entry = current.formatting.pop())
+            entry.listed = false
+    }
+
+    /** Reopens the formatting a block end cut off, as the parser does before content. */
+    function reconstruct() {
+        const entries = current.formatting
+        let i = entries.length
+        while (i > 0 && entries[i - 1] !== null && !entries[i - 1]!.live) i--
+        for (; i < entries.length; i++) {
+            const {name, hidden} = entries[i]!
+            const clone = element(name, false, hidden, hidden, undefined)
+            const table = fosterTable()
+            if (table !== undefined) foster(clone, table)
+            push(clone)
+            entries[i]!.listed = false
+            entries[i] = clone
+            clone.listed = true
+        }
+    }
+
+    /** The adoption agency: false when `name`'s end tag is left to the generic rule. */
+    function adopt(name: string): boolean {
+        const {stack} = current
+        const entries = current.formatting
+        if (top()?.name === name && !top()!.listed) {
+            popTop()
+            return true
+        }
+        for (let round = 0; round < 8; round++) {
+            const entry = listed(name)
+            if (entry === -1) return round > 0
+            const formatter = entries[entry]!
+            if (!formatter.live) {
+                unlist(entry)
+                return true
+            }
+            if ((current.bounds.get(scope)!.at(-1) ?? -1) > formatter.index) return true
+            let block = Math.floor(formatter.index) + 1
+            while (block < stack.length && !(stack[block]!.live && stops(stack[block]!, special)))
+                block++
+            if (block === stack.length) {
+                popTo(Math.ceil(formatter.index))
+                if (formatter.live) remove(formatter)
+                unlist(entry)
+                return true
+            }
+            let kept = 0
+            for (let i = block - 1; i > formatter.index; i--) {
+                const node = stack[i]!
+                if (!node.live) continue
+                if (node.listed && ++kept > 3) unlist(current.formatting.lastIndexOf(node))
+                if (!node.listed) remove(node)
+            }
+            remove(formatter)
+            // The spec moves the clone to a bookmark in the list. Visibility never depends on that order.
+            const clone = element(
+                name,
+                false,
+                formatter.hidden,
+                formatter.hidden,
+                undefined,
+                stack[block]
+            )
+            formatter.listed = false
+            entries[current.formatting.lastIndexOf(formatter)] = clone
+            clone.listed = true
+            if (block === stack.length - 1) push(clone)
+            else {
+                // Splicing it into the array would cost every element above: it waits on the block instead.
+                clone.index = block + 0.5
+                clone.live = true
+                hiding += clone.weight
+                ;(stack[block]!.adopted ??= []).push(clone)
+            }
+        }
+        return true
+    }
+
+    /** False when the parser drops a table part outside any table. */
+    function enterTable(name: string): boolean {
+        const table = reach('table', tableScope)
+        if (table === -1) return fragments.length > 1
+        if (name === 'col' && top()?.name === 'colgroup') return true
+        const context =
+            name === 'td' || name === 'th' ? ['tr', ...tableSections]
+            : name === 'tr' ? tableSections
+            : []
+        popTo(Math.max(table, innermost(context, tableScope)) + 1)
+        return true
+    }
+
+    /** Applies what the parser implies when `name` opens on a raw page. False: it drops the tag. */
+    function startTag(name: string): boolean {
+        if (top()?.name === 'colgroup' && name !== 'col') popTop()
+        if (tableParts.has(name)) return enterTable(name)
+        if (name === 'table' ? !quirks : closesP.has(name)) closeOpen('p', buttonScope)
         if (name === 'li') closeOpen('li', itemScope)
         else if (name === 'dd' || name === 'dt') {
-            closeOpen('dd', itemScope)
-            closeOpen('dt', itemScope)
+            const item = innermost(['dd', 'dt'], itemScope)
+            if (item !== -1) popTo(item)
         } else if (headings.has(name) && headings.has(top()?.name ?? '')) popTop()
         else if (name === 'option' || name === 'optgroup') {
             if (top()?.name === 'option') popTop()
             if (name === 'optgroup' && top()?.name === 'optgroup') popTop()
-        } else if (name === 'td' || name === 'th' || name === 'tr' || tableSections.has(name)) {
-            closeOpen('td', tableScope)
-            closeOpen('th', tableScope)
-            if (name !== 'td' && name !== 'th') closeOpen('tr', tableScope)
-            if (tableSections.has(name))
-                for (const section of tableSections) closeOpen(section, tableScope)
+        } else if (name === 'button') closeOpen('button', scope)
+        else if (name === 'table') {
+            const table = reach('table', tableScope)
+            if (table > innermost(['caption', 'td', 'th'], tableScope)) popTo(table)
+        } else if (name === 'a' && listed('a') !== -1) {
+            const anchor = current.formatting[listed('a')]!
+            adopt('a')
+            if (anchor.listed) unlist(current.formatting.lastIndexOf(anchor))
+            if (anchor.live) remove(anchor)
+            popTo(current.stack.length)
         }
+        if (!keepsFormattingShut.has(name)) reconstruct()
+        if (name === 'nobr' && reach('nobr', scope) !== -1) {
+            adopt('nobr')
+            reconstruct()
+        }
+        return true
     }
 
     function closeTag(name: string) {
         // The parser keeps body and html open to the end: text after them is still theirs.
         if (name === 'html' || name === 'head' || name === 'body') return
+        if (!dumped && formatting.has(name) && !top()?.foreign && adopt(name)) return
         const names =
             name === 'p' ? buttonScope
-            : name === 'li' || name === 'dd' || name === 'dt' ? itemScope
-            : name === 'table' || name === 'tr' || tableSections.has(name) ? tableScope
-            : scope
-        const position = reach(name, names)
+            : name === 'li' ? listScope
+            : tableParts.has(name) || name === 'table' ? tableScope
+            : special.has(name) || top()?.foreign ? scope
+            : special
+        const position = headings.has(name) ? innermost(headings, scope) : reach(name, names)
         if (position === -1) {
-            if (name === 'br') show(' ')
+            // A stray </p> leaves an empty paragraph behind.
+            if (name === 'br' || name === 'p') show(' ')
             return
         }
         const node = current.stack[position]!
         popTo(position)
-        if (node.visible && blocks.has(name)) show(' ')
+        if (node.visible && blocks.has(name)) shown += ' '
     }
 
     function openTemplate() {
@@ -575,7 +1002,10 @@ function readPage(
             !dumped
             && (mode === 'open' || mode === 'closed')
             && host !== undefined
+            && !host.foreign
             && !host.shadowHost
+            && (shadowHosts.has(host.name)
+                || (host.name.includes('-') && !reservedNames.has(host.name)))
         if (attaches) host.shadowHost = true
         else inert++
         fragments.push((current = fragment(attaches ? host : undefined)))
@@ -583,18 +1013,63 @@ function readPage(
 
     function closeTemplate() {
         popTo(0)
-        const {host, slotted} = fragments.pop()!
+        const {host, start, slots} = fragments.pop()!
         current = fragments.at(-1)!
-        if (host === undefined) inert--
-        // A shadow root shows its host's own content only through a slot.
-        else if (!slotted && !host.hides) {
-            host.hides = true
+        if (host === undefined) {
+            inert--
+            return
+        }
+        host.slots = slots
+        const drop = (from: number, to: number, slot?: string) => {
+            if (to > from && !fills(slots, slot)) cuts.push([from, to])
+        }
+        let from = host.shownAt
+        for (const child of host.slotted ?? []) {
+            drop(from, child.from)
+            drop(child.from, child.to, child.name)
+            from = child.to
+        }
+        drop(from, start)
+        if (!slots.fallback) {
+            host.weight++
             hiding++
         }
     }
 
+    /** The table that raw content opening here is moved in front of. */
+    function fosterTable(): Open | undefined {
+        const node = top()
+        return !dumped && node !== undefined && !node.foreign && fosters.has(node.name) ?
+                current.stack[reach('table', tableScope)]
+            :   undefined
+    }
+    /** Shows `node` as the table's parent shows it, not as the table does. */
+    function foster(node: Open, table: Open) {
+        node.weight -= hiding - table.hidingBefore
+        node.visible = inert === 0 && table.hidingBefore === 0 && !node.hides
+    }
+
+    function characters(raw: string) {
+        if (raw.length === 0) return
+        if (!dumped) {
+            const words = nonSpace.test(raw)
+            if (words) {
+                quirks ??= true
+                if (top()?.name === 'colgroup') popTop()
+            }
+            // Spaces between table rows stay in the table, with no formatting reopened.
+            if (!inForeign() && (words || fosterTable() === undefined)) reconstruct()
+            const table = words ? fosterTable() : undefined
+            if (table !== undefined) {
+                if (inert === 0 && table.hidingBefore === 0) shown += decode(raw)
+                return
+            }
+        }
+        show(decode(raw))
+    }
+
     for (let lt = html.indexOf('<'); lt !== -1; lt = html.indexOf('<', at)) {
-        show(decode(html.slice(at, lt)))
+        characters(html.slice(at, lt))
         at = lt + 1
         if (html.startsWith('!--', at)) {
             at = commentEnd(at + 3)
@@ -605,9 +1080,10 @@ function readPage(
         const name = tagName.exec(html)?.[0].toLowerCase()
         if (name === undefined) {
             if (closing || html[at] === '!' || html[at] === '?') {
+                if (html[at] === '!' && quirks === undefined) quirks = quirkyDoctype(at + 1)
                 const end = html.indexOf('>', at)
                 at = end === -1 ? html.length : end + 1
-            } else show('<')
+            } else characters('<')
             continue
         }
         const end = tagEnd(tagName.lastIndex)
@@ -617,7 +1093,14 @@ function readPage(
             break
         }
         at = end + 1
-        if (!closing && inForeign() && leavesForeign.has(name)) while (inForeign()) popTop()
+        quirks ??= true
+        // A dump holds what a script built: an HTML element inside an svg stays there.
+        if (
+            !dumped
+            && inForeign()
+            && (closing ? name === 'p' || name === 'br' : leavesForeign.has(name))
+        )
+            while (inForeign()) popTop()
         const foreign = name === 'svg' || name === 'math' || inForeign()
         if (name === 'template' && !foreign) {
             if (!closing) openTemplate()
@@ -628,16 +1111,16 @@ function readPage(
             closeTag(name)
             continue
         }
-        if (!dumped && !foreign) closeImplied(name)
-        const parent = top()
-        let hides = hiddenByBrowser(name, foreign)
-        if (parent?.closedDetails) {
-            // A closed details shows its first summary only.
-            if (name === 'summary' && !parent.summarized) parent.summarized = true
-            else hides = true
-        }
-        const visible = inert === 0 && hiding === 0 && !hides
-        if (visible) {
+        const parsed = !dumped && !inForeign()
+        if (parsed && !startTag(name)) continue
+        if ((name === 'html' || name === 'body') && !foreign && fragments.length === 1)
+            pageHidden ||= attributes.hidden
+        const hides = hiddenByBrowser(name, foreign)
+        const node = element(name, foreign, attributes.hidden, hides, attributes.slot)
+        const table =
+            parsed && !tableParts.has(name) && name !== 'table' ? fosterTable() : undefined
+        if (table !== undefined) foster(node, table)
+        if (node.visible) {
             tags.add(name)
             if (blocks.has(name)) shown += ' '
         }
@@ -646,29 +1129,37 @@ function readPage(
             const text = html.slice(at, close === -1 ? html.length : close)
             if (name === 'title') {
                 if (inert === 0) title ??= decode(text)
-            } else if (visible && !unseen.has(name))
+            } else if (node.visible && !unseen.has(name))
                 shown += ` ${name === 'xmp' ? text : decode(text)} `
             const closerEnd = close === -1 ? -1 : tagEnd(close + name.length + 2)
             at = closerEnd === -1 ? html.length : closerEnd + 1
             continue
         }
-        if (name === 'slot' && current.host !== undefined) current.slotted = true
+        if (name === 'slot' && current.host !== undefined) {
+            if (attributes.name) current.slots.named.add(attributes.name)
+            else current.slots.fallback = true
+        }
         const childless = foreign ? attributes.selfClosing : voids.has(name)
-        if (childless || name === 'html' || name === 'head') continue
-        if (name === 'body' && current.positions.get('body')?.length) continue
-        push({
-            name,
-            foreign,
-            hides,
-            visible,
-            closedDetails: name === 'details' && !foreign && !attributes.open,
-            summarized: false,
-            shadowHost: false
-        })
+        if (childless || name === 'html' || name === 'head' || name === 'body') continue
+        push(node)
+        if (parsed && formatting.has(name)) list(node)
+        if (parsed && markers.has(name)) current.formatting.push(null)
     }
-    show(decode(html.slice(at)))
+    characters(html.slice(at))
     const words = (text: string) => text.replace(/\s+/g, ' ').trim()
-    return {shown: words(shown), title: words(title ?? ''), tags}
+    if (pageHidden) return {shown: '', title: words(title ?? ''), tags: new Set()}
+    let kept = shown
+    if (cuts.length > 0) {
+        cuts.sort((a, b) => a[0] - b[0])
+        kept = ''
+        let from = 0
+        for (const [start, end] of cuts) {
+            if (start > from) kept += shown.slice(from, start)
+            from = Math.max(from, end)
+        }
+        kept += shown.slice(from)
+    }
+    return {shown: words(kept), title: words(title ?? ''), tags}
 }
 
 /** Wall-clock cap for the whole browser run; virtual-time budget for the page JS. */
