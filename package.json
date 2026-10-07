@@ -27,6 +27,7 @@
     "dependencies": {
         "@mozilla/readability": "0.6.0",
         "linkedom": "0.18.12",
+        "parse5": "8.0.1",
         "qrcode": "1.5.4",
         "turndown": "7.2.4",
         "web-push": "3.6.7",

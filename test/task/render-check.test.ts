@@ -6,10 +6,11 @@
  * standing in for `chrome --dump-dom` — so the flow is hermetic. One real-browser
  * smoke runs when a browser is present.
  */
-import {describe, expect, test} from 'bun:test'
+import {describe, expect, spyOn, test} from 'bun:test'
 import {tmpDir} from '../test-utils/tmp-dir.js'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
+import * as childProcess from 'node:child_process'
 import {spawn} from 'node:child_process'
 import {
     findHeadlessBrowser,
@@ -284,6 +285,18 @@ describe('runRenderCheck', () => {
             expect(runRenderCheck(server.url, null).outcome).toBe('unready')
         } finally {
             server.stop()
+        }
+    })
+
+    // Windows caps a command line at 32,767 characters. The reader's source once rode in it.
+    test('the 5xx probe hands its child a script Windows can launch', () => {
+        const spawned = spyOn(childProcess, 'spawnSync')
+        try {
+            httpAnswer('http://127.0.0.1:9/', 2000)
+            const script = spawned.mock.calls[0]![1]![1]!
+            expect(script.length).toBeLessThan(32_767)
+        } finally {
+            spawned.mockRestore()
         }
     })
 
