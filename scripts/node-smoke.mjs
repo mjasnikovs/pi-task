@@ -13,7 +13,10 @@
 // port release. A green run here says the retry path runs clean and nothing
 // escapes on this Node and this OS.
 import assert from 'node:assert/strict'
+import {spawn} from 'node:child_process'
+import {once} from 'node:events'
 import {createServer} from 'node:http'
+import {createRequire, syncBuiltinESMExports} from 'node:module'
 import {listenWithRetry} from '../dist/remote/server.js'
 
 // Any uncaughtException or unhandledRejection here is the failure mode itself:
@@ -76,6 +79,37 @@ function check(name, ok) {
         await new Promise(r => setImmediate(r))
     }
     check('50x rapid bind/close cycles stay in range', ok)
+}
+
+// Windows caps a command line at 32,767 characters. Built by tsc, the 5xx probe once
+// inlined 35,303 of the reader's source, so it never launched there. Bun's build was
+// 26 KB, which is why this runs here and not in the suite.
+{
+    const page = '<html><body><h1>Build missing</h1></body></html>'
+    const server = spawn(process.execPath, [
+        '-e',
+        `require('node:http').createServer((q, r) => { r.writeHead(503); r.end(${JSON.stringify(page)}) })`
+            + `.listen(0, '127.0.0.1', function () { console.log(this.address().port) })`
+    ])
+    const [port] = await once(server.stdout, 'data')
+    const childProcess = createRequire(import.meta.url)('node:child_process')
+    const spawnSync = childProcess.spawnSync
+    const scripts = []
+    childProcess.spawnSync = (bin, args, options) => {
+        scripts.push(args[1])
+        return spawnSync(bin, args, options)
+    }
+    syncBuiltinESMExports()
+    try {
+        const {httpAnswer} = await import('../dist/task/render-check.js')
+        const answer = httpAnswer(`http://127.0.0.1:${String(port).trim()}/`)
+        check('the 5xx probe reads the status and page text', answer?.status === 503 && answer.text === 'Build missing')
+        check('the 5xx probe fits a Windows command line', scripts.length === 1 && scripts[0].length < 32_767)
+    } finally {
+        childProcess.spawnSync = spawnSync
+        syncBuiltinESMExports()
+        server.kill()
+    }
 }
 
 // Let any late async error surface before asserting the run was clean.

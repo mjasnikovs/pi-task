@@ -61,7 +61,15 @@ describe('pageText reads a raw page as the parser builds it', () => {
             '<svg><text>a<tspan>b</tspan><rect>r</rect></text>c</svg>',
             'ab'
         ],
-        ['a windows-1252 reference', 'Build &#150; missing', 'Build – missing']
+        ['a windows-1252 reference', 'Build &#150; missing', 'Build – missing'],
+        [
+            'a legend',
+            '<fieldset><legend>Status</legend>Build missing</fieldset>',
+            'Status Build missing'
+        ],
+        ['a progress bar', 'A<progress>Loading 40%</progress>B', 'AB'],
+        ['a meter', 'A<meter>Loading 40%</meter>B', 'AB'],
+        ['a closed popover', 'A<div popover>Menu</div>B', 'AB']
     ] as const) {
         test(`${what} shows what a browser shows`, () => {
             expect(pageText(page)).toBe(shows)
@@ -81,7 +89,12 @@ describe('readDump reads a dump as Chrome wrote it', () => {
             'A x y B'
         ],
         ['a textarea', '<body>A<textarea>typed</textarea>B</body>', 'AB'],
-        ['an svg element named like MathML', '<body><svg><mi>x</mi></svg>V</body>', 'V']
+        ['an svg element named like MathML', '<body><svg><mi>x</mi></svg>V</body>', 'V'],
+        [
+            'a block a script put in the head',
+            '<html><head><div>Loading</div></head><body></body></html>',
+            ''
+        ]
     ] as const) {
         test(`${what} shows what a browser shows`, () => {
             expect(readDump(dom).shown).toBe(shows)
@@ -90,5 +103,9 @@ describe('readDump reads a dump as Chrome wrote it', () => {
 
     test('a textarea counts as drawn even with no words', () => {
         expect(readDump('<body><textarea></textarea></body>').tags.has('textarea')).toBe(true)
+    })
+
+    test('an image a script put in the head is not drawn', () => {
+        expect(readDump('<html><head><img></head><body></body></html>').tags.has('img')).toBe(false)
     })
 })

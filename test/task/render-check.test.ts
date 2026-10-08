@@ -6,11 +6,10 @@
  * standing in for `chrome --dump-dom` — so the flow is hermetic. One real-browser
  * smoke runs when a browser is present.
  */
-import {describe, expect, spyOn, test} from 'bun:test'
+import {describe, expect, test} from 'bun:test'
 import {tmpDir} from '../test-utils/tmp-dir.js'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
-import * as childProcess from 'node:child_process'
 import {spawn} from 'node:child_process'
 import {
     findHeadlessBrowser,
@@ -112,7 +111,11 @@ describe('judgeRenderedDom', () => {
         ['a bare less-than sign', '<body>1<2</body>', '1<2'],
         ['a > inside a closer attribute', '<body><script>a</script x=">">V</body>', 'V'],
         ['text after </body>', '<html><body>A</body> B</html> C', 'A B C'],
-        ['text in the head', '<html><head><title>T</title> X </head><body> B</body></html>', 'X B'],
+        [
+            'text a script put in the head',
+            '<html><head><title>T</title> X </head><body> B</body></html>',
+            'B'
+        ],
         ['a closed dialog', '<body><dialog>D</dialog>V</body>', 'V'],
         ['character references', '<body><p>a &amp; b &#65;&#x42;</p></body>', 'a & b AB'],
         [
@@ -285,18 +288,6 @@ describe('runRenderCheck', () => {
             expect(runRenderCheck(server.url, null).outcome).toBe('unready')
         } finally {
             server.stop()
-        }
-    })
-
-    // Windows caps a command line at 32,767 characters. The reader's source once rode in it.
-    test('the 5xx probe hands its child a script Windows can launch', () => {
-        const spawned = spyOn(childProcess, 'spawnSync')
-        try {
-            httpAnswer('http://127.0.0.1:9/', 2000)
-            const script = spawned.mock.calls[0]![1]![1]!
-            expect(script.length).toBeLessThan(32_767)
-        } finally {
-            spawned.mockRestore()
         }
     })
 

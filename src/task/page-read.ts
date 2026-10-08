@@ -8,29 +8,21 @@
  * would move such content out and pass a blank page, so a dump is rebuilt exactly
  * as written. It holds no shadow roots: a template left in one never attached.
  */
-import {parse} from 'parse5'
+import {
+    type DefaultTreeAdapterTypes as Dom,
+    defaultTreeAdapter as tree,
+    html as spec,
+    parse
+} from 'parse5'
 
-const HTML = 'http://www.w3.org/1999/xhtml'
-const SVG = 'http://www.w3.org/2000/svg'
-const MATH = 'http://www.w3.org/1998/Math/MathML'
+const {HTML, SVG, MATHML} = spec.NS
 
-/** The parse5 node fields the reader walks. A dump is built in the same shape. */
-type PageNode = {
-    nodeName: string
-    tagName?: string
-    namespaceURI?: string
-    attrs?: Array<{name: string; value: string}>
-    childNodes?: PageNode[]
-    value?: string
-    content?: {childNodes: PageNode[]}
-}
-
-export type Page = {shown: string; title: string; tags: Set<string>}
+export type Page = {shown: string; tags: Set<string>}
 
 /** The words a reader sees in a raw page, or its title when nothing else has any. */
 export function pageText(html: string): string {
-    const page = read(parse(html) as unknown as PageNode, true)
-    return page.shown || page.title
+    const root = parse(html)
+    return read(root, true).shown || words(titleOf(root))
 }
 
 /** What a page Chrome dumped after its scripts ran shows. */
@@ -70,6 +62,7 @@ const blocks = new Set([
     'hgroup',
     'hr',
     'html',
+    'legend',
     'li',
     'listing',
     'main',
@@ -97,6 +90,7 @@ const blocks = new Set([
 /** What the browser's own stylesheet hides, or never renders as text. */
 const unseen = new Set([
     'datalist',
+    'head',
     'noembed',
     'noframes',
     'noscript',
@@ -107,7 +101,7 @@ const unseen = new Set([
     'title'
 ])
 /** Shown on screen, but nothing inside them is page text. */
-const textless = new Set(['audio', 'canvas', 'iframe', 'textarea', 'video'])
+const textless = new Set(['audio', 'canvas', 'iframe', 'meter', 'progress', 'textarea', 'video'])
 const shadowHosts = new Set([
     'article',
     'aside',
@@ -143,48 +137,52 @@ const svgDraws = new Set(['foreignobject', 'text'])
 const mathTokens = new Set(['mi', 'mn', 'mo', 'ms', 'mtext'])
 const inSvgText = new Set(['a', 'textpath', 'tspan'])
 
-const attribute = (node: PageNode, name: string) =>
-    node.attrs?.find(attr => attr.name === name)?.value
-const isHtml = (node: PageNode, name: string) => node.tagName === name && node.namespaceURI === HTML
+const attribute = (element: Dom.Element, name: string) =>
+    element.attrs.find(attr => attr.name === name)?.value
+const isHtml = (node: Dom.Node, name: string): node is Dom.Element =>
+    tree.isElementNode(node) && node.tagName === name && node.namespaceURI === HTML
+const isTemplate = (node: Dom.Node): node is Dom.Template => isHtml(node, 'template')
+const childrenOf = (node: Dom.Node): Dom.ChildNode[] =>
+    'childNodes' in node ? node.childNodes : []
 
 /** Where the parser attached a declarative shadow root, its template. */
-function shadowRootOf(host: PageNode): PageNode | undefined {
-    const name = host.tagName!
+function shadowRootOf(host: Dom.Element): Dom.Template | undefined {
+    const name = host.tagName
     const canHost =
         shadowHosts.has(name)
         || (/^[a-z]/.test(name) && name.includes('-') && !reservedNames.has(name))
     if (!canHost) return undefined
-    return host.childNodes!.find(child => {
+    return host.childNodes.find((child): child is Dom.Template => {
         const mode = isHtml(child, 'template') && attribute(child, 'shadowrootmode')
         return mode === 'open' || mode === 'closed'
     })
 }
 
 /** Stacks `nodes` so they pop in document order. */
-function later(pending: PageNode[], nodes: PageNode[] = []) {
+function later(pending: Dom.Node[], nodes: Dom.Node[]) {
     for (let i = nodes.length - 1; i >= 0; i--) pending.push(nodes[i]!)
 }
 
-type Scope = {assigned: Map<PageNode, PageNode[]>; outer: Scope | undefined}
+type Scope = {assigned: Map<Dom.Node, Dom.ChildNode[]>; outer: Scope | undefined}
 
 /** Gives each slot of the shadow root the host's children that name it. */
-function assignSlots(host: PageNode, root: PageNode, outer: Scope | undefined): Scope {
-    const slots = new Map<string, PageNode>()
-    const pending: PageNode[] = []
-    later(pending, root.content!.childNodes)
+function assignSlots(host: Dom.Element, root: Dom.Template, outer: Scope | undefined): Scope {
+    const slots = new Map<string, Dom.Node>()
+    const pending: Dom.Node[] = []
+    later(pending, root.content.childNodes)
     for (let node = pending.pop(); node; node = pending.pop()) {
         if (isHtml(node, 'slot')) {
             const name = attribute(node, 'name') ?? ''
             if (!slots.has(name)) slots.set(name, node)
         }
-        later(pending, node.childNodes)
+        later(pending, childrenOf(node))
     }
-    const assigned = new Map<PageNode, PageNode[]>()
-    for (const child of host.childNodes!) {
+    const assigned = new Map<Dom.Node, Dom.ChildNode[]>()
+    for (const child of host.childNodes) {
         if (child === root) continue
         const name =
-            child.nodeName === '#text' ? ''
-            : child.tagName !== undefined ? (attribute(child, 'slot') ?? '')
+            tree.isTextNode(child) ? ''
+            : tree.isElementNode(child) ? (attribute(child, 'slot') ?? '')
             : undefined
         const slot = name === undefined ? undefined : slots.get(name)
         if (slot === undefined) continue
@@ -196,40 +194,42 @@ function assignSlots(host: PageNode, root: PageNode, outer: Scope | undefined): 
 }
 
 /** Every word under `top` but a script's, hidden or not: an option's text, a title's. */
-function textUnder(top: PageNode): string {
+function textUnder(top: Dom.Node): string {
     let text = ''
     const pending = [top]
     for (let node = pending.pop(); node; node = pending.pop()) {
-        if (node.nodeName === '#text') text += node.value
-        else if (node.tagName !== 'script') later(pending, node.childNodes)
+        if (tree.isTextNode(node)) text += node.value
+        else if (!isHtml(node, 'script')) later(pending, childrenOf(node))
     }
     return text
 }
 
 /** The options of a select, as innerText lists them: every one, hidden or not. */
-function optionsOf(select: PageNode): PageNode[] {
-    const options: PageNode[] = []
-    const pending: PageNode[] = []
+function optionsOf(select: Dom.Element): Dom.Element[] {
+    const options: Dom.Element[] = []
+    const pending: Dom.Node[] = []
     later(pending, select.childNodes)
     for (let node = pending.pop(); node; node = pending.pop()) {
         if (isHtml(node, 'option')) options.push(node)
-        else if (!isHtml(node, 'select')) later(pending, node.childNodes)
+        else if (!isHtml(node, 'select')) later(pending, childrenOf(node))
     }
     return options
 }
 
 /** The page's first HTML title, as `document.title` reads it. */
-function titleOf(root: PageNode): string {
+function titleOf(root: Dom.Node): string {
     const pending = [root]
     for (let node = pending.pop(); node; node = pending.pop()) {
         if (isHtml(node, 'title')) return textUnder(node)
-        later(pending, node.childNodes)
+        later(pending, childrenOf(node))
     }
     return ''
 }
 
+const words = (text: string) => text.replace(/\s+/g, ' ').trim()
+
 type Visit = {
-    node: PageNode
+    node: Dom.Node
     /** Its parent is SVG or MathML. */
     foreign: boolean
     /** A foreign parent that draws its text. */
@@ -241,12 +241,12 @@ type Visit = {
     end: boolean
 }
 
-function read(root: PageNode, shadows: boolean): Page {
+function read(root: Dom.Node, shadows: boolean): Page {
     let shown = ''
     const tags = new Set<string>()
     const visits: Visit[] = []
     const visit = (
-        nodes: PageNode[],
+        nodes: Dom.Node[],
         foreign: boolean,
         draws: boolean,
         svgText: boolean,
@@ -259,15 +259,16 @@ function read(root: PageNode, shadows: boolean): Page {
     for (let next = visits.pop(); next; next = visits.pop()) {
         const {node, scope} = next
         if (next.end) shown += ' '
-        else if (node.nodeName === '#text') {
+        else if (tree.isTextNode(node)) {
             if (!next.foreign || next.draws) shown += node.value
-        } else if (node.tagName === undefined)
-            visit(node.childNodes ?? [], false, true, false, scope)
+        } else if (!tree.isElementNode(node)) visit(childrenOf(node), false, true, false, scope)
         else if (node.namespaceURI === HTML) {
             const name = node.tagName
             const hidden =
                 unseen.has(name)
                 || attribute(node, 'hidden') !== undefined
+                // A popover shows only once a script opens it, and the open state is never written.
+                || attribute(node, 'popover') !== undefined
                 || (name === 'dialog' && attribute(node, 'open') === undefined)
                 || (name === 'input' && attribute(node, 'type')?.toLowerCase() === 'hidden')
             if (hidden) continue
@@ -278,12 +279,12 @@ function read(root: PageNode, shadows: boolean): Page {
                     shown += ` ${textUnder(option)} `
                 continue
             }
-            let children = node.childNodes!
+            let children: Dom.Node[] = node.childNodes
             let inner = scope
             const shadow = shadows ? shadowRootOf(node) : undefined
             if (shadow !== undefined) {
                 inner = assignSlots(node, shadow, scope)
-                children = shadow.content!.childNodes
+                children = shadow.content.childNodes
             } else if (name === 'slot' && scope?.assigned.has(node)) {
                 children = scope.assigned.get(node)!
                 inner = scope.outer
@@ -309,7 +310,7 @@ function read(root: PageNode, shadows: boolean): Page {
                 visits.push({...next, end: true})
             }
             visit(
-                node.childNodes!,
+                node.childNodes,
                 true,
                 draws,
                 svg && (name === 'text' || (next.svgText && inSvgText.has(name))),
@@ -317,8 +318,7 @@ function read(root: PageNode, shadows: boolean): Page {
             )
         }
     }
-    const words = (text: string) => text.replace(/\s+/g, ' ').trim()
-    return {shown: words(shown), title: words(titleOf(root)), tags}
+    return {shown: words(shown), tags}
 }
 
 const voids = new Set([
@@ -341,7 +341,7 @@ const voids = new Set([
     'track',
     'wbr'
 ])
-// Their content runs to their own end tag. Only a title's and a textarea's is escaped.
+// Their content runs to their own end tag.
 const rawText = new Set([
     'iframe',
     'noembed',
@@ -385,9 +385,9 @@ const decode = (text: string) =>
     :   text
 
 /** A dump as Chrome wrote it: every element is closed where the serializer closed it. */
-function buildDump(html: string): PageNode {
-    const root: PageNode = {nodeName: '#document', childNodes: []}
-    const open = [root]
+function buildDump(html: string): Dom.Document {
+    const root = tree.createDocument()
+    const open: Dom.Element[] = []
     /** Where each open name sits in `open`, innermost last. */
     const positions = new Map<string, number[]>()
     let selfClosing = false
@@ -396,12 +396,16 @@ function buildDump(html: string): PageNode {
         re.exec(html)
         return re.lastIndex
     }
-    const append = (node: PageNode) => {
-        const parent = open.at(-1)!
-        ;(parent.content ?? parent).childNodes!.push(node)
+    const into = (): Dom.ParentNode => {
+        const element = open.at(-1)
+        return (
+            element === undefined ? root
+            : isTemplate(element) ? tree.getTemplateContent(element)
+            : element
+        )
     }
     const text = (value: string) => {
-        if (value.length > 0) append({nodeName: '#text', value})
+        if (value.length > 0) tree.insertText(into(), value)
     }
 
     /** Where the tag whose attributes start at `from` ends, or -1 when it never does. */
@@ -478,15 +482,15 @@ function buildDump(html: string): PageNode {
     function close(name: string) {
         const position = positions.get(name)?.at(-1)
         if (position === undefined) return
-        while (open.length > position) positions.get(open.pop()!.tagName!)!.pop()
+        while (open.length > position) positions.get(open.pop()!.tagName)!.pop()
     }
 
     /** An element's namespace, which the serializer does not write: a child takes its parent's. */
-    function namespaceOf(name: string, parent: PageNode): string {
+    function namespaceOf(name: string, parent: Dom.Element | undefined): spec.NS {
         if (name === 'svg') return SVG
-        if (name === 'math') return MATH
-        if (parent.namespaceURI === SVG) return parent.tagName === 'foreignobject' ? HTML : SVG
-        if (parent.namespaceURI === MATH) return mathTokens.has(parent.tagName!) ? HTML : MATH
+        if (name === 'math') return MATHML
+        if (parent?.namespaceURI === SVG) return parent.tagName === 'foreignobject' ? HTML : SVG
+        if (parent?.namespaceURI === MATHML) return mathTokens.has(parent.tagName) ? HTML : MATHML
         return HTML
     }
 
@@ -517,19 +521,16 @@ function buildDump(html: string): PageNode {
             close(name)
             continue
         }
-        const namespaceURI = namespaceOf(name, open.at(-1)!)
-        const node: PageNode = {nodeName: name, tagName: name, namespaceURI, attrs, childNodes: []}
-        if (name === 'template' && namespaceURI === HTML) node.content = {childNodes: []}
-        append(node)
+        const namespaceURI = namespaceOf(name, open.at(-1))
+        const node = tree.createElement(name, namespaceURI, attrs)
+        if (isTemplate(node)) tree.setTemplateContent(node, tree.createDocumentFragment())
+        tree.appendChild(into(), node)
         if (namespaceURI !== HTML ? selfClosing : voids.has(name)) continue
         if (namespaceURI === HTML && rawText.has(name)) {
             const contentEnd = rawTextEnd(name, at)
             const content = html.slice(at, contentEnd === -1 ? html.length : contentEnd)
             if (content.length > 0)
-                node.childNodes!.push({
-                    nodeName: '#text',
-                    value: escapedText.has(name) ? decode(content) : content
-                })
+                tree.insertText(node, escapedText.has(name) ? decode(content) : content)
             const closerEnd = contentEnd === -1 ? -1 : tagEnd(contentEnd + name.length + 2, [])
             at = closerEnd === -1 ? html.length : closerEnd + 1
             continue

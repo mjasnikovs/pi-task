@@ -233,11 +233,10 @@ export function httpAnswer(
     // The reader is imported, not inlined: its source overran Windows' command line.
     const reader = excerpt ? JSON.stringify(import.meta.resolve('./page-read.js')) : ''
     const script =
-        (excerpt ? `const reader = import(${reader}); reader.catch(() => {});` : '')
-        + `fetch(${JSON.stringify(url)}).then(async r => {`
+        `fetch(${JSON.stringify(url)}).then(async r => {`
         + `process.stdout.write(r.status + '\\n');`
         + (excerpt ?
-            `if (r.status >= 500) process.stdout.write((await reader).pageText(await r.text()).slice(0, ${EXCERPT_LENGTH}));`
+            `if (r.status >= 500) process.stdout.write((await import(${reader})).pageText(await r.text()).slice(0, ${EXCERPT_LENGTH}));`
         :   '')
         + `}).catch(() => {}).then(() => process.exit(0))`
     const r = spawnSync(process.execPath, ['-e', script], {encoding: 'utf8', timeout: budgetMs})
