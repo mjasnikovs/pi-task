@@ -1,0 +1,24 @@
+{"task":"TASK_0002","i":0,"arm":"A","killed":true,"restarts":["loop: grep ×5/20"],"wallMs":316995,"answered":true}
+{"task":"TASK_0002","i":0,"arm":"B","killed":true,"restarts":["loop: grep no-new-ground ×8","loop: read ×5/20"],"wallMs":1412472,"answered":false}
+{"task":"TASK_0019","i":0,"arm":"A","killed":false,"restarts":[],"wallMs":32721,"answered":true}
+{"task":"TASK_0019","i":0,"arm":"B","killed":false,"restarts":[],"wallMs":56289,"answered":true}
+{"task":"TASK_0029","i":0,"arm":"A","killed":true,"restarts":["loop: read no-new-ground ×8"],"wallMs":142852,"answered":true}
+{"task":"TASK_0029","i":0,"arm":"B","killed":false,"restarts":[],"wallMs":47743,"answered":true}
+{"task":"TASK_0050","i":0,"arm":"A","killed":false,"restarts":[],"wallMs":50525,"answered":true}
+{"task":"TASK_0050","i":0,"arm":"B","killed":false,"restarts":[],"wallMs":83963,"answered":true}
+{"task":"TASK_0002","i":1,"arm":"B","killed":false,"restarts":[],"wallMs":137838,"answered":true}
+{"task":"TASK_0002","i":1,"arm":"A","killed":true,"restarts":["loop: grep ×5/20","loop: read ×5/20"],"wallMs":373703,"answered":false}
+{"task":"TASK_0019","i":1,"arm":"B","killed":false,"restarts":[],"wallMs":34609,"answered":true}
+{"task":"TASK_0019","i":1,"arm":"A","killed":false,"restarts":[],"wallMs":31126,"answered":true}
+{"task":"TASK_0029","i":1,"arm":"B","killed":false,"restarts":[],"wallMs":63555,"answered":true}
+{"task":"TASK_0029","i":1,"arm":"A","killed":false,"restarts":[],"wallMs":55409,"answered":true}
+{"task":"TASK_0050","i":1,"arm":"B","killed":false,"restarts":[],"wallMs":84243,"answered":true}
+{"task":"TASK_0050","i":1,"arm":"A","killed":false,"restarts":[],"wallMs":73908,"answered":true}
+{"task":"TASK_0002","i":2,"arm":"A","killed":true,"restarts":["loop: read ×5/20"],"wallMs":244057,"answered":true}
+{"task":"TASK_0002","i":2,"arm":"B","killed":false,"restarts":[],"wallMs":177029,"answered":true}
+{"task":"TASK_0019","i":2,"arm":"A","killed":false,"restarts":[],"wallMs":42308,"answered":true}
+{"task":"TASK_0019","i":2,"arm":"B","killed":false,"restarts":[],"wallMs":44117,"answered":true}
+{"task":"TASK_0029","i":2,"arm":"A","killed":false,"restarts":[],"wallMs":77399,"answered":true}
+{"task":"TASK_0029","i":2,"arm":"B","killed":false,"restarts":[],"wallMs":64562,"answered":true}
+{"task":"TASK_0050","i":2,"arm":"A","killed":false,"restarts":[],"wallMs":49049,"answered":true}
+{"task":"TASK_0050","i":2,"arm":"B","killed":false,"restarts":[],"wallMs":86211,"answered":true}

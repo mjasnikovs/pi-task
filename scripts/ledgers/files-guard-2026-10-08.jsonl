@@ -1,0 +1,8 @@
+{"task":"TASK_0002","i":0,"arm":"A","killed":true,"restarts":["loop: read no-new-ground ×8"],"wallMs":614843,"answered":true}
+{"task":"TASK_0002","i":0,"arm":"B","killed":true,"restarts":["loop: grep ×5/20","loop: grep ×5/20"],"wallMs":496724,"answered":false}
+{"task":"TASK_0019","i":0,"arm":"A","killed":true,"restarts":["loop: read ×5/20","loop: read no-new-ground ×8"],"wallMs":205220,"answered":true}
+{"task":"TASK_0019","i":0,"arm":"B","killed":false,"restarts":[],"wallMs":56927,"answered":true}
+{"task":"TASK_0029","i":0,"arm":"A","killed":true,"restarts":["loop: read no-new-ground ×9"],"wallMs":139307,"answered":true}
+{"task":"TASK_0029","i":0,"arm":"B","killed":false,"restarts":[],"wallMs":224221,"answered":true}
+{"task":"TASK_0050","i":0,"arm":"A","killed":false,"restarts":[],"wallMs":104194,"answered":true}
+{"task":"TASK_0050","i":0,"arm":"B","killed":false,"restarts":[],"wallMs":64954,"answered":true}
