@@ -131,27 +131,23 @@ export async function hasCommittableChanges(
         spawnFn
     )
     if (r.aborted || r.exitCode !== 0) return false
-    // Status names paths from the repo root; the artifact rule reads them from cwd.
-    const prefix = (await git(cwd, ['rev-parse', '--show-prefix'], signal, spawnFn)).stdout.trim()
-    const entries = r.stdout.split('\0')
-    for (let i = 0; i < entries.length; i++) {
-        const entry = entries[i]
+    let prefix: string | undefined
+    for (const entry of r.stdout.split('\0')) {
         if (entry.length < 4) continue
-        const code = entry.slice(0, 2)
-        // A rename or copy carries its source path as the next entry.
-        if (/[RC]/.test(code)) i++
+        if (entry.slice(0, 2) !== '??') return true
+        // Status names paths from the repo root; the artifact rule reads them from cwd.
+        prefix ??= (await git(cwd, ['rev-parse', '--show-prefix'], signal, spawnFn)).stdout.trim()
         const file = entry.slice(3)
-        const local = file.startsWith(prefix) ? file.slice(prefix.length) : file
-        if (code === '??' && isDeletionExemptArtifact(local)) continue
+        if (isDeletionExemptArtifact(file.startsWith(prefix) ? file.slice(prefix.length) : file))
+            continue
         return true
     }
     return false
 }
 
-/** `:(exclude)` pathspecs for `git add -A`; empty when nothing is excluded, so the
- *  common case adds no arguments at all and stays a bare `git add -A`. */
+/** The pathspec for `git add -A`: cwd, never the whole repo, so a task run from a
+ *  package does not commit its siblings' edits. */
 export function stagePathspec(excluded: readonly string[]): string[] {
-    if (excluded.length === 0) return []
     return ['--', '.', ...excluded.map(p => `:(exclude)${p}`)]
 }
 

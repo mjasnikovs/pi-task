@@ -248,7 +248,15 @@ async function restoreWorktree(
         const artifactChanges: string[] = []
         const gradedModified: string[] = []
         const gradedDeleted: string[] = []
-        const status = await git(['diff-tree', '-r', '--name-status', beforeTree, afterTree])
+        // `--relative`: named from cwd, as `ls-tree` names the tracked set.
+        const status = await git([
+            'diff-tree',
+            '-r',
+            '--relative',
+            '--name-status',
+            beforeTree,
+            afterTree
+        ])
         if (status.exitCode === 0) {
             for (const line of status.stdout.split('\n')) {
                 const trimmed = line.trim()

@@ -308,8 +308,8 @@ test('untrackedArtifacts: a git failure yields an empty list (degrades to today 
     expect(await untrackedArtifacts('/repo', undefined, spawn)).toEqual([])
 })
 
-test('stagePathspec: empty stays byte-identical to a bare `git add -A`', () => {
-    expect(stagePathspec([])).toEqual([])
+test('stagePathspec: always cwd, so a package never stages its siblings', () => {
+    expect(stagePathspec([])).toEqual(['--', '.'])
     expect(stagePathspec(['test-results/a.png'])).toEqual([
         '--',
         '.',
@@ -337,7 +337,7 @@ test('gitCommitAll: excludes untracked artifacts from the stage and REPORTS them
     expect(add).toEqual(['add', '-A', '--', '.', ':(exclude)test-results/a-actual.png'])
 })
 
-test('gitCommitAll: nothing to exclude → no `excluded` key and a bare `git add -A`', async () => {
+test('gitCommitAll: nothing to exclude → no `excluded` key, and cwd staged', async () => {
     const seen: string[][] = []
     const spawn = fakeSpawnByPrompt(args => {
         seen.push([...args])
@@ -350,7 +350,7 @@ test('gitCommitAll: nothing to exclude → no `excluded` key and a bare `git add
     })
     const res = await gitCommitAll('/repo', 'task: A (TASK_0006)', undefined, spawn)
     expect(res).toEqual({committed: true})
-    expect(seen.find(a => a[0] === 'add')).toEqual(['add', '-A'])
+    expect(seen.find(a => a[0] === 'add')).toEqual(['add', '-A', '--', '.'])
 })
 
 test('hasCommittableChanges: only what a commit would carry counts (mx5-n 0.42.47: 17 phantom re-verifies)', async () => {

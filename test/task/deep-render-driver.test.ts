@@ -299,6 +299,39 @@ describe('drive: the run-17 class', () => {
         expect((r as {detail: string}).detail).toContain('`/#/` → `/#/login`')
     })
 
+    // The wall check compared pathnames, which a hash router never changes: a
+    // sign-in that landed on a page with a password field read as a bounce.
+    testPosix(
+        'a hash router that left /#/login for a page with a password field left the wall',
+        async () => {
+            const r = await run(
+                fakeBrowser({
+                    navigations: [landing],
+                    onSubmit: [loginPost],
+                    onSubmitFrames: [{url: `${BASE}/#/settings`, within: true}],
+                    inspect: [
+                        {...wall('/'), url: `${BASE}/#/login`},
+                        {...wall('/'), url: `${BASE}/#/settings`}
+                    ]
+                })
+            )
+            expect((r as {detail: string}).detail).not.toContain('NEVER LEFT THE SIGN-IN WALL')
+        }
+    )
+
+    testPosix('an in-page anchor on the sign-in page is still the wall', async () => {
+        const r = await run(
+            fakeBrowser({
+                navigations: [landing],
+                onSubmit: [loginPost],
+                onSubmitFrames: [{url: `${BASE}/login#error`, within: true}],
+                inspect: [wall('/login'), {...wall('/login'), url: `${BASE}/login#error`}]
+            })
+        )
+        expect(r.outcome).toBe('fail')
+        expect((r as {detail: string}).detail).toContain('NEVER LEFT THE SIGN-IN WALL')
+    })
+
     testPosix('an authenticated XHR answered by the SPA catch-all → fail', async () => {
         const r = await run(
             fakeBrowser({

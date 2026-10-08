@@ -25,7 +25,7 @@ import * as path from 'node:path'
 import type {ExtensionCommandContext} from '@earendil-works/pi-coding-agent'
 import type {GateDeps} from './task-gates.js'
 import {readTaskFile, appendGateRecord, readSection, setTaskSection} from './task-io.js'
-import {makeGit} from '../shared/git-runner.js'
+import {makeGit, statusFromCwd} from '../shared/git-runner.js'
 import {keepTail} from '../shared/text-cut.js'
 import {worktreeTreeHash} from './tree-hash.js'
 import {
@@ -211,7 +211,7 @@ export async function collectChangedFiles(
 ): Promise<ChangedFile[]> {
     const tracked = await git(
         cwd,
-        ['diff', '--numstat', 'HEAD', '--', '.', EXCLUDE_TASKS_DIR],
+        ['diff', '--relative', '--numstat', 'HEAD', '--', '.', EXCLUDE_TASKS_DIR],
         signal
     )
     const files = tracked.exitCode === 0 ? parseNumstat(tracked.stdout) : []
@@ -231,7 +231,7 @@ export async function collectChangedFiles(
     if (files.length === 0) {
         const last = await git(
             cwd,
-            ['diff', '--numstat', 'HEAD~1..HEAD', '--', '.', EXCLUDE_TASKS_DIR],
+            ['diff', '--relative', '--numstat', 'HEAD~1..HEAD', '--', '.', EXCLUDE_TASKS_DIR],
             signal
         )
         return last.exitCode === 0 ? parseNumstat(last.stdout) : []
@@ -250,7 +250,7 @@ export async function collectChangedFiles(
 export async function collectAddedLines(cwd: string, signal?: AbortSignal): Promise<AddedLine[]> {
     const tracked = await git(
         cwd,
-        ['diff', ...DIFF_PREFIX_ARGS, 'HEAD', '--', '.', EXCLUDE_TASKS_DIR],
+        ['diff', '--relative', ...DIFF_PREFIX_ARGS, 'HEAD', '--', '.', EXCLUDE_TASKS_DIR],
         signal
     )
     const lines: AddedLine[] = tracked.exitCode === 0 ? parseAddedLines(tracked.stdout) : []
@@ -270,7 +270,15 @@ export async function collectAddedLines(cwd: string, signal?: AbortSignal): Prom
     if (lines.length === 0) {
         const last = await git(
             cwd,
-            ['diff', ...DIFF_PREFIX_ARGS, 'HEAD~1..HEAD', '--', '.', EXCLUDE_TASKS_DIR],
+            [
+                'diff',
+                '--relative',
+                ...DIFF_PREFIX_ARGS,
+                'HEAD~1..HEAD',
+                '--',
+                '.',
+                EXCLUDE_TASKS_DIR
+            ],
             signal
         )
         return last.exitCode === 0 ? parseAddedLines(last.stdout) : []
@@ -412,7 +420,7 @@ export async function collectTreeChanges(
     cwd: string,
     signal?: AbortSignal
 ): Promise<TreeChangeSummary> {
-    const r = await git(cwd, ['status', '--porcelain', '--', '.', EXCLUDE_TASKS_DIR], signal)
+    const r = await statusFromCwd(makeGit(cwd, signal), ['--', '.', EXCLUDE_TASKS_DIR])
     return r.exitCode === 0 ? parseTreeChanges(r.stdout) : {modified: [], deleted: [], added: []}
 }
 
@@ -469,11 +477,12 @@ export async function collectIgnoredSnapshot(
     cwd: string,
     signal?: AbortSignal
 ): Promise<IgnoredSnapshot> {
-    const r = await git(
-        cwd,
-        ['status', '--porcelain', '--ignored=matching', '--', '.', EXCLUDE_TASKS_DIR],
-        signal
-    )
+    const r = await statusFromCwd(makeGit(cwd, signal), [
+        '--ignored=matching',
+        '--',
+        '.',
+        EXCLUDE_TASKS_DIR
+    ])
     if (r.exitCode !== 0) return {}
     const outdirs = parseBuildOutdirs(cwd)
     const paths = r.stdout
@@ -572,7 +581,7 @@ export async function collectTaskTreeChanges(
     if (now.modified.length + now.deleted.length + now.added.length > 0) return now
     const last = await git(
         cwd,
-        ['diff', '--name-status', 'HEAD~1..HEAD', '--', '.', EXCLUDE_TASKS_DIR],
+        ['diff', '--relative', '--name-status', 'HEAD~1..HEAD', '--', '.', EXCLUDE_TASKS_DIR],
         signal
     )
     return last.exitCode === 0 ? parseNameStatusChanges(last.stdout) : now
@@ -898,7 +907,11 @@ export async function collectSuppressionHits(
         detectEcosystems(cwd),
         compileSuppressionPatterns(getConfig().suppressionPatterns)
     )
-    const diff = await git(cwd, ['diff', ...DIFF_PREFIX_ARGS, 'HEAD', '--', ...files], signal)
+    const diff = await git(
+        cwd,
+        ['diff', '--relative', ...DIFF_PREFIX_ARGS, 'HEAD', '--', ...files],
+        signal
+    )
     const lines = diff.exitCode === 0 ? parseDiffLines(diff.stdout) : []
     const untracked = await Promise.all(
         changes.added.map(async rel => {

@@ -405,6 +405,7 @@ describe('lazyHealthBaseline', () => {
         expect(seen).toBe('export const a = 1\n') // HEAD, not the dirty tree
         expect(b?.outcome.ok).toBe(false)
         expect(b?.treeHash).toMatch(/^[0-9a-f]{40}$/)
+        expect(b?.lazy).toBe(true)
         // The worktree is gone from git's admin records AND from disk.
         const list = await runner(['worktree', 'list', '--porcelain'])
         expect(list.stdout).not.toContain('pi-task-health-')

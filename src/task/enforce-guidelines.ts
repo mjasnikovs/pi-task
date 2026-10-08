@@ -379,8 +379,17 @@ export async function captureCommitDiff(
     const parent = await run(['rev-parse', '--verify', '--quiet', 'HEAD~1'])
     const base = parent.exitCode === 0 ? 'HEAD~1' : EMPTY_TREE
 
-    const diff = await run(['diff', base, 'HEAD', '--', '.', excludeTasks])
-    const names = await run(['diff', base, 'HEAD', '--name-only', '--', '.', excludeTasks])
+    const diff = await run(['diff', '--relative', base, 'HEAD', '--', '.', excludeTasks])
+    const names = await run([
+        'diff',
+        '--relative',
+        base,
+        'HEAD',
+        '--name-only',
+        '--',
+        '.',
+        excludeTasks
+    ])
 
     const parts: string[] = []
     if (diff.exitCode === 0 && diff.stdout.trim().length > 0)

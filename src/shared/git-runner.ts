@@ -53,3 +53,29 @@ export function makeGit(cwd: string, signal?: AbortSignal, spawnFn?: SpawnFn): G
         return {stdout: r.stdout, exitCode: r.exitCode}
     }
 }
+
+/**
+ * `git status --porcelain` with every path named from the cwd, as `ls-files`,
+ * pathspecs and the diff family's `--relative` name them. Porcelain names them
+ * from the repo root, whatever the cwd, and has no flag to change that.
+ */
+export async function statusFromCwd(
+    git: GitRunner,
+    args: string[]
+): Promise<{stdout: string; exitCode: number}> {
+    const r = await git(['status', '--porcelain', ...args])
+    if (r.exitCode !== 0 || r.stdout.length === 0) return r
+    const prefix = (await git(['rev-parse', '--show-prefix'])).stdout.trim()
+    if (prefix.length === 0) return r
+    const local = (p: string): string => {
+        const quote = p.startsWith('"') ? '"' : ''
+        const bare = p.slice(quote.length)
+        return bare.startsWith(prefix) ? quote + bare.slice(prefix.length) : p
+    }
+    const lines = r.stdout
+        .split('\n')
+        .map(l =>
+            l.length < 4 ? l : l.slice(0, 3) + l.slice(3).split(' -> ').map(local).join(' -> ')
+        )
+    return {...r, stdout: lines.join('\n')}
+}

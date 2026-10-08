@@ -40,8 +40,13 @@ import {
     spawnCommand,
     type CommandRunner
 } from './command-run.js'
-import {failClassOfReason, isHealthClass, isStaticClass} from './verify-work.js'
-import {declaredTestPresent, declaredTestsOfReason} from './criterion-binding.js'
+import {
+    extractSpecForVerification,
+    failClassOfReason,
+    isHealthClass,
+    isStaticClass
+} from './verify-work.js'
+import {declaredTestsWritten} from './criterion-binding.js'
 import {discoverTestCommands} from './repo-health-check.js'
 import {taskThatIntroduced} from './task-provenance.js'
 import {makeLedger} from './ledger.js'
@@ -637,8 +642,9 @@ export async function recheckAcceptDebts(
         /** The repo's test commands. A suite debt stores those it names joined, and
          *  each part is run alone so debts naming the same part share its run. */
         suiteCommands?: readonly string[]
-        /** Does the tree hold this declared test now? Settles an untested-acceptance debt. */
-        declaredTestPresent?: (testPath: string, title: string) => boolean
+        /** Does the tree now hold every test this task's spec declares? Settles an
+         *  untested-acceptance debt. */
+        declaredTestsWritten?: (taskId: string) => Promise<boolean>
     }
 ): Promise<{open: AcceptDebt[]; resolved: AcceptDebt[]; trail: string[]}> {
     const open: AcceptDebt[] = []
@@ -697,12 +703,10 @@ export async function recheckAcceptDebts(
             resolved.push(d)
             continue
         }
-        if (opts.declaredTestPresent && failClassOfReason(d.reason) === 'unbound-criterion') {
-            const named = declaredTestsOfReason(d.reason)
-            const present = opts.declaredTestPresent
-            if (named.length > 0 && named.every(t => present(t.path, t.title))) {
+        if (opts.declaredTestsWritten && failClassOfReason(d.reason) === 'unbound-criterion') {
+            if (await opts.declaredTestsWritten(d.taskId)) {
                 resolved.push(d)
-                trail.push(`${d.taskId}: RESOLVED — every declared test it named now exists`)
+                trail.push(`${d.taskId}: RESOLVED — every test its spec declares now exists`)
             } else {
                 open.push(d)
             }
@@ -921,7 +925,14 @@ export async function deriveOpenDebts(
             // the no-write guard below.
             rerunVerify: cmd => rerunDebtVerifyCommand(cwd, cmd, run, signal),
             suiteCommands: suiteManifest(cwd),
-            declaredTestPresent: (testPath, title) => declaredTestPresent(cwd, testPath, title)
+            // The spec, not the reason: the ledger clamps and folds the titles it names.
+            declaredTestsWritten: async taskId => {
+                const raw = await fsp
+                    .readFile(taskFilePath(cwd, taskId.trim()), 'utf8')
+                    .catch(() => '')
+                const spec = extractSpecForVerification(raw)
+                return spec !== null && declaredTestsWritten(spec, cwd)
+            }
         }
     )
     if (resolved.length > 0 || rejudged) await writeAcceptDebts(cwd, [...closed, ...openRaw])

@@ -363,6 +363,38 @@ describe('verdict-taint classification', () => {
     })
 })
 
+// git names paths from the repo root. From a subdirectory cwd the artifact rule
+// missed `app/test-results/…`, and a created file was removed at `app/app/…`.
+describe('a guard run from a subdirectory', () => {
+    function subRepo(): {dir: string; app: string} {
+        const dir = makeRepo()
+        const app = path.join(dir, 'app')
+        fs.mkdirSync(app)
+        fs.writeFileSync(path.join(app, 'a.ts'), 'export const a = 1\n')
+        git(dir, 'add', '-A')
+        git(dir, 'commit', '-q', '-m', 'app')
+        return {dir, app}
+    }
+
+    test('runner output under it does not taint', async () => {
+        const {app} = subRepo()
+        const snap = await captureGitState(app)
+        fs.mkdirSync(path.join(app, 'test-results'))
+        fs.writeFileSync(path.join(app, 'test-results', 'shot.png'), 'png\n')
+        const rec = await reconcileGitState(app, snap)
+        expect(rec.verdictTainted).toBe(false)
+        expect(fs.existsSync(path.join(app, 'test-results', 'shot.png'))).toBe(false)
+    })
+
+    test('a file the child created is removed', async () => {
+        const {app} = subRepo()
+        const snap = await captureGitState(app)
+        fs.writeFileSync(path.join(app, 'junk.ts'), 'x\n')
+        await reconcileGitState(app, snap)
+        expect(fs.existsSync(path.join(app, 'junk.ts'))).toBe(false)
+    })
+})
+
 describe('withGitStateGuard', () => {
     test('returns the child result and the reconcile outcome', async () => {
         const dir = makeRepo()

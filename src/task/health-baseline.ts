@@ -276,7 +276,9 @@ export async function lazyHealthBaseline(deps: LazyCaptureDeps): Promise<HealthB
     const added = await deps.git(['worktree', 'add', '--detach', dir, 'HEAD'])
     if (added.exitCode !== 0) return null
     try {
-        const outcome = await deps.runHealthIn(dir)
+        // The worktree checks out the whole repo; the task's project is cwd's part of it.
+        const prefix = (await deps.git(['rev-parse', '--show-prefix'])).stdout.trim()
+        const outcome = await deps.runHealthIn(path.join(dir, prefix))
         return {
             at: (deps.now?.() ?? new Date()).toISOString(),
             treeHash: await commitTreeHash(deps.git, 'HEAD'),

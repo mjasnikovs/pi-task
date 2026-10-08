@@ -60,6 +60,7 @@
  * only cost time, never work. Armed only when both `currentTaskId` and
  * `introducedBy` are wired.
  */
+import {statusFromCwd} from '../shared/git-runner.js'
 import {parseChangedFrozenFiles, pathNamedIn, revertFrozenPaths} from './frozen-path-guard.js'
 import {runFixChild} from './fix-child.js'
 import {parseTreeChanges, type TreeChangeSummary} from './write-guard.js'
@@ -194,7 +195,15 @@ const EXCLUDE_TASKS_DIR = ':(exclude).pi-tasks'
  * evidence of destruction.
  */
 async function dirtyFiles(deps: LintFixDeps): Promise<string[] | null> {
-    const r = await deps.git(['diff', '--name-only', 'HEAD', '--', '.', EXCLUDE_TASKS_DIR])
+    const r = await deps.git([
+        'diff',
+        '--relative',
+        '--name-only',
+        'HEAD',
+        '--',
+        '.',
+        EXCLUDE_TASKS_DIR
+    ])
     if (r.exitCode !== 0) return null
     return r.stdout
         .split('\n')
@@ -208,7 +217,7 @@ async function dirtyFiles(deps: LintFixDeps): Promise<string[] | null> {
  * Feeds the cross-task deletion guard's pre/post comparison.
  */
 async function treeChanges(deps: LintFixDeps): Promise<TreeChangeSummary | null> {
-    const r = await deps.git(['status', '--porcelain', '--', '.', EXCLUDE_TASKS_DIR])
+    const r = await statusFromCwd(deps.git, ['--', '.', EXCLUDE_TASKS_DIR])
     if (r.exitCode !== 0) return null
     return parseTreeChanges(r.stdout)
 }
@@ -219,7 +228,7 @@ async function treeChanges(deps: LintFixDeps): Promise<TreeChangeSummary | null>
  */
 async function frozenDirtySet(deps: LintFixDeps, frozen: string[]): Promise<Set<string> | null> {
     if (frozen.length === 0) return new Set()
-    const r = await deps.git(['status', '--porcelain', '--', ...frozen])
+    const r = await statusFromCwd(deps.git, ['--', ...frozen])
     if (r.exitCode !== 0) return null
     return new Set(parseChangedFrozenFiles(r.stdout))
 }

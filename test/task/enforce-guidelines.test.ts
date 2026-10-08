@@ -501,9 +501,18 @@ test('captureCommitDiff: diffs HEAD~1..HEAD and excludes .pi-tasks from every gi
 
     expect(calls).toHaveLength(3)
     expect(calls[0]).toEqual(['rev-parse', '--verify', '--quiet', 'HEAD~1'])
-    expect(calls[1]).toEqual(['diff', 'HEAD~1', 'HEAD', '--', '.', ':(exclude).pi-tasks'])
+    expect(calls[1]).toEqual([
+        'diff',
+        '--relative',
+        'HEAD~1',
+        'HEAD',
+        '--',
+        '.',
+        ':(exclude).pi-tasks'
+    ])
     expect(calls[2]).toEqual([
         'diff',
+        '--relative',
         'HEAD~1',
         'HEAD',
         '--name-only',
@@ -519,9 +528,18 @@ test('captureCommitDiff: a root commit (no HEAD~1) diffs against the empty tree'
     const EMPTY_TREE = '4b825dc642cb6eb9a060e54bf8d69288fbee4904'
     const {spawn, calls} = recordingSpawn(['', 'diff body', 'src/a.ts'], [1, 0, 0])
     await captureCommitDiff('/repo', undefined, spawn)
-    expect(calls[1]).toEqual(['diff', EMPTY_TREE, 'HEAD', '--', '.', ':(exclude).pi-tasks'])
+    expect(calls[1]).toEqual([
+        'diff',
+        '--relative',
+        EMPTY_TREE,
+        'HEAD',
+        '--',
+        '.',
+        ':(exclude).pi-tasks'
+    ])
     expect(calls[2]).toEqual([
         'diff',
+        '--relative',
         EMPTY_TREE,
         'HEAD',
         '--name-only',

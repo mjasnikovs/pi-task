@@ -33,6 +33,8 @@ import {
     deriveOpenDebts,
     type AcceptDebt
 } from '../../src/task/accept-debt.js'
+import {missingTestsReason} from '../../src/task/criterion-binding.js'
+import {VERIFY_FAIL_PREFIX} from '../../src/task/verify-work.js'
 
 function makeCwd(): string {
     return tmpDir('pi-accept-debt-')
@@ -1262,21 +1264,69 @@ describe('closed debts (resolvedBy) — a repair closes what its check opened', 
 })
 
 // A test written after its task was accepted closes the debt: the check that
-// opened it is deterministic and cheap to run again.
-test('an untested-acceptance debt closes once its declared test exists', async () => {
-    const debt = {
-        taskId: 'TASK_0039',
-        reason: 'acceptance untested: `ct/main.spec.tsx` has no test "waits for the session" (no file) — write it',
-        origin: 'yolo-accepted' as const
+// opened it is deterministic and cheap to run again. It reads the task's spec, not
+// the stored reason, which the ledger clamps and whitespace-folds.
+describe('an untested-acceptance debt', () => {
+    const titles = [
+        'waits for the session before it decides where a guarded route goes',
+        'keeps the member on the page they asked for after a cold reload',
+        'sends a signed-out visitor to the sign-in page exactly once and stops'
+    ]
+    const bullet = (title: string): string => `- guarded [test: ct/guard.spec.tsx "${title}"]`
+    function taskWith(titlesDeclared: readonly string[]): string {
+        const cwd = makeCwd()
+        fs.mkdirSync(path.join(cwd, '.pi-tasks'), {recursive: true})
+        const spec = ['GOAL', 'x', '', 'ACCEPTANCE', ...titlesDeclared.map(bullet), ''].join('\n')
+        fs.writeFileSync(
+            path.join(cwd, '.pi-tasks', 'TASK_0039.md'),
+            `---\nid: TASK_0039\n---\n## spec\n${spec}\n## gate trail\n- verify: FAIL\n`,
+            'utf8'
+        )
+        return cwd
     }
-    const shut = await recheckAcceptDebts([debt], {
-        staticOk: false,
-        declaredTestPresent: (p, t) => p === 'ct/main.spec.tsx' && t === 'waits for the session'
+    const reasonFor = (missing: readonly string[]): string =>
+        `${VERIFY_FAIL_PREFIX['unbound-criterion']} ${missingTestsReason(
+            missing.map(title => ({
+                bullet: '',
+                path: 'ct/guard.spec.tsx',
+                title,
+                why: 'no file' as const
+            }))
+        )} — write each so it fails when that behaviour breaks`
+    const writeTests = (cwd: string, written: readonly string[]): void => {
+        fs.mkdirSync(path.join(cwd, 'ct'), {recursive: true})
+        fs.writeFileSync(
+            path.join(cwd, 'ct', 'guard.spec.tsx'),
+            written.map(t => `test(${JSON.stringify(t)}, () => {})`).join('\n'),
+            'utf8'
+        )
+    }
+
+    // The clamp cut the third title, so the reason named two. Writing those two
+    // closed the debt with the third still missing.
+    test('stays open while a test the clamp cut from its reason is missing', async () => {
+        const cwd = taskWith(titles)
+        await recordDebt(cwd, 'TASK_0039', reasonFor(titles), 'yolo-accepted')
+        writeTests(cwd, titles.slice(0, 2))
+        expect((await deriveOpenDebts(cwd, false)).openDebts).toHaveLength(1)
+        writeTests(cwd, titles)
+        expect((await deriveOpenDebts(cwd, false)).openDebts).toEqual([])
     })
-    expect(shut.resolved).toHaveLength(1)
-    const still = await recheckAcceptDebts([debt], {
-        staticOk: false,
-        declaredTestPresent: () => false
+
+    // The ledger folds runs of whitespace, so a title read back from it no longer
+    // matched the source.
+    test('closes on a title with doubled spaces', async () => {
+        const title = 'shows  the error'
+        const cwd = taskWith([title])
+        await recordDebt(cwd, 'TASK_0039', reasonFor([title]), 'yolo-accepted')
+        writeTests(cwd, [title])
+        expect((await deriveOpenDebts(cwd, false)).openDebts).toEqual([])
     })
-    expect(still.open).toHaveLength(1)
+
+    test('stays open when its spec cannot be read', async () => {
+        const cwd = makeCwd()
+        await recordDebt(cwd, 'TASK_0039', reasonFor(titles), 'yolo-accepted')
+        writeTests(cwd, titles)
+        expect((await deriveOpenDebts(cwd, false)).openDebts).toHaveLength(1)
+    })
 })

@@ -10,9 +10,7 @@ import * as path from 'node:path'
 import {tmpDir} from '../test-utils/tmp-dir.js'
 import {
     bindingOf,
-    declaredTestsOfReason,
     missingDeclaredTests,
-    missingTestsReason,
     unboundAcceptance
 } from '../../src/task/criterion-binding.js'
 
@@ -141,16 +139,4 @@ describe('declared tests as written in real specs', () => {
         const s = spec('hidden [test: test/b.test.ts "a banned seller\'s listings are hidden"]')
         expect(missingDeclaredTests(s, dir)).toEqual([])
     })
-})
-
-// The reason a missing test mints is the one the debt re-check reads back.
-test('a missing-test reason names every test, and reads back', () => {
-    const reason = missingTestsReason([
-        {bullet: 'b', path: 'ct/a.spec.tsx', title: 'waits', why: 'no file'},
-        {bullet: 'c', path: 'test/b.test.ts', title: 'redirects', why: 'no title'}
-    ])
-    expect(declaredTestsOfReason(`acceptance untested: ${reason}`)).toEqual([
-        {path: 'ct/a.spec.tsx', title: 'waits'},
-        {path: 'test/b.test.ts', title: 'redirects'}
-    ])
 })

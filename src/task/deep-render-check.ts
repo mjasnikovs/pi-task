@@ -633,7 +633,6 @@ const INSPECT_EXPR = `(() => {
     return {
         hasPassword: pw.length > 0,
         url: location.href,
-        pathname: location.pathname,
         html: document.documentElement.outerHTML.slice(0, 400000)
     }
 })()`
@@ -1019,7 +1018,6 @@ export async function driveSession(
     const before = await evaluate<{
         hasPassword: boolean
         url: string
-        pathname: string
         html: string
     }>(INSPECT_EXPR)
     if (!before) throw new Error('the page could not be inspected')
@@ -1141,15 +1139,14 @@ export async function driveSession(
             )
         )
     const authReq = authId === null ? null : requests.get(authId)!
-    const now = await evaluate<{hasPassword: boolean; url: string; pathname: string; html: string}>(
-        INSPECT_EXPR
-    )
+    const now = await evaluate<{hasPassword: boolean; url: string; html: string}>(INSPECT_EXPR)
     const domJudgment = judgeRenderedDom(now?.html ?? '')
     const postAuthTrail = mainFrameNavs
         .filter(n => n.seq >= submitSeq)
         .map(n => routeOf(n.url))
         .filter((p, i, all) => i === 0 || p !== all[i - 1])
-    const leftAuthWall = !(now?.hasPassword ?? false) || (now?.pathname ?? '') !== before.pathname
+    const leftAuthWall =
+        !(now?.hasPassword ?? false) || routeOf(now?.url ?? '') !== routeOf(before.url)
 
     // Exercise the authenticated app once. A sign-in page that ends on a success
     // card can issue NOTHING after the login POST, so the authenticated
@@ -1182,11 +1179,12 @@ export async function driveSession(
     )
 }
 
-/** The path a router acts on: a hash router keeps its route after the `#`. */
+/** The path a router acts on: a hash router keeps its route after the `#`, where
+ *  a plain anchor (`/login#error`) is not a route. */
 function routeOf(url: string): string {
     try {
         const u = new URL(url)
-        return u.pathname + u.hash
+        return u.pathname + (/^#!?\//.test(u.hash) ? u.hash : '')
     } catch {
         return url
     }

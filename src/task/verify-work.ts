@@ -1342,9 +1342,17 @@ export async function runWorkVerification(deps: VerificationDeps): Promise<Verif
     // knows which dep it reads, what it degrades to, and which notice block its
     // findings become. Each is an optional SHARPENER — an absent dep is skipped and
     // a throwing probe degrades to its empty value, so no probe can block the gate.
+    // Before any model is asked: a test the spec bound an ACCEPTANCE line to and
+    // nobody wrote leaves that line unobserved, whatever a verifier would say. That
+    // FAIL needs only the probe an ACCEPT records, not the build the evidence runs.
+    const missing = missingDeclaredTests(deps.spec, deps.cwd)
+    const adapters =
+        missing.length > 0 ?
+            PROBE_ADAPTERS.filter(a => a.key === 'crossTaskDeletion')
+        :   PROBE_ADAPTERS
     const findings: ProbeFindings = {}
     const rawResults = new Map<ProbeKey, unknown>()
-    for (const adapter of PROBE_ADAPTERS) {
+    for (const adapter of adapters) {
         const result = await adapter.run(deps, stage, pre)
         findings[adapter.key] = result.findings
         rawResults.set(adapter.key, result.raw)
@@ -1362,9 +1370,6 @@ export async function runWorkVerification(deps: VerificationDeps): Promise<Verif
     // findings ride on a FAIL outcome (structured) so an ACCEPT can record them as
     // durable debts. The row's `empty` is `[]`, so this is always an array.
     const crossDeletions = (rawResults.get('crossTaskDeletion') ?? []) as CrossTaskDeletion[]
-    // Before any model is asked: a test the spec bound an ACCEPTANCE line to and
-    // nobody wrote leaves that line unobserved, whatever a verifier would say.
-    const missing = missingDeclaredTests(deps.spec, deps.cwd)
     if (missing.length > 0) {
         return {
             ok: false,

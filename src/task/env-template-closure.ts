@@ -142,7 +142,7 @@ function git(cwd: string, args: string[]): string | null {
     return r.stdout
 }
 
-/** Tracked files, repo-root-relative. null when `cwd` is not a git work tree. */
+/** Tracked files under `cwd`, named from it. null when `cwd` is not a git work tree. */
 export function trackedFiles(cwd: string): string[] | null {
     const out = git(cwd, ['ls-files', '-z'])
     if (out === null) return null

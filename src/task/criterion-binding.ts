@@ -49,7 +49,7 @@ export function unboundAcceptanceDefectText(bullets: readonly string[]): string 
  * title may be backslash-escaped there.
  */
 function titleIn(source: string, title: string): boolean {
-    return [title, ...["'", '"', '`'].map(q => title.split(q).join(`\\${q}`))].some(t =>
+    return [title, ...["'", '`'].map(q => title.split(q).join(`\\${q}`))].some(t =>
         source.includes(t)
     )
 }
@@ -61,13 +61,6 @@ export interface MissingTest {
     why: 'no file' | 'no title'
 }
 
-/** Does the tree under `cwd` hold this test? The check a debt's re-check repeats. */
-export function declaredTestPresent(cwd: string, testPath: string, title: string): boolean {
-    const source = readInside(cwd, testPath)
-    return source !== null && titleIn(source, title)
-}
-
-/** A file's text when it lies inside `cwd` and reads; null otherwise. */
 function readInside(cwd: string, rel: string): string | null {
     const root = path.resolve(cwd)
     const file = path.resolve(root, rel)
@@ -99,14 +92,12 @@ export function missingDeclaredTests(spec: string, cwd: string): MissingTest[] {
     return out
 }
 
-/** The FAIL reason for missing tests; `declaredTestsOfReason` reads it back. */
-export function missingTestsReason(missing: readonly MissingTest[]): string {
-    return missing.map(m => `\`${m.path}\` has no test "${m.title}" (${m.why})`).join('; ')
+/** False for a spec that declares none: it promised nothing a tree could hold. */
+export function declaredTestsWritten(spec: string, cwd: string): boolean {
+    const declared = parseSpec(spec).acceptance.some(b => bindingOf(b)?.kind === 'test')
+    return declared && missingDeclaredTests(spec, cwd).length === 0
 }
 
-const MISSING_TEST_RE = /`([^`]+)` has no test "([^"]+)"/g
-
-/** The tests a recorded missing-test reason names. */
-export function declaredTestsOfReason(reason: string): Array<{path: string; title: string}> {
-    return [...reason.matchAll(MISSING_TEST_RE)].map(m => ({path: m[1], title: m[2]}))
+export function missingTestsReason(missing: readonly MissingTest[]): string {
+    return missing.map(m => `\`${m.path}\` has no test "${m.title}" (${m.why})`).join('; ')
 }

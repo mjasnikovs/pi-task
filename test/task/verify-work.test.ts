@@ -1636,6 +1636,53 @@ test('a command added by this task fails as added, never as regressed', async ()
     expect(out.health?.commands?.every(c => c.added === true)).toBe(true)
 })
 
+// A lazy baseline's worktree has no installed tools, so its command-not-found is
+// no evidence the task added the command.
+test('a command a lazy baseline could not find is not marked added', async () => {
+    const out = await runWorkVerification({
+        cwd: '/x',
+        spec: 'GOAL\nx',
+        repoHealth: async () => ({
+            ok: false,
+            reason: 'red',
+            ecosystem: 'package.json',
+            output: '',
+            commands: [
+                {
+                    cmd: 'bun run typecheck',
+                    outcome: 'fail' as const,
+                    exitCode: 2,
+                    kind: 'static' as const
+                }
+            ]
+        }),
+        healthBaseline: async () => ({
+            at: '2026-10-08T10:00:00.000Z',
+            treeHash: 'b933eae',
+            lazy: true as const,
+            outcome: {
+                ok: true,
+                reason: 'passed',
+                ecosystem: 'package.json',
+                output: '',
+                commands: [
+                    {
+                        cmd: 'bun run typecheck',
+                        outcome: 'skip' as const,
+                        exitCode: null,
+                        kind: 'static' as const,
+                        gap: 'command-not-found' as const
+                    }
+                ]
+            }
+        }),
+        runChild: async () => 'WORK-VERIFIED: PASS'
+    })
+    expect(out.ok).toBe(false)
+    if (out.ok) return
+    expect(out.reason).not.toContain(ADDED_MARK)
+})
+
 // mx5-n 0.42.47 TASK_0039: the spec promised a behaviour no test observed and the
 // verifier passed it. A declared test that was never written fails before any
 // model is asked, and names the test to write.
@@ -1703,4 +1750,22 @@ test('a missing declared test still carries the cross-task deletion findings', a
     if (out.ok) return
     expect(out.failClass).toBe('unbound-criterion')
     expect(out.crossTaskDeletions).toEqual([{path: 'playwright/index.ts', owner: 'TASK_0020'}])
+})
+
+// The evidence probe runs the project's build, which the FAIL a file read already
+// decided cannot use. Each autofix round on a missing test paid for it.
+test('a missing declared test runs no probe but the cross-task deletion one', async () => {
+    const ran: string[] = []
+    const out = await runWorkVerification({
+        cwd: tmpDir('verify-binding-'),
+        spec: 'GOAL\nx\n\nACCEPTANCE\n- waits [test: ct/a.spec.tsx "waits"]\n',
+        probes: {
+            evidence: async () => (ran.push('evidence'), ['`bun run build` exited 0']),
+            substitution: async () => (ran.push('substitution'), []),
+            crossTaskDeletion: async () => (ran.push('crossTaskDeletion'), [])
+        },
+        runChild: async () => 'WORK-VERIFIED: PASS'
+    })
+    expect(out.ok).toBe(false)
+    expect(ran).toEqual(['crossTaskDeletion'])
 })
