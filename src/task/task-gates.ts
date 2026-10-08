@@ -203,9 +203,12 @@ export interface GateDeps {
         cwd: string,
         label: string
     ) => Promise<HealthBaseline | null>
-    /** Does the working tree hold changes (excluding .pi-tasks)? Lets the pre-commit
+    /** Does the working tree hold changes a commit would carry? Lets the pre-commit
      *  health check run only when the enforce pass actually edited something. */
     dirty?: (cwd: string) => Promise<boolean>
+    /** Why the enforce pass would do nothing here ('disabled', 'no guideline
+     *  files'), or null when it can act. Asked before the pass's health baseline. */
+    enforceNoop?: (cwd: string) => Promise<string | null>
     /** Restore the working tree to HEAD (excluding .pi-tasks) — discards enforce
      *  edits that failed the pre-commit health check, before they are committed. */
     discardEdits?: (cwd: string) => Promise<void>
@@ -803,6 +806,11 @@ export async function runEnforcePass(
     // Skipped when nothing was committed this round, when enforce is off, or in tests
     // with no enforce dep.
     if (deps.enforce && commit.committed) {
+        const noop = (await deps.enforceNoop?.(p.cwd)) ?? null
+        if (noop !== null) {
+            await rec(`enforce: skipped (${noop})`)
+            return
+        }
         const mode: 'edit' | 'flag' = verifyCleanPass ? 'edit' : 'flag'
         // BASELINE repo health, captured BEFORE the edit pass touches the tree, so the
         // pre-commit gate below is DIFFERENTIAL: it can tell an enforce-CAUSED

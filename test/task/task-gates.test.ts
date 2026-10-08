@@ -1388,6 +1388,51 @@ test('enforce with no code edits skips the enforce commit AND the differential r
     })
 })
 
+test('enforce that can do nothing runs no health check, commit or re-verify (mx5-n 0.42.47)', async () => {
+    // Enforce was switched off, yet the untracked test-results/ the commit leaves
+    // out made the tree look edited: 17 tasks paid a bookkeeping commit and a full
+    // model re-verify. A pass that cannot edit must cost nothing past this check.
+    await withTmpTaskDir(async dir => {
+        const {ctx} = makeFakeCtx(dir)
+        const trail: string[] = []
+        const commits: string[] = []
+        let verifyCalls = 0
+        let healthCalls = 0
+        let enforceCalls = 0
+        const deps = makeDeps({
+            record: (_c, _i, line) => {
+                trail.push(line)
+                return Promise.resolve()
+            },
+            commit: (_c, m) => {
+                commits.push(m)
+                return Promise.resolve({committed: true})
+            },
+            verify: () => {
+                verifyCalls += 1
+                return Promise.resolve({ok: true})
+            },
+            enforceNoop: () => Promise.resolve('disabled'),
+            enforce: () => {
+                enforceCalls += 1
+                return Promise.resolve({ok: true, reason: 'disabled'})
+            },
+            dirty: () => Promise.resolve(true),
+            repoHealth: () => {
+                healthCalls += 1
+                return Promise.resolve({ok: true, reason: 'static checks passed'})
+            }
+        })
+        const r = await runGatesForTask(ctx, deps, baseParams({cwd: dir}))
+        expect(r.kind).toBe('done')
+        expect(verifyCalls).toBe(1)
+        expect(enforceCalls).toBe(0)
+        expect(healthCalls).toBe(0)
+        expect(commits).toEqual(['task: A (TASK_0006)'])
+        expect(trail).toContain('enforce: skipped (disabled)')
+    })
+})
+
 test('enforce with real code edits still commits + differential-guards as before', async () => {
     await withTmpTaskDir(async dir => {
         const {ctx} = makeFakeCtx(dir)

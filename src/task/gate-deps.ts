@@ -36,8 +36,8 @@ import {
     HEALTH_BASELINE_SECTION,
     type HealthBaseline
 } from './health-baseline.js'
-import {gitCommitAll, gitDropLastCommit, git} from './auto-commit.js'
-import {runGuidelineEnforcement} from './enforce-guidelines.js'
+import {gitCommitAll, gitDropLastCommit, git, hasCommittableChanges} from './auto-commit.js'
+import {discoverGuidelines, runGuidelineEnforcement} from './enforce-guidelines.js'
 import {runWorkVerification, extractSpecForVerification, type VerifyProbes} from './verify-work.js'
 import {readEnvNotes, appendEnvNotes} from './env-notes.js'
 import {currentRunContext} from './run-context.js'
@@ -1348,13 +1348,10 @@ export function buildGateDeps(params: {
                 // tree the baseline authored.
                 discardEdits: () => discardTreeEdits(cwd2)
             }).catch(() => null),
-        dirty: async cwd2 => {
-            const r = await git(
-                cwd2,
-                ['status', '--porcelain', '--', '.', EXCLUDE_TASKS_DIR],
-                signal
-            )
-            return r.exitCode === 0 && r.stdout.trim().length > 0
+        dirty: cwd2 => hasCommittableChanges(cwd2, signal),
+        enforceNoop: async cwd2 => {
+            if (!getConfig().enforceGuidelines) return 'disabled'
+            return (await discoverGuidelines(cwd2)) === null ? 'no guideline files' : null
         },
         discardEdits: discardTreeEdits,
         finalGateFix: (fixCtx, cwd2, failReason, loop) =>

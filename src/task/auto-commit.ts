@@ -105,6 +105,45 @@ export async function untrackedArtifacts(
         .sort()
 }
 
+/**
+ * Would `gitCommitAll` commit anything right now? The trail dir and the untracked
+ * output `untrackedArtifacts` names never reach a commit, so neither is an edit.
+ * Untracked files are listed one by one: a collapsed `?? test-results/` entry
+ * would hide a real file sitting next to the runner output.
+ */
+export async function hasCommittableChanges(
+    cwd: string,
+    signal?: AbortSignal,
+    spawnFn?: SpawnFn
+): Promise<boolean> {
+    const r = await git(
+        cwd,
+        [
+            'status',
+            '--porcelain',
+            '-z',
+            '--untracked-files=all',
+            '--',
+            '.',
+            `:(exclude)${TRAIL_DIR}`
+        ],
+        signal,
+        spawnFn
+    )
+    if (r.aborted || r.exitCode !== 0) return false
+    const entries = r.stdout.split('\0')
+    for (let i = 0; i < entries.length; i++) {
+        const entry = entries[i]
+        if (entry.length < 4) continue
+        const code = entry.slice(0, 2)
+        // A rename or copy carries its source path as the next entry.
+        if (/[RC]/.test(code)) i++
+        if (code === '??' && isDeletionExemptArtifact(entry.slice(3))) continue
+        return true
+    }
+    return false
+}
+
 /** `:(exclude)` pathspecs for `git add -A`; empty when nothing is excluded, so the
  *  common case adds no arguments at all and stays a bare `git add -A`. */
 export function stagePathspec(excluded: readonly string[]): string[] {

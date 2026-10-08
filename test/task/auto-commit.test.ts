@@ -9,7 +9,8 @@ import {
     gitStashRef,
     gitDropLastCommit,
     untrackedArtifacts,
-    stagePathspec
+    stagePathspec,
+    hasCommittableChanges
 } from '../../src/task/auto-commit.js'
 import {fakeSpawnByPrompt, type SpawnResponse} from '../test-utils/fake-spawn.js'
 
@@ -350,4 +351,31 @@ test('gitCommitAll: nothing to exclude → no `excluded` key and a bare `git add
     const res = await gitCommitAll('/repo', 'task: A (TASK_0006)', undefined, spawn)
     expect(res).toEqual({committed: true})
     expect(seen.find(a => a[0] === 'add')).toEqual(['add', '-A'])
+})
+
+test('hasCommittableChanges: only what a commit would carry counts (mx5-n 0.42.47: 17 phantom re-verifies)', async () => {
+    const {dir, g} = realRepo()
+    fs.mkdirSync(path.join(dir, 'coverage'))
+    fs.writeFileSync(path.join(dir, 'coverage', 'badge.svg'), '<svg/>\n')
+    fs.writeFileSync(path.join(dir, 'src.ts'), 'export const a = 1\n')
+    g('add', '-A')
+    g('commit', '-q', '-m', 'base')
+    expect(await hasCommittableChanges(dir)).toBe(false)
+
+    fs.mkdirSync(path.join(dir, 'test-results'))
+    fs.writeFileSync(path.join(dir, 'test-results', '.last-run.json'), '{}\n')
+    fs.mkdirSync(path.join(dir, '.pi-tasks'))
+    fs.writeFileSync(path.join(dir, '.pi-tasks', 'TASK_0001.md'), '## gates\n')
+    expect(await hasCommittableChanges(dir)).toBe(false)
+
+    fs.writeFileSync(path.join(dir, 'coverage', 'badge.svg'), '<svg>edited</svg>\n')
+    expect(await hasCommittableChanges(dir)).toBe(true)
+    g('checkout', '--', 'coverage/badge.svg')
+
+    fs.writeFileSync(path.join(dir, 'new.ts'), 'export const b = 2\n')
+    expect(await hasCommittableChanges(dir)).toBe(true)
+    fs.rmSync(path.join(dir, 'new.ts'))
+
+    g('mv', 'src.ts', 'renamed.ts')
+    expect(await hasCommittableChanges(dir)).toBe(true)
 })
