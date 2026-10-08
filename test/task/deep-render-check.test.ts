@@ -174,6 +174,37 @@ describe('judgeDeepSession', () => {
         expect(detail).toContain('200')
     })
 
+    // mx5-n 0.42.47 final gate: the page went /login → / → /login and its one
+    // data call after sign-in was a 2xx. The text blamed a client call that never
+    // fires and a missing 2xx, and the fix child spent 39 min on that lead.
+    test('a client that left the wall and came back is described by its trail', () => {
+        const r = judgeDeepSession({
+            ...base,
+            leftAuthWall: false,
+            postAuthDataAttempted: 1,
+            postAuthData2xx: 1,
+            postAuthTrail: ['/', '/login'],
+            urlAfter: 'http://127.0.0.1:3000/login'
+        })
+        expect(r.outcome).toBe('fail')
+        const detail = (r as {detail: string}).detail
+        expect(detail).toContain('`/` → `/login`')
+        expect(detail).not.toContain('missing 2xx')
+        expect(detail).not.toContain('never sent')
+    })
+
+    test('data calls that succeeded are never called missing', () => {
+        const r = judgeDeepSession({
+            ...base,
+            leftAuthWall: false,
+            postAuthDataAttempted: 2,
+            postAuthData2xx: 2,
+            urlAfter: 'http://127.0.0.1:3000/login'
+        })
+        expect(r.outcome).toBe('fail')
+        expect((r as {detail: string}).detail).not.toContain('missing 2xx')
+    })
+
     test('authenticated, left the wall, but every data call failed → FAIL', () => {
         const r = judgeDeepSession({...base, postAuthDataAttempted: 4, postAuthData2xx: 0})
         expect(r.outcome).toBe('fail')

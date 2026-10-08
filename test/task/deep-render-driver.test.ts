@@ -50,6 +50,8 @@ interface Scenario {
     navigations?: FakeRequest[][]
     /** Requests to emit when the submit expression is evaluated. */
     onSubmit?: FakeRequest[]
+    /** Frame navigations to emit after the submit's requests. */
+    onSubmitFrames?: Array<{url: string; within?: boolean; child?: boolean}>
     /** Sequential answers to the page-inspect expression (last one repeats). */
     inspect: Array<{hasPassword: boolean; url: string; pathname: string; html: string}>
     fill?: {ok: boolean; reason?: string}
@@ -124,7 +126,18 @@ wss.on('connection', ws => {
             if (expr.includes('setValue')) return reply({result: {value: S.fill ?? {ok: true}}})
             if (expr.includes('requestSubmit')) {
                 reply({result: {value: S.submit ?? {ok: true}}})
-                return fire(S.onSubmit)
+                fire(S.onSubmit)
+                for (const f of S.onSubmitFrames ?? []) {
+                    if (f.within) emit('Page.navigatedWithinDocument', {frameId: 'target-1', url: f.url})
+                    else {
+                        emit('Page.frameNavigated', {
+                            frame: f.child ?
+                                    {id: 'child-1', parentId: 'target-1', url: f.url}
+                                :   {id: 'target-1', url: f.url}
+                        })
+                    }
+                }
+                return
             }
             const at = Math.min(inspectCall++, S.inspect.length - 1)
             return reply({result: {value: S.inspect[at]}})
@@ -244,6 +257,26 @@ describe('drive: the run-17 class', () => {
         expect((r as {detail: string}).detail).toContain('NEVER LEFT THE SIGN-IN WALL')
         // No re-entry navigation on a session that never left the wall.
         expect((facts as unknown as DeepSessionFacts).postAuthDataAttempted).toBe(0)
+    })
+
+    testPosix("records the main frame's trail after submit, iframes excluded", async () => {
+        let facts: DeepSessionFacts | null = null
+        const r = await run(
+            fakeBrowser({
+                navigations: [landing],
+                onSubmit: [loginPost],
+                onSubmitFrames: [
+                    {url: `${BASE}/`},
+                    {url: `${BASE}/ads`, child: true},
+                    {url: `${BASE}/login`, within: true}
+                ],
+                inspect: [wall('/login'), wall('/login')]
+            }),
+            {onFacts: f => void (facts = f)}
+        )
+        expect(r.outcome).toBe('fail')
+        expect((facts as unknown as DeepSessionFacts).postAuthTrail).toEqual(['/', '/login'])
+        expect((r as {detail: string}).detail).toContain('`/` → `/login`')
     })
 
     testPosix('an authenticated XHR answered by the SPA catch-all → fail', async () => {

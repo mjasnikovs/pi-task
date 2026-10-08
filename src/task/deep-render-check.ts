@@ -283,6 +283,9 @@ export interface DeepSessionFacts {
     foreignOriginFailures: string[]
     /** No visible password input after settle, or the URL path changed. */
     leftAuthWall: boolean
+    /** Main-frame paths the page moved through from the submit to the driver's own
+     *  re-entry, in order. Optional: absent means "not recorded". */
+    postAuthTrail?: string[]
     urlBefore: string
     urlAfter: string
     /** judgeRenderedDom over the post-sign-in DOM. */
@@ -469,15 +472,26 @@ export function judgeDeepSession(f: DeepSessionFacts): DeepRenderOutcome {
                     + 'still on the wall — the authenticated half of the app was NOT observed'
             }
         }
+        const trail = f.postAuthTrail ?? []
+        const where =
+            trail.some(step => step !== pathOf(f.urlAfter)) ?
+                `it went ${trail.map(step => `\`${step}\``).join(' → ')} and ended on ${f.urlAfter}`
+            :   `the page is still ${f.urlAfter}`
+        // The cause named here seeds the fix child, so it is named only when the
+        // evidence carries it: no 2xx after sign-in is a client call that never landed.
+        const cause =
+            f.postAuthData2xx === 0 ?
+                'The server authenticated the session and the client could not use it — the dead '
+                + 'client-call class (a request builder that is never sent, a wrong RPC method name, '
+                + 'a handler that never fires). No type, cast or mock can produce the missing 2xx.'
+            :   "The server authenticated the session and the client's calls after it succeeded, "
+                + 'yet the client ended on the sign-in page.'
         return {
             outcome: 'fail',
             detail:
-                `${signedIn} but the client NEVER LEFT THE SIGN-IN WALL: the page is still `
-                + `${f.urlAfter} with a password field, and ${f.postAuthData2xx} of `
-                + `${f.postAuthDataAttempted} same-origin data request(s) after sign-in succeeded. `
-                + 'The server authenticated the session and the client could not use it — the dead '
-                + 'client-call class (a request builder that is never sent, a wrong RPC method name, '
-                + 'a handler that never fires). No type, cast or mock can produce the missing 2xx.'
+                `${signedIn} but the client NEVER LEFT THE SIGN-IN WALL: ${where} with a password `
+                + `field, and ${f.postAuthData2xx} of ${f.postAuthDataAttempted} same-origin data `
+                + `request(s) after sign-in succeeded. ${cause}`
         }
     }
     if (!f.postAuthDomOk) {
@@ -962,10 +976,28 @@ export async function driveSession(
         if (r) r.failed = true
         lastActivity = Date.now()
     })
+    // On the request counter, so a navigation orders against the sign-in request.
+    const mainFrameNavs: Array<{seq: number; url: string}> = []
+    let mainFrameId: string | null = null
+    cdp.on('Page.frameNavigated', p => {
+        const frame = p.frame as {id?: string; parentId?: string; url?: string} | undefined
+        if (!frame || frame.parentId !== undefined) return
+        mainFrameId = String(frame.id)
+        mainFrameNavs.push({seq: nextSeq++, url: String(frame.url ?? '')})
+        lastActivity = Date.now()
+    })
+    cdp.on('Page.navigatedWithinDocument', p => {
+        if (String(p.frameId) !== mainFrameId) return
+        mainFrameNavs.push({seq: nextSeq++, url: String(p.url ?? '')})
+        lastActivity = Date.now()
+    })
 
     const {targetId} = (await cdp.send('Target.createTarget', {url: 'about:blank'})) as {
         targetId: string
     }
+    // A page target's main frame shares its id, so a pushState before any full
+    // navigation is still attributed.
+    mainFrameId ??= targetId
     const {sessionId} = (await cdp.send('Target.attachToTarget', {targetId, flatten: true})) as {
         sessionId: string
     }
@@ -1113,6 +1145,10 @@ export async function driveSession(
         INSPECT_EXPR
     )
     const domJudgment = judgeRenderedDom(now?.html ?? '')
+    const postAuthTrail = mainFrameNavs
+        .filter(n => n.seq >= submitSeq)
+        .map(n => pathOf(n.url))
+        .filter((p, i, all) => i === 0 || p !== all[i - 1])
     const leftAuthWall = !(now?.hasPassword ?? false) || (now?.pathname ?? '') !== before.pathname
 
     // Exercise the authenticated app once. A sign-in page that ends on a success
@@ -1138,6 +1174,7 @@ export async function driveSession(
             submitted: true,
             signInLeftOrigin: offsiteSignIn && originOf(requests.get(offsiteSignIn)!.finalUrl),
             leftAuthWall,
+            postAuthTrail,
             urlAfter: now?.url ?? before.url,
             postAuthDomOk: domJudgment.ok,
             postAuthDomDetail: domJudgment.detail
