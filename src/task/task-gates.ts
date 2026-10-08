@@ -388,10 +388,14 @@ export async function askVerifyResolution(
  * about the suite too, it would chase a red its static check cannot observe.
  */
 function staticFixReason(verified: VerifyOutcome, failClass: VerifyFailClass): string | null {
-    if (failClass === 'repo-health') return verified.reason ?? ''
-    if (failClass !== 'test-suite') return null
+    if (failClass !== 'repo-health' && failClass !== 'test-suite') return null
+    // A check the task added has nothing to fix yet: lint-fix greened mx5-n's empty
+    // `src/` glob by writing a placeholder source file.
+    if (failClass === 'repo-health' && verified.health?.commands === undefined) {
+        return verified.reason ?? ''
+    }
     const statics = (verified.health?.commands ?? []).filter(
-        c => c.kind !== 'test' && isHealthRed(c)
+        c => c.kind !== 'test' && isHealthRed(c) && c.added !== true
     )
     if (statics.length === 0) return null
     return `${VERIFY_FAIL_PREFIX['repo-health']} ${describeHealthFailures(statics)}`
@@ -573,7 +577,15 @@ export async function resolveVerifyGate(
             // red, and the next checkpoint splices a repair before anything builds
             // on it (health-repair.ts) — named here so a human choosing ACCEPT
             // sees what the choice queues, and the trail says the same.
-            const regression = verified.health ? await healthRedOf(verified.health) : null
+            // A command the task added never ran before it, so it regressed nothing:
+            // it is owed by the plan step that creates its inputs, not by a repair.
+            const regression =
+                verified.health ?
+                    await healthRedOf({
+                        ...verified.health,
+                        commands: verified.health.commands?.filter(c => c.added !== true)
+                    })
+                :   null
             const acceptQueues = regression ? describeHealthRepair(regression) : undefined
             const disposition = resolveDisposition({
                 failClass,

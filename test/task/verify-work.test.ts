@@ -1,4 +1,4 @@
-import type {HealthCommandResult} from '../../src/task/repo-health-check.js'
+import {ADDED_SUFFIX, type HealthCommandResult} from '../../src/task/repo-health-check.js'
 import type {EmittedNote} from '../../src/task/env-notes.js'
 import {describe, expect, test} from 'bun:test'
 import {
@@ -1566,4 +1566,68 @@ describe('verify failure class', () => {
         expect(isStaticClass(failClassOfReason('work did not verify: behavior wrong'))).toBe(false)
         expect(isStaticClass(failClassOfReason('work unobserved: no playwright'))).toBe(false)
     })
+})
+
+// mx5-n 0.42.47 TASK_0001: the scripts it was told to declare could not run until a
+// later step. The FAIL stands, but it must say the commands are new, so nothing
+// downstream reads them as a broken sibling to repair.
+test('a command added by this task fails as added, never as regressed', async () => {
+    const out = await runWorkVerification({
+        cwd: '/x',
+        spec: 'GOAL\nx',
+        repoHealth: async () => ({
+            ok: false,
+            reason: 'red',
+            ecosystem: 'package.json',
+            output: '',
+            commands: [
+                {
+                    cmd: 'bun run lint',
+                    outcome: 'fail' as const,
+                    exitCode: 2,
+                    kind: 'static' as const
+                },
+                {
+                    cmd: 'bun run test:ct',
+                    outcome: 'fail' as const,
+                    exitCode: 1,
+                    kind: 'test' as const
+                }
+            ]
+        }),
+        healthBaseline: async () => ({
+            at: '2026-10-06T18:09:15.010Z',
+            treeHash: 'b933eae',
+            outcome: {
+                ok: true,
+                reason: 'passed',
+                ecosystem: 'package.json',
+                output: '',
+                commands: [
+                    {
+                        cmd: 'bun run lint',
+                        outcome: 'skip' as const,
+                        exitCode: null,
+                        kind: 'static' as const,
+                        gap: 'command-not-found' as const
+                    },
+                    {
+                        cmd: 'bun run test',
+                        outcome: 'skip' as const,
+                        exitCode: null,
+                        kind: 'test' as const,
+                        gap: 'empty-suite' as const
+                    }
+                ]
+            }
+        }),
+        runChild: async () => 'WORK-VERIFIED: PASS'
+    })
+    expect(out.ok).toBe(false)
+    if (out.ok) return
+    expect(out.failClass).toBe('test-suite')
+    expect(out.reason).toBe(
+        `test suite: \`bun run lint\` exited 2${ADDED_SUFFIX}; \`bun run test:ct\` exited 1${ADDED_SUFFIX}`
+    )
+    expect(out.health?.commands?.every(c => c.added === true)).toBe(true)
 })

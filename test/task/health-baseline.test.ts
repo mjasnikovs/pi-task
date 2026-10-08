@@ -20,6 +20,7 @@ import {
     lazyHealthBaseline,
     parseHealthBaseline,
     regressedCommands,
+    addedSince,
     type HealthBaseline
 } from '../../src/task/health-baseline.js'
 import type {HealthCommandResult, HealthOutcome} from '../../src/task/repo-health-check.js'
@@ -447,5 +448,51 @@ describe('lazyHealthBaseline', () => {
                 runHealthIn: () => Promise.resolve(LINT_GREEN)
             })
         ).toBeNull()
+    })
+})
+
+// mx5-n 0.42.47 TASK_0001 declared `test:ct` and `lint` before the files they run
+// existed. Nothing that never ran can have regressed.
+describe('addedSince', () => {
+    const lintMissing: HealthCommandResult = {
+        cmd: 'bun run lint',
+        outcome: 'skip',
+        exitCode: null,
+        kind: 'static',
+        gap: 'command-not-found'
+    }
+    const testEmpty: HealthCommandResult = {
+        cmd: 'bun run test',
+        outcome: 'skip',
+        exitCode: null,
+        kind: 'test',
+        gap: 'empty-suite'
+    }
+    const t01 = outcome(true, [lintMissing, testEmpty])
+    const red = (name: string, kind: 'static' | 'test'): HealthCommandResult => ({
+        cmd: name,
+        outcome: 'fail',
+        exitCode: 1,
+        kind
+    })
+
+    test('a script the baseline could not find, or never listed, was added', () => {
+        expect(addedSince(t01, red('bun run lint', 'static'))).toBe(true)
+        expect(addedSince(t01, red('bun run test:ct', 'test'))).toBe(true)
+    })
+
+    test('a suite that ran and found nothing existed: its red is a regression', () => {
+        expect(addedSince(t01, red('bun run test', 'test'))).toBe(false)
+    })
+
+    test('a baseline that ran no tests cannot say a test command is new', () => {
+        const staticsOnly = outcome(true, [cmd('bun run lint', 'pass', 0)])
+        expect(addedSince(staticsOnly, red('bun run test:ct', 'test'))).toBe(false)
+        expect(addedSince(staticsOnly, red('bun run typecheck', 'static'))).toBe(true)
+    })
+
+    test('no baseline, or a passing one, says nothing was added', () => {
+        expect(addedSince(null, red('bun run lint', 'static'))).toBe(false)
+        expect(addedSince(LINT_GREEN, red('bun run lint', 'static'))).toBe(false)
     })
 })

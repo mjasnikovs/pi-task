@@ -22,7 +22,7 @@
  * because its script is a placeholder `exit 1`, and no repair task can fix either.
  */
 import type {HealthSignal} from './health-baseline.js'
-import {isHealthRed, type HealthCommandResult} from './repo-health-check.js'
+import {ADDED_SUFFIX, isHealthRed, type HealthCommandResult} from './repo-health-check.js'
 import {isQuietTestRow, reportedSuffix} from './command-run.js'
 import {parseRepairTitleFile} from './root-cause-repair.js'
 import {failClassOfReason, isHealthClass} from './verify-work.js'
@@ -141,7 +141,15 @@ function regressionsOf(red: HealthRed, openDebts: readonly OpenDebt[]): OpenDebt
             !FOUND_NOT_MADE.has(d.origin ?? '')
             && isHealthClass(failClassOfReason(d.reason))
             && d.reason.includes(said)
+            && !saysAdded(red, d)
     )
+}
+
+/** Does this debt record the command as added by its task (repo-health-check.ts)? */
+function saysAdded(red: HealthRed, d: OpenDebt): boolean {
+    const at = d.reason.indexOf(`\`${red.command}\` exited`)
+    if (at < 0) return false
+    return d.reason.slice(at).split('; ')[0].includes(ADDED_SUFFIX)
 }
 
 /**
@@ -150,7 +158,9 @@ function regressionsOf(red: HealthRed, openDebts: readonly OpenDebt[]): OpenDebt
  * that found no tests in part of itself is owed only by the task that lost that part.
  */
 export function checkpointMayRepair(red: HealthRed, openDebts: readonly OpenDebt[]): boolean {
-    return red.kind !== 'test' || regressionsOf(red, openDebts).length > 0
+    if (regressionsOf(red, openDebts).length > 0) return true
+    if (openDebts.some(d => saysAdded(red, d))) return false
+    return red.kind !== 'test'
 }
 
 /** The latest task whose regression of this red is still open, or null. */

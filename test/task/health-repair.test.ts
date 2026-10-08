@@ -9,7 +9,11 @@ import {
     owingTask,
     planCoversHealthRed
 } from '../../src/task/health-repair.js'
-import {captureHealthOutput, type HealthOutcome} from '../../src/task/repo-health-check.js'
+import {
+    ADDED_SUFFIX,
+    captureHealthOutput,
+    type HealthOutcome
+} from '../../src/task/repo-health-check.js'
 import {readFileSync} from 'node:fs'
 import * as path from 'node:path'
 
@@ -454,6 +458,53 @@ describe('checkpointMayRepair', () => {
             checkpointMayRepair(
                 {command: 'bun run lint', exitCode: 1, files: [], kind: 'static'},
                 []
+            )
+        ).toBe(true)
+    })
+})
+
+// A command a task added before its inputs existed is owed by the plan, not by a
+// repair: splicing one is how mx5-n 0.42.47 built step 12 at step 2.
+describe('checkpointMayRepair: added commands', () => {
+    const added = (cmd: string, code: number): string => `\`${cmd}\` exited ${code}${ADDED_SUFFIX}`
+    test('a red owed only as added queues no repair, static or test', () => {
+        const debts = [
+            {
+                taskId: 'TASK_0001',
+                reason: `test suite: ${added('bun run lint', 2)}; ${added('bun run test:ct', 1)}`,
+                origin: 'yolo-accepted'
+            }
+        ]
+        expect(
+            checkpointMayRepair(
+                {command: 'bun run lint', exitCode: 2, files: [], kind: 'static'},
+                debts
+            )
+        ).toBe(false)
+        expect(
+            checkpointMayRepair(
+                {command: 'bun run test:ct', exitCode: 1, files: [], kind: 'test'},
+                debts
+            )
+        ).toBe(false)
+    })
+    test('a later regression of the same command is repairable again', () => {
+        const debts = [
+            {
+                taskId: 'TASK_0001',
+                reason: `test suite: ${added('bun run test:ct', 1)}`,
+                origin: 'yolo-accepted'
+            },
+            {
+                taskId: 'TASK_0020',
+                reason: 'test suite: `bun run test:ct` exited 1',
+                origin: 'yolo-accepted'
+            }
+        ]
+        expect(
+            checkpointMayRepair(
+                {command: 'bun run test:ct', exitCode: 1, files: [], kind: 'test'},
+                debts
             )
         ).toBe(true)
     })

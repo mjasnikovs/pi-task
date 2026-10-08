@@ -48,6 +48,7 @@ import {buildContractsVerifyBlock} from './contracts.js'
 import {findSkipEscapes, skipEscapeVerifyFindings} from './skip-escape.js'
 import {crossTaskDeletionVerifyFindings, type CrossTaskDeletion} from './task-provenance.js'
 import {
+    addedSince,
     classifyHealthDelta,
     inheritedHealthFindings,
     regressedCommands,
@@ -1291,7 +1292,9 @@ export async function runWorkVerification(deps: VerificationDeps): Promise<Verif
             if (classifyHealthDelta(before, h) === 'regressed') {
                 // Named after what REGRESSED, not after whatever failed first: a lint
                 // red on arrival would otherwise stand in for the suite this task broke.
-                const regressed = regressedCommands(before, h)
+                const regressed = regressedCommands(before, h).map(c =>
+                    addedSince(before, c) ? {...c, added: true} : c
+                )
                 if (regressed.length === 0) {
                     return {
                         ok: false,

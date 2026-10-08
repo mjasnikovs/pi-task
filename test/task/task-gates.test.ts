@@ -10,6 +10,7 @@ import {
 } from '../../src/task/task-gates.js'
 import {AUTOFIX_BUDGET} from '../../src/task/gate-resolution.js'
 import {ACCEPT_LABEL, parseResolutionVerdict} from '../../src/task/verify-resolution.js'
+import {ADDED_SUFFIX} from '../../src/task/repo-health-check.js'
 import {crossTaskDeletionReason, type DebtOrigin} from '../../src/task/accept-debt.js'
 import {getConfig} from '../../src/config/config.js'
 import {YOLO_STAMP} from '../../src/task/yolo.js'
@@ -952,6 +953,66 @@ test('verify ACCEPT: a root-caused FAIL queues the repair alongside the accept-d
         expect(r.kind).toBe('done')
         expect(accepted).toHaveLength(1)
         expect(queued).toEqual(['test/teardown.ts'])
+    })
+})
+
+test('a red the task ADDED gets no lint-fix and ACCEPT queues no repair (mx5-n 0.42.47)', async () => {
+    // TASK_0001 declared scripts whose inputs a later step creates. Lint-fix wrote a
+    // placeholder source file to green an empty glob, and ACCEPT spliced a repair
+    // that built step 12 at step 2.
+    await withTmpTaskDir(async dir => {
+        const handle = makeFakeCtx(dir)
+        const {ctx} = handle
+        handle.queueSelect(ACCEPT_LABEL)
+        const trail: string[] = []
+        let fixCalls = 0
+        const reason = `test suite: \`bun run lint\` exited 2${ADDED_SUFFIX}; \`bun run test:ct\` exited 1${ADDED_SUFFIX}`
+        const deps = makeDeps({
+            record: (_c, _i, line) => {
+                trail.push(line)
+                return Promise.resolve()
+            },
+            verify: () =>
+                Promise.resolve({
+                    ok: false,
+                    failClass: 'test-suite',
+                    reason,
+                    health: {
+                        ok: false,
+                        reason,
+                        commands: [
+                            {
+                                cmd: 'bun run lint',
+                                outcome: 'fail',
+                                exitCode: 2,
+                                kind: 'static',
+                                added: true
+                            },
+                            {
+                                cmd: 'bun run test:ct',
+                                outcome: 'fail',
+                                exitCode: 1,
+                                kind: 'test',
+                                added: true
+                            }
+                        ]
+                    }
+                }),
+            lintFix: () => {
+                fixCalls++
+                return Promise.resolve({ok: true, class: 'converged' as const})
+            },
+            recommend: () =>
+                Promise.resolve({
+                    recommend: 'accept',
+                    rationale: 'a later step creates the inputs'
+                }),
+            repoFiles: () => Promise.resolve([])
+        })
+        const r = await runGatesForTask(ctx, deps, baseParams({cwd: dir, taskId: 'TASK_0001'}))
+        expect(r.kind).toBe('done')
+        expect(fixCalls).toBe(0)
+        expect(trail.some(l => l.startsWith('accept: repo health regressed'))).toBe(false)
     })
 })
 

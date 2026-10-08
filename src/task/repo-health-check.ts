@@ -72,6 +72,9 @@ export interface HealthCommandResult {
     output?: string
     /** The runner's failure summary, on a `fail` that exited 0 (see classifyCommandRun). */
     report?: string
+    /** Set by the verify differential on a red the task brought into being: the
+     *  baseline never ran this command (see health-baseline.ts `addedSince`). */
+    added?: boolean
 }
 
 export interface HealthOutcome {
@@ -396,8 +399,16 @@ export function isHealthRed(c: HealthCommandResult): boolean {
     return c.outcome === 'fail' || foundNoTests(c)
 }
 
+/**
+ * Marks a red the task added. Debts store the reason verbatim and the checkpoint
+ * reads it back (health-repair.ts), so this text is frozen like the prefixes.
+ */
+export const ADDED_SUFFIX = ' (added by this task, never ran before it)'
+
 function describeHealthRed(c: HealthCommandResult): string {
-    if (c.outcome === 'fail') return `\`${c.cmd}\` exited ${c.exitCode}${reportedSuffix(c)}`
+    if (c.outcome === 'fail') {
+        return `\`${c.cmd}\` exited ${c.exitCode}${reportedSuffix(c)}${c.added ? ADDED_SUFFIX : ''}`
+    }
     return c.gap === 'part-empty-suite' ?
             `\`${c.cmd}\` found no tests in part of its suite`
         :   `\`${c.cmd}\` found no tests to run`

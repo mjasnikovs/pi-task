@@ -125,6 +125,22 @@ export function vanishedSuites(
     )
 }
 
+/**
+ * Did this command come into being after the baseline? It is absent from it, or
+ * its script was not found there. A command that never ran cannot have regressed.
+ *
+ * A baseline that ran no check of the command's kind cannot tell: the lazy one
+ * runs statics only, so every test command is missing from it.
+ */
+export function addedSince(baseline: HealthSignal | null, c: HealthCommandResult): boolean {
+    if (!baseline) return false
+    const before = baseline.commands ?? []
+    const prior = before.find(p => p.cmd === c.cmd)
+    if (prior) return prior.outcome === 'skip' && prior.gap === 'command-not-found'
+    const kind = c.kind ?? 'static'
+    return before.some(p => (p.kind ?? 'static') === kind)
+}
+
 /** The failing commands the baseline did not have failing the same way — what a
  *  `regressed` verdict is about. Every failing command when there is no baseline. */
 export function regressedCommands(
