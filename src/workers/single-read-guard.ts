@@ -86,9 +86,16 @@ function endLine(start: number, limit: unknown): number {
     return start + Math.floor(limit) - 1
 }
 
+/** One read request's identity: what `delivered` settles against what `check` passed. */
+function requestKey(path: string, offset: unknown, limit: unknown): string {
+    return JSON.stringify([path, startLine(offset), endLine(startLine(offset), limit)])
+}
+
 export class SingleReadGuard {
     /** Furthest line already delivered per path; Infinity once a read hit EOF. */
     private readonly covered = new Map<string, number>()
+    /** The coverage each passed read found, so a short answer can be settled back. */
+    private readonly before = new Map<string, number | undefined>()
 
     /**
      * Record a read of `resolvedPath` over an optional line range. Returns a
@@ -104,8 +111,31 @@ export class SingleReadGuard {
         if (seen !== undefined && end <= seen) {
             return {block: true, reason: singleReadReason(resolvedPath, seen)}
         }
+        this.before.set(requestKey(resolvedPath, offset, limit), seen)
         this.covered.set(resolvedPath, Math.max(seen ?? 0, end))
         return null
+    }
+
+    /**
+     * Settle a read that delivered fewer lines than it asked for: pi cut it at its
+     * byte limit, or failed it (`lines` 0). `check` counted the whole request, and
+     * left that way the next honest page is blocked as a re-read.
+     */
+    delivered(resolvedPath: string, offset: unknown, limit: unknown, lines: number): void {
+        const key = requestKey(resolvedPath, offset, limit)
+        if (!this.before.has(key)) return
+        const prior = this.before.get(key)
+        this.before.delete(key)
+        const reached = lines > 0 ? startLine(offset) + lines - 1 : 0
+        const settled = Math.max(prior ?? 0, reached)
+        if (settled === 0) this.covered.delete(resolvedPath)
+        else this.covered.set(resolvedPath, settled)
+    }
+
+    /** Forget every read: after a compaction they are no longer in the context. */
+    reset(): void {
+        this.covered.clear()
+        this.before.clear()
     }
 }
 
@@ -134,5 +164,10 @@ export class RepeatedCallGuard {
         }
         this.seen.add(key)
         return null
+    }
+
+    /** Forget every call: after a compaction their results are no longer in the context. */
+    reset(): void {
+        this.seen.clear()
     }
 }

@@ -38,4 +38,22 @@ export default function (pi: ExtensionAPI): void {
         }
         return
     })
+    pi.on('tool_result', event => {
+        if (event.toolName !== 'read') return
+        const input = event.input as {path?: unknown; offset?: unknown; limit?: unknown}
+        if (typeof input.path !== 'string') return
+        const truncation = (
+            event.details as {truncation?: {truncated?: boolean; outputLines?: number}} | undefined
+        )?.truncation
+        const lines =
+            event.isError ? 0
+            : truncation?.truncated ? (truncation.outputLines ?? 0)
+            : null
+        if (lines === null) return
+        reads.delivered(resolve(process.cwd(), input.path), input.offset, input.limit, lines)
+    })
+    pi.on('session_compact', () => {
+        reads.reset()
+        calls.reset()
+    })
 }

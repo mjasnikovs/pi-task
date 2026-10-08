@@ -87,6 +87,35 @@ describe('SingleReadGuard', () => {
     })
 })
 
+// Coverage is what the model RECEIVED. pi cuts a read at 50 KB and throws on an
+// offset past EOF; counting the asked-for range turned both into a trap that
+// blocks the next honest page.
+describe('SingleReadGuard: delivered lines', () => {
+    test('a read cut short covers only the lines it delivered', () => {
+        const g = new SingleReadGuard()
+        expect(g.check('/big.js')).toBeNull()
+        g.delivered('/big.js', undefined, undefined, 640)
+        expect(g.check('/big.js', 641, 200)).toBeNull()
+        expect(g.check('/big.js', 10, 20)?.reason).toContain('line 840')
+    })
+
+    test('a read that failed covers nothing it asked for', () => {
+        const g = new SingleReadGuard()
+        g.check('/a.ts', undefined, 100)
+        expect(g.check('/a.ts', 5000, 100)).toBeNull()
+        g.delivered('/a.ts', 5000, 100, 0)
+        expect(g.check('/a.ts', 101, 50)).toBeNull()
+        expect(g.check('/a.ts', 10, 20)).not.toBeNull()
+    })
+
+    test('reset forgets every read, after the context lost them', () => {
+        const g = new SingleReadGuard()
+        g.check('/a.ts')
+        g.reset()
+        expect(g.check('/a.ts')).toBeNull()
+    })
+})
+
 describe('RepeatedCallGuard', () => {
     test('first call with given args is allowed', () => {
         const g = new RepeatedCallGuard()
@@ -125,6 +154,13 @@ describe('RepeatedCallGuard', () => {
         const g = new RepeatedCallGuard()
         expect(g.check('grep', {path: '/a.ts'})).toBeNull()
         expect(g.check('find', {path: '/a.ts'})).toBeNull()
+    })
+
+    test('reset forgets every call', () => {
+        const g = new RepeatedCallGuard()
+        g.check('grep', {pattern: 'x'})
+        g.reset()
+        expect(g.check('grep', {pattern: 'x'})).toBeNull()
     })
 
     test('reason names the tool and points the model forward', () => {

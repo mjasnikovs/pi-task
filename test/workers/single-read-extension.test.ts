@@ -3,13 +3,18 @@ import {resolve} from 'node:path'
 import singleReadExtension from '../../src/workers/single-read-extension.js'
 
 type Handler = (event: {toolName: string; input: unknown}) => unknown
+type AnyHandler = (event: unknown) => unknown
 
-/** Minimal ExtensionAPI stand-in that captures the registered tool_call handler. */
-function fakePi(): {handler: Handler | null} {
-    const cap: {handler: Handler | null} = {handler: null}
+/** Minimal ExtensionAPI stand-in that captures the registered handlers. */
+function fakePi(): {handler: Handler | null; on: Map<string, AnyHandler>} {
+    const cap: {handler: Handler | null; on: Map<string, AnyHandler>} = {
+        handler: null,
+        on: new Map()
+    }
     const pi = {
         on(event: string, handler: Handler) {
             if (event === 'tool_call') cap.handler = handler
+            cap.on.set(event, handler as AnyHandler)
         }
     }
     // The factory only touches pi.on — cast through unknown to satisfy the type.
@@ -82,5 +87,28 @@ describe('single-read-extension', () => {
         expect(handler!({toolName: 'read', input: {path: abs}})).toBeUndefined()
         const blocked = handler!({toolName: 'read', input: {path: 'a.ts'}}) as {block?: boolean}
         expect(blocked.block).toBe(true)
+    })
+
+    test('a read pi cut short leaves its undelivered lines readable', () => {
+        const {handler, on} = fakePi()
+        const input = {path: '/tmp/big.js'}
+        expect(handler!({toolName: 'read', input})).toBeUndefined()
+        on.get('tool_result')!({
+            toolName: 'read',
+            input,
+            isError: false,
+            details: {truncation: {truncated: true, outputLines: 640}}
+        })
+        expect(
+            handler!({toolName: 'read', input: {path: '/tmp/big.js', offset: 641}})
+        ).toBeUndefined()
+    })
+
+    test('after a compaction the earlier reads are no longer in context', () => {
+        const {handler, on} = fakePi()
+        const ev = {toolName: 'read', input: {path: '/tmp/y.ts'}}
+        handler!(ev)
+        on.get('session_compact')!({type: 'session_compact'})
+        expect(handler!(ev)).toBeUndefined()
     })
 })
