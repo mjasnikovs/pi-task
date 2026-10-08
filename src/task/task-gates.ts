@@ -565,7 +565,12 @@ export async function resolveVerifyGate(
             // tooling, and a contradiction has already been PROVEN deterministically
             // — asking a model to re-derive either costs a child and decides nothing.
             const unobserved = verified.unobserved === true
-            const judge = contradiction === null && !unobserved ? deps.recommend : undefined
+            // A missing declared test is not the judge's to weigh: one that reads
+            // plausible code would accept it, and the test would never be written.
+            const judge =
+                contradiction === null && !unobserved && failClass !== 'unbound-criterion' ?
+                    deps.recommend
+                :   undefined
             const recOutcome: ResolutionOutcome =
                 judge ?
                     await judge(active, p.cwd, p.title, p.taskId, failReason)

@@ -365,8 +365,16 @@ CONSTRAINTS
   - …
 
 ACCEPTANCE
-  - <human-readable success criterion>
+  - <criterion about behaviour> [test: <test file path> "<exact test title>"]
+  - <criterion that is one command's exit status> [cmd: <command>]
+  - <criterion about structure that exists without running anything> [static]
   - …
+
+Every ACCEPTANCE bullet ends with exactly one tag naming what will observe it, decided now, before any code exists:
+- \`[test: <path> "<title>"]\` for behaviour: what the code does when it runs (a response, a render, a state change, an error, an order of events). Name the test THIS task writes or extends, in the project's own test layout, and its exact title. The title says what is asserted and contains no double quote. The test must fail when that behaviour breaks. A test that stubs or mocks the very mechanism the criterion is about observes nothing; name one that exercises it.
+- \`[cmd: <command>]\` for a criterion that IS one command's exit status (the build succeeds, lint passes).
+- \`[static]\` for structure only: a file exists, an export is named, a config value is set.
+The verification gate checks that every named test exists in the tree under that exact title, so name only tests this task can write.
 
 Every CONSTRAINTS bullet ends with a \`[from: …]\` tag naming where it came from: \`[from: Q3]\` if the Q&A's answer 3 is what states it, or \`[from: spec]\` if the refined task states it. Tag a bullet ONLY when you can point at that source — a constraint you inferred yourself carries no tag, and that is the correct answer, not a gap. The tag decides how much weight the verification gates give the constraint, so a tag that names a source which does not state it turns your inference into an unwaivable rule.
 
@@ -422,6 +430,7 @@ The refined task and the user's Q&A below are GROUND TRUTH. Judge the spec again
 - a VERIFY block that is missing, unrunnable, full of placeholders, or does not exercise the surface the task touches
 - scope drift: requirements, files, or deliverables not implied by the refined task or Q&A
 - a dropped or weakened CONSTRAINT from the refined task
+- an ACCEPTANCE bullet whose tag cannot observe it: a behaviour tagged \`[static]\`, or a \`[test: …]\` that stubs the very mechanism the bullet is about
 - a synthesized interface WIRING specific — a mount/route table, a module→path mapping, an exported signature, a file layout — that the design does not pin AND that does not reproduce the design's pinned interface facts. A "uniform" pattern (one module → one mount prefix, etc.) applied to an interface whose pinned facts are NOT uniform is a SEAM BUG: flag it naming the pinned fact it contradicts.
 ${contracts && contracts.trim() ? `\n${contracts.trim()}\n` : ''}
 Do NOT flag cosmetic wording, style, or anything you would change only to "polish" prose. The bar is: would this defect change what the agent builds or whether the work can be verified?
@@ -459,6 +468,7 @@ SCOPE RULES (equally critical — do not break these):
 - Do NOT broaden scope. If the refined task says "run X and report", do not turn it into "build a toolchain around X with hooks, docs, and reports".
 - CONSTRAINTS from the refined task MUST be preserved in spirit. Do not silently drop or weaken them.
 - Keep each CONSTRAINTS bullet's trailing \`[from: …]\` tag exactly as it stands, and do not add one to a bullet that has none. The tag is the constraint's provenance, and the verification gates weigh it; inventing or dropping one rewrites how binding the constraint is.
+- Keep each ACCEPTANCE bullet's trailing tag — \`[test: <path> "<title>"]\`, \`[cmd: <command>]\` or \`[static]\` — and give a bullet that has none exactly one: \`[test: …]\` naming the test this task writes for a behaviour, \`[cmd: …]\` for an exit status, \`[static]\` for structure only. Never retag a behaviour as \`[static]\`. The gate checks every named test exists under that exact title.
 - If the spec below is malformed, empty, or wrapped in a heredoc, reconstruct it from the refined task and Q&A — not from your own invention.
 - Your job is to tighten language, sharpen acceptance criteria, and ensure VERIFY is runnable. Not to redesign the task.
 - WIRING vs pinned facts: if the spec states interface wiring (a mount/route table, a module→path mapping, an exported signature, a file layout), reconcile EACH wiring specific against the design's pinned interface facts (the CROSS-SLICE CONTRACTS below, if present, are those facts quoted verbatim). Keep every wiring specific that reproduces the pinned facts exactly; CORRECT any that do not; and do NOT invent wiring the design leaves unspecified. Watch specifically for a "uniform" pattern (one module → one mount prefix, one naming scheme) applied to an interface whose pinned facts are NOT uniform — that is a seam bug, fix only the entry that breaks, and leave the conforming entries unchanged.

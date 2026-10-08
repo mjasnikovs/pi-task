@@ -1016,6 +1016,38 @@ test('a red the task ADDED gets no lint-fix and ACCEPT queues no repair (mx5-n 0
     })
 })
 
+test('an unwritten declared test goes straight to autofix, never to the judge', async () => {
+    // A judge that reads plausible code would ACCEPT "no test" and the observation
+    // the spec promised would never be written.
+    await withTmpTaskDir(async dir => {
+        const {ctx} = makeFakeCtx(dir)
+        let judged = 0
+        let verifyCalls = 0
+        const deps = makeDeps({
+            verify: () => {
+                verifyCalls++
+                return Promise.resolve(
+                    verifyCalls === 1 ?
+                        {
+                            ok: false,
+                            failClass: 'unbound-criterion',
+                            reason: 'acceptance untested: `ct/main.spec.tsx` has no test "waits"'
+                        }
+                    :   {ok: true}
+                )
+            },
+            recommend: () => {
+                judged++
+                return Promise.resolve({recommend: 'accept', rationale: 'looks fine'})
+            }
+        })
+        const r = await runGatesForTask(ctx, deps, baseParams({cwd: dir}))
+        expect(r.kind).toBe('done')
+        expect(judged).toBe(0)
+        expect(verifyCalls).toBe(2)
+    })
+})
+
 test('record: a throwing record dep never breaks the gate sequence', async () => {
     await withTmpTaskDir(async dir => {
         const {ctx} = makeFakeCtx(dir)

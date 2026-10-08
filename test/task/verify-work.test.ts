@@ -1,6 +1,9 @@
 import {ADDED_SUFFIX, type HealthCommandResult} from '../../src/task/repo-health-check.js'
 import type {EmittedNote} from '../../src/task/env-notes.js'
 import {describe, expect, test} from 'bun:test'
+import * as fs from 'node:fs'
+import * as path from 'node:path'
+import {tmpDir} from '../test-utils/tmp-dir.js'
 import {
     buildVerifyPrompt,
     extractSpecForVerification,
@@ -1517,7 +1520,8 @@ describe('verify failure class', () => {
             'test-suite',
             'unobserved',
             'model-verdict',
-            'harness-fault'
+            'harness-fault',
+            'unbound-criterion'
         ]
         for (const c of classes) expect(VERIFY_FAIL_PREFIX[c]).toBeTruthy()
         expect(Object.keys(VERIFY_FAIL_PREFIX).sort()).toEqual([...classes].sort())
@@ -1630,4 +1634,56 @@ test('a command added by this task fails as added, never as regressed', async ()
         `test suite: \`bun run lint\` exited 2${ADDED_SUFFIX}; \`bun run test:ct\` exited 1${ADDED_SUFFIX}`
     )
     expect(out.health?.commands?.every(c => c.added === true)).toBe(true)
+})
+
+// mx5-n 0.42.47 TASK_0039: the spec promised a behaviour no test observed and the
+// verifier passed it. A declared test that was never written fails before any
+// model is asked, and names the test to write.
+describe('declared acceptance tests', () => {
+    const spec = [
+        'GOAL',
+        'guard routes',
+        '',
+        'ACCEPTANCE',
+        '- guarded routes wait for the session [test: ct/main.spec.tsx "waits for the in-flight session"]',
+        '',
+        'VERIFY:',
+        '```sh',
+        'bun test',
+        '```'
+    ].join('\n')
+
+    test('a declared test the tree lacks fails before the verifier runs', async () => {
+        const dir = tmpDir('verify-binding-')
+        let childRan = false
+        const out = await runWorkVerification({
+            cwd: dir,
+            spec,
+            runChild: async () => {
+                childRan = true
+                return 'WORK-VERIFIED: PASS'
+            }
+        })
+        expect(childRan).toBe(false)
+        expect(out.ok).toBe(false)
+        if (out.ok) return
+        expect(out.failClass).toBe('unbound-criterion')
+        expect(out.reason).toContain('ct/main.spec.tsx')
+        expect(out.reason).toContain('waits for the in-flight session')
+    })
+
+    test('a declared test that exists lets the verifier decide', async () => {
+        const dir = tmpDir('verify-binding-')
+        fs.mkdirSync(path.join(dir, 'ct'))
+        fs.writeFileSync(
+            path.join(dir, 'ct', 'main.spec.tsx'),
+            "test('waits for the in-flight session', () => {})\n"
+        )
+        const out = await runWorkVerification({
+            cwd: dir,
+            spec,
+            runChild: async () => 'WORK-VERIFIED: PASS'
+        })
+        expect(out.ok).toBe(true)
+    })
 })

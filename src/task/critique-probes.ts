@@ -34,6 +34,7 @@ import {
 import {findFrozenPathConflicts, frozenConflictProbeText} from './frozen-conflict.js'
 import {findGrepOnlyVerify, grepOnlyVerifyDefectText} from './verify-quality.js'
 import {findScriptEscapesInText, scriptEscapeDefectText} from './script-escape.js'
+import {unboundAcceptance, unboundAcceptanceDefectText} from './criterion-binding.js'
 
 /** Everything the probes read. Assembled once by the critique phase. */
 export interface CritiqueProbeContext {
@@ -180,6 +181,18 @@ export const CRITIQUE_PROBES: ReadonlyArray<CritiqueProbe<unknown>> = [
         detect: ctx => findScriptEscapesInText(ctx.spec),
         text: f => scriptEscapeDefectText(f),
         log: f => `neutered check script dictated by spec: ${f.map(x => x.name).join(' | ')}`
+    }),
+    probe({
+        // An ACCEPTANCE line with no observation named before the code exists is
+        // one the verifier may pass on a read (criterion-binding.ts).
+        id: 'unbound-acceptance',
+        detect: ctx => unboundAcceptance(ctx.spec),
+        text: f => unboundAcceptanceDefectText(f),
+        log: f => `ACCEPTANCE without a test/cmd/static tag: ${f.length} line(s)`,
+        unresolvedProblem: {
+            name: 'an ACCEPTANCE bullet has no [test: …], [cmd: …] or [static] tag',
+            stillPresent: rewritten => unboundAcceptance(rewritten).length > 0
+        }
     })
 ]
 

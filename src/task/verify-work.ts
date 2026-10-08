@@ -47,6 +47,7 @@ import {
 import {buildContractsVerifyBlock} from './contracts.js'
 import {findSkipEscapes, skipEscapeVerifyFindings} from './skip-escape.js'
 import {crossTaskDeletionVerifyFindings, type CrossTaskDeletion} from './task-provenance.js'
+import {missingDeclaredTests} from './criterion-binding.js'
 import {
     addedSince,
     classifyHealthDelta,
@@ -171,6 +172,7 @@ export type VerifyFailClass =
     | 'unobserved'
     | 'model-verdict'
     | 'harness-fault'
+    | 'unbound-criterion'
 
 /**
  * The prefix each class MINTS, stated once.
@@ -185,7 +187,8 @@ export const VERIFY_FAIL_PREFIX: Record<VerifyFailClass, string> = {
     'test-suite': 'test suite:',
     unobserved: 'work unobserved:',
     'model-verdict': 'work did not verify:',
-    'harness-fault': 'verification pass could not run:'
+    'harness-fault': 'verification pass could not run:',
+    'unbound-criterion': 'acceptance untested:'
 }
 
 /**
@@ -1334,6 +1337,23 @@ export async function runWorkVerification(deps: VerificationDeps): Promise<Verif
     const green = greenHealth === undefined ? {} : {greenHealth}
     if (!deps.spec || deps.spec.trim().length === 0) {
         return {ok: true, reason: 'no spec to verify', ...inherited}
+    }
+    // Before any model is asked: a test the spec bound an ACCEPTANCE line to and
+    // nobody wrote leaves that line unobserved, whatever a verifier would say.
+    const missing = missingDeclaredTests(deps.spec, deps.cwd)
+    if (missing.length > 0) {
+        return {
+            ok: false,
+            failClass: 'unbound-criterion',
+            reason:
+                `${VERIFY_FAIL_PREFIX['unbound-criterion']} ${missing
+                    .map(m => `\`${m.path}\` has no test "${m.title}" (${m.why})`)
+                    .join(
+                        '; '
+                    )} — write each so it fails when that behaviour breaks; a test that stubs `
+                + 'the behaviour itself observes nothing',
+            ...inherited
+        }
     }
     // Every deterministic probe, one table row each (see PROBE_ADAPTERS): the row
     // knows which dep it reads, what it degrades to, and which notice block its

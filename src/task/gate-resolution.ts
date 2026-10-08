@@ -83,6 +83,7 @@ export const AUTOFIX_BUDGET: Record<VerifyFailClass, number> = {
     'static-checks': REATTEMPTABLE_BUDGET,
     'test-suite': REATTEMPTABLE_BUDGET,
     'model-verdict': REATTEMPTABLE_BUDGET,
+    'unbound-criterion': REATTEMPTABLE_BUDGET,
     unobserved: 0,
     'harness-fault': 0
 }

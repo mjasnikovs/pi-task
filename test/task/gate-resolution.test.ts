@@ -24,7 +24,8 @@ const FAIL_CLASSES: VerifyFailClass[] = [
     'test-suite',
     'model-verdict',
     'unobserved',
-    'harness-fault'
+    'harness-fault',
+    'unbound-criterion'
 ]
 
 const CONTRADICTION = {criterion: 'the build spec asserts X', frozenPath: 'tsconfig.json'}
@@ -107,7 +108,8 @@ describe('AUTOFIX_BUDGET', () => {
             'repo-health',
             'static-checks',
             'test-suite',
-            'model-verdict'
+            'model-verdict',
+            'unbound-criterion'
         ] as const) {
             expect(AUTOFIX_BUDGET[cls]).toBeGreaterThan(0)
         }

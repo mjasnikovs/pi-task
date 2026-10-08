@@ -2395,7 +2395,7 @@ describe('phaseGrill', () => {
 
 describe('phaseCritique conditional rewrite', () => {
     const validSpec =
-        'GOAL\n  do the thing\n\nCONSTRAINTS\n  - keep x\n\nACCEPTANCE\n  - y works\n\nVERIFY:\n```sh\nnpm test\n```\n'
+        'GOAL\n  do the thing\n\nCONSTRAINTS\n  - keep x\n\nACCEPTANCE\n  - y works [cmd: npm test]\n\nVERIFY:\n```sh\nnpm test\n```\n'
 
     test('CLEAN triage short-circuits — returns the draft, never rewrites', async () => {
         await withTmpTaskDir(async cwd => {
@@ -2416,9 +2416,9 @@ describe('phaseCritique conditional rewrite', () => {
     test('a deterministic skip-escape overrides CLEAN triage and forces the rewrite', async () => {
         await withTmpTaskDir(async cwd => {
             const escapeSpec =
-                'GOAL\n  ship a page\n\nCONSTRAINTS\n  - a\n\nACCEPTANCE\n  - renders\n\nVERIFY:\n```sh\nuismoke smoke.spec.js || echo "skipping browser smoke (uismoke not installed)"\n```\n'
+                'GOAL\n  ship a page\n\nCONSTRAINTS\n  - a\n\nACCEPTANCE\n  - renders [cmd: uismoke smoke.spec.js]\n\nVERIFY:\n```sh\nuismoke smoke.spec.js || echo "skipping browser smoke (uismoke not installed)"\n```\n'
             const rewritten =
-                'GOAL\n  ship a page\n\nCONSTRAINTS\n  - a\n\nACCEPTANCE\n  - renders\n\nVERIFY:\n```sh\nuismoke smoke.spec.js\n```\n'
+                'GOAL\n  ship a page\n\nCONSTRAINTS\n  - a\n\nACCEPTANCE\n  - renders [cmd: uismoke smoke.spec.js]\n\nVERIFY:\n```sh\nuismoke smoke.spec.js\n```\n'
             // Triage says CLEAN — but the deterministic skip-escape must still force a rewrite.
             const {runChild, seen} = scriptedChildren({
                 'critique-triage': 'CLEAN',
@@ -2487,7 +2487,7 @@ describe('phaseCritique conditional rewrite', () => {
     test('triage defects flow into the rewrite as a FOCUS block', async () => {
         await withTmpTaskDir(async cwd => {
             const rewritten =
-                'GOAL\n  sharper\n\nCONSTRAINTS\n  - keep x\n\nACCEPTANCE\n  - y measured by z\n\nVERIFY:\n```sh\nnpm test\n```\n'
+                'GOAL\n  sharper\n\nCONSTRAINTS\n  - keep x\n\nACCEPTANCE\n  - y measured by z [cmd: npm test]\n\nVERIFY:\n```sh\nnpm test\n```\n'
             const {runChild, seen} = scriptedChildren({
                 'critique-triage': 'ACCEPTANCE: criterion is unmeasurable',
                 critique: rewritten
@@ -2510,7 +2510,7 @@ describe('phaseCritique conditional rewrite', () => {
 
     test('a draft without a runnable VERIFY block skips triage and goes straight to rewrite', async () => {
         await withTmpTaskDir(async cwd => {
-            const draftNoVerify = 'GOAL\n  x\n\nCONSTRAINTS\n  - a\n\nACCEPTANCE\n  - b\n'
+            const draftNoVerify = 'GOAL\n  x\n\nCONSTRAINTS\n  - a\n\nACCEPTANCE\n  - b [static]\n'
             const {runChild, seen} = scriptedChildren({
                 'critique-triage': 'CLEAN',
                 critique: validSpec
@@ -2576,9 +2576,9 @@ describe('phaseCompose VERIFY block gate', () => {
     // it (no runnable commands). Compose must apply the stricter bar so it never
     // hands a header-only draft to the downstream gates that reject it.
     const draftHeaderOnly =
-        'GOAL\n  build it\n\nCONSTRAINTS\n  - keep x\n\nACCEPTANCE\n  - y works\n\nVERIFY:\n'
+        'GOAL\n  build it\n\nCONSTRAINTS\n  - keep x\n\nACCEPTANCE\n  - y works [cmd: npm test]\n\nVERIFY:\n'
     const draftRunnable =
-        'GOAL\n  build it\n\nCONSTRAINTS\n  - keep x\n\nACCEPTANCE\n  - y works\n\nVERIFY:\n```sh\nnpm test\n```\n'
+        'GOAL\n  build it\n\nCONSTRAINTS\n  - keep x\n\nACCEPTANCE\n  - y works [cmd: npm test]\n\nVERIFY:\n```sh\nnpm test\n```\n'
 
     test('a bare `VERIFY:` header with no fenced block is rejected and retried, then throws compose_invalid', async () => {
         await withTmpTaskDir(async cwd => {
@@ -2640,9 +2640,10 @@ describe('phaseCompose VERIFY block gate', () => {
 })
 
 describe('critiqueWithFallback VERIFY-less draft guard', () => {
-    const noVerifyDraft = 'GOAL\n  x\n\nCONSTRAINTS\n  - a\n\nACCEPTANCE\n  - b\n\nVERIFY:\n'
+    const noVerifyDraft =
+        'GOAL\n  x\n\nCONSTRAINTS\n  - a\n\nACCEPTANCE\n  - b [static]\n\nVERIFY:\n'
     const runnableDraft =
-        'GOAL\n  x\n\nCONSTRAINTS\n  - a\n\nACCEPTANCE\n  - b\n\nVERIFY:\n```sh\nnpm test\n```\n'
+        'GOAL\n  x\n\nCONSTRAINTS\n  - a\n\nACCEPTANCE\n  - b [static]\n\nVERIFY:\n```sh\nnpm test\n```\n'
 
     const makeP = (spec: string): PhaseContext => ({
         cwd: '',
@@ -2685,10 +2686,11 @@ describe('critiqueWithFallback VERIFY-less draft guard', () => {
 
 describe('critique rewrite must deliver a well-shaped spec', () => {
     const draft =
-        'GOAL\n  x\n\nCONSTRAINTS\n  - a\n\nACCEPTANCE\n  - b\n\nVERIFY:\n```sh\nnpm test\n```\n'
+        'GOAL\n  x\n\nCONSTRAINTS\n  - a\n\nACCEPTANCE\n  - b [static]\n\nVERIFY:\n```sh\nnpm test\n```\n'
     // The rewrite dropped CONSTRAINTS. Its VERIFY block parses, which was all the
     // critique validator checked.
-    const missingSection = 'GOAL\n  x\n\nACCEPTANCE\n  - b\n\nVERIFY:\n```sh\nnpm test\n```\n'
+    const missingSection =
+        'GOAL\n  x\n\nACCEPTANCE\n  - b [static]\n\nVERIFY:\n```sh\nnpm test\n```\n'
 
     const makeP = (spec: string): PhaseContext => ({
         cwd: '',
@@ -2729,7 +2731,8 @@ describe('critique rewrite must deliver a well-shaped spec', () => {
         await withTmpTaskDir(async cwd => {
             const spawn = fakeSpawnByPrompt(() => agentEndResponse(missingSection))
             const deps = {cwd, taskId: 'TASK_TEST', signal: new AbortController().signal, spawn}
-            const noVerify = 'GOAL\n  x\n\nCONSTRAINTS\n  - a\n\nACCEPTANCE\n  - b\n\nVERIFY:\n'
+            const noVerify =
+                'GOAL\n  x\n\nCONSTRAINTS\n  - a\n\nACCEPTANCE\n  - b [static]\n\nVERIFY:\n'
             await expect(critiqueWithFallback(deps, makeP(noVerify))).rejects.toThrow(
                 /^no_verify_block$/
             )
