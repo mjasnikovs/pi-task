@@ -379,3 +379,18 @@ test('hasCommittableChanges: only what a commit would carry counts (mx5-n 0.42.4
     g('mv', 'src.ts', 'renamed.ts')
     expect(await hasCommittableChanges(dir)).toBe(true)
 })
+
+// git status names paths from the repo root. A task run from a subdirectory saw
+// `app/test-results/…`, which the artifact rule never matched.
+test('hasCommittableChanges: runner output under a subdirectory cwd is not an edit', async () => {
+    const {dir, g} = realRepo()
+    fs.mkdirSync(path.join(dir, 'app'))
+    fs.writeFileSync(path.join(dir, 'app', 'a.ts'), 'export const a = 1\n')
+    g('add', '-A')
+    g('commit', '-q', '-m', 'base')
+    fs.mkdirSync(path.join(dir, 'app', 'test-results'))
+    fs.writeFileSync(path.join(dir, 'app', 'test-results', 'shot.png'), 'png\n')
+    expect(await hasCommittableChanges(path.join(dir, 'app'))).toBe(false)
+    fs.writeFileSync(path.join(dir, 'app', 'b.ts'), 'export const b = 2\n')
+    expect(await hasCommittableChanges(path.join(dir, 'app'))).toBe(true)
+})

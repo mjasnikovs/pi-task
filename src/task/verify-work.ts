@@ -47,7 +47,7 @@ import {
 import {buildContractsVerifyBlock} from './contracts.js'
 import {findSkipEscapes, skipEscapeVerifyFindings} from './skip-escape.js'
 import {crossTaskDeletionVerifyFindings, type CrossTaskDeletion} from './task-provenance.js'
-import {missingDeclaredTests} from './criterion-binding.js'
+import {missingDeclaredTests, missingTestsReason} from './criterion-binding.js'
 import {
     addedSince,
     classifyHealthDelta,
@@ -1296,7 +1296,7 @@ export async function runWorkVerification(deps: VerificationDeps): Promise<Verif
                 // Named after what REGRESSED, not after whatever failed first: a lint
                 // red on arrival would otherwise stand in for the suite this task broke.
                 const regressed = regressedCommands(before, h).map(c =>
-                    addedSince(before, c) ? {...c, added: true} : c
+                    addedSince(before, c, baseline?.lazy === true) ? {...c, added: true} : c
                 )
                 if (regressed.length === 0) {
                     return {
@@ -1338,23 +1338,6 @@ export async function runWorkVerification(deps: VerificationDeps): Promise<Verif
     if (!deps.spec || deps.spec.trim().length === 0) {
         return {ok: true, reason: 'no spec to verify', ...inherited}
     }
-    // Before any model is asked: a test the spec bound an ACCEPTANCE line to and
-    // nobody wrote leaves that line unobserved, whatever a verifier would say.
-    const missing = missingDeclaredTests(deps.spec, deps.cwd)
-    if (missing.length > 0) {
-        return {
-            ok: false,
-            failClass: 'unbound-criterion',
-            reason:
-                `${VERIFY_FAIL_PREFIX['unbound-criterion']} ${missing
-                    .map(m => `\`${m.path}\` has no test "${m.title}" (${m.why})`)
-                    .join(
-                        '; '
-                    )} — write each so it fails when that behaviour breaks; a test that stubs `
-                + 'the behaviour itself observes nothing',
-            ...inherited
-        }
-    }
     // Every deterministic probe, one table row each (see PROBE_ADAPTERS): the row
     // knows which dep it reads, what it degrades to, and which notice block its
     // findings become. Each is an optional SHARPENER — an absent dep is skipped and
@@ -1379,6 +1362,22 @@ export async function runWorkVerification(deps: VerificationDeps): Promise<Verif
     // findings ride on a FAIL outcome (structured) so an ACCEPT can record them as
     // durable debts. The row's `empty` is `[]`, so this is always an array.
     const crossDeletions = (rawResults.get('crossTaskDeletion') ?? []) as CrossTaskDeletion[]
+    // Before any model is asked: a test the spec bound an ACCEPTANCE line to and
+    // nobody wrote leaves that line unobserved, whatever a verifier would say.
+    const missing = missingDeclaredTests(deps.spec, deps.cwd)
+    if (missing.length > 0) {
+        return {
+            ok: false,
+            failClass: 'unbound-criterion',
+            reason:
+                `${VERIFY_FAIL_PREFIX['unbound-criterion']} ${missingTestsReason(missing)} — write each `
+                + 'so it fails when that behaviour breaks; a test that stubs the behaviour itself '
+                + 'observes nothing',
+            ...(crossDeletions.length > 0 ? {crossTaskDeletions: crossDeletions} : {}),
+            ...inherited,
+            ...probed
+        }
+    }
     // Environment facts from earlier gate children (best-effort; a cache failure
     // must never block verification).
     let envNotes = ''

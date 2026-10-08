@@ -41,6 +41,7 @@ import {
     type CommandRunner
 } from './command-run.js'
 import {failClassOfReason, isHealthClass, isStaticClass} from './verify-work.js'
+import {declaredTestPresent, declaredTestsOfReason} from './criterion-binding.js'
 import {discoverTestCommands} from './repo-health-check.js'
 import {taskThatIntroduced} from './task-provenance.js'
 import {makeLedger} from './ledger.js'
@@ -636,6 +637,8 @@ export async function recheckAcceptDebts(
         /** The repo's test commands. A suite debt stores those it names joined, and
          *  each part is run alone so debts naming the same part share its run. */
         suiteCommands?: readonly string[]
+        /** Does the tree hold this declared test now? Settles an untested-acceptance debt. */
+        declaredTestPresent?: (testPath: string, title: string) => boolean
     }
 ): Promise<{open: AcceptDebt[]; resolved: AcceptDebt[]; trail: string[]}> {
     const open: AcceptDebt[] = []
@@ -692,6 +695,17 @@ export async function recheckAcceptDebts(
         }
         if (opts.staticOk && isStaticClassDebt(d.reason)) {
             resolved.push(d)
+            continue
+        }
+        if (opts.declaredTestPresent && failClassOfReason(d.reason) === 'unbound-criterion') {
+            const named = declaredTestsOfReason(d.reason)
+            const present = opts.declaredTestPresent
+            if (named.length > 0 && named.every(t => present(t.path, t.title))) {
+                resolved.push(d)
+                trail.push(`${d.taskId}: RESOLVED — every declared test it named now exists`)
+            } else {
+                open.push(d)
+            }
             continue
         }
         // VERIFY-COMMAND class, LAST so the two older classes decide exactly what they
@@ -906,7 +920,8 @@ export async function deriveOpenDebts(
             // by running that command, under the gate's own env-gap contract and behind
             // the no-write guard below.
             rerunVerify: cmd => rerunDebtVerifyCommand(cwd, cmd, run, signal),
-            suiteCommands: suiteManifest(cwd)
+            suiteCommands: suiteManifest(cwd),
+            declaredTestPresent: (testPath, title) => declaredTestPresent(cwd, testPath, title)
         }
     )
     if (resolved.length > 0 || rejudged) await writeAcceptDebts(cwd, [...closed, ...openRaw])

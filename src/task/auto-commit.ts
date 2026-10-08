@@ -131,6 +131,8 @@ export async function hasCommittableChanges(
         spawnFn
     )
     if (r.aborted || r.exitCode !== 0) return false
+    // Status names paths from the repo root; the artifact rule reads them from cwd.
+    const prefix = (await git(cwd, ['rev-parse', '--show-prefix'], signal, spawnFn)).stdout.trim()
     const entries = r.stdout.split('\0')
     for (let i = 0; i < entries.length; i++) {
         const entry = entries[i]
@@ -138,7 +140,9 @@ export async function hasCommittableChanges(
         const code = entry.slice(0, 2)
         // A rename or copy carries its source path as the next entry.
         if (/[RC]/.test(code)) i++
-        if (code === '??' && isDeletionExemptArtifact(entry.slice(3))) continue
+        const file = entry.slice(3)
+        const local = file.startsWith(prefix) ? file.slice(prefix.length) : file
+        if (code === '??' && isDeletionExemptArtifact(local)) continue
         return true
     }
     return false

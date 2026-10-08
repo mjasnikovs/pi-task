@@ -49,6 +49,9 @@ export interface HealthBaseline {
     /** The tree it describes, so a reader can tell whether it still applies. */
     treeHash: string | null
     outcome: HealthOutcome
+    /** Captured in a detached worktree with none of the tree's installed tools, so a
+     *  command it could not find says nothing about the tree. */
+    lazy?: true
 }
 
 /**
@@ -132,11 +135,15 @@ export function vanishedSuites(
  * A baseline that ran no check of the command's kind cannot tell: the lazy one
  * runs statics only, so every test command is missing from it.
  */
-export function addedSince(baseline: HealthSignal | null, c: HealthCommandResult): boolean {
+export function addedSince(
+    baseline: HealthSignal | null,
+    c: HealthCommandResult,
+    lazy = false
+): boolean {
     if (!baseline) return false
     const before = baseline.commands ?? []
     const prior = before.find(p => p.cmd === c.cmd)
-    if (prior) return prior.outcome === 'skip' && prior.gap === 'command-not-found'
+    if (prior) return !lazy && prior.outcome === 'skip' && prior.gap === 'command-not-found'
     const kind = c.kind ?? 'static'
     return before.some(p => (p.kind ?? 'static') === kind)
 }
@@ -198,6 +205,7 @@ export function parseHealthBaseline(section: string | null): HealthBaseline | nu
         return {
             at: typeof parsed.at === 'string' ? parsed.at : '',
             treeHash: typeof parsed.treeHash === 'string' ? parsed.treeHash : null,
+            ...(parsed.lazy === true ? {lazy: true as const} : {}),
             outcome: {
                 ok: outcome.ok,
                 reason: outcome.reason ?? '',
@@ -272,7 +280,8 @@ export async function lazyHealthBaseline(deps: LazyCaptureDeps): Promise<HealthB
         return {
             at: (deps.now?.() ?? new Date()).toISOString(),
             treeHash: await commitTreeHash(deps.git, 'HEAD'),
-            outcome
+            outcome,
+            lazy: true
         }
     } finally {
         // `--force` because the health run may have written into it (a `--fix`

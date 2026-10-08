@@ -10,11 +10,13 @@ import {
     planCoversHealthRed
 } from '../../src/task/health-repair.js'
 import {
-    ADDED_SUFFIX,
+    ADDED_MARK,
     captureHealthOutput,
     type HealthOutcome
 } from '../../src/task/repo-health-check.js'
-import {readFileSync} from 'node:fs'
+import {mkdtempSync, readFileSync} from 'node:fs'
+import {tmpdir} from 'node:os'
+import {readAcceptDebts, recordDebt} from '../../src/task/accept-debt.js'
 import * as path from 'node:path'
 
 const CWD = '/home/u/proj'
@@ -466,7 +468,7 @@ describe('checkpointMayRepair', () => {
 // A command a task added before its inputs existed is owed by the plan, not by a
 // repair: splicing one is how mx5-n 0.42.47 built step 12 at step 2.
 describe('checkpointMayRepair: added commands', () => {
-    const added = (cmd: string, code: number): string => `\`${cmd}\` exited ${code}${ADDED_SUFFIX}`
+    const added = (cmd: string, code: number): string => `\`${cmd}\`${ADDED_MARK} exited ${code}`
     test('a red owed only as added queues no repair, static or test', () => {
         const debts = [
             {
@@ -571,4 +573,28 @@ describe('a red test run names only the files that failed', () => {
             expect(healthReds(health, '/work', r.tracked)[0]?.files).toEqual([r.failing])
         })
     }
+})
+
+// The ledger clamps a long reason by cutting prose from the end of its longest
+// segment. A mark at the end of a segment was cut, or fused onto the next command.
+test('the added mark survives the ledger clamp and stays with its own command', async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'health-repair-clamp-'))
+    const long = 'x'.repeat(400)
+    await recordDebt(
+        dir,
+        'TASK_0007',
+        `test suite: \`bun run test\` exited 0 (runner reported: ${long}); \`bun run test:ct\`${ADDED_MARK} exited 1`,
+        'yolo-accepted'
+    )
+    const debts = await readAcceptDebts(dir)
+    expect(debts[0].reason.length).toBeLessThanOrEqual(300)
+    expect(
+        checkpointMayRepair({command: 'bun run test', exitCode: 0, files: [], kind: 'test'}, debts)
+    ).toBe(true)
+    expect(
+        checkpointMayRepair(
+            {command: 'bun run test:ct', exitCode: 1, files: [], kind: 'test'},
+            debts
+        )
+    ).toBe(false)
 })

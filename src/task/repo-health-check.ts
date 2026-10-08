@@ -400,14 +400,15 @@ export function isHealthRed(c: HealthCommandResult): boolean {
 }
 
 /**
- * Marks a red the task added. Debts store the reason verbatim and the checkpoint
- * reads it back (health-repair.ts), so this text is frozen like the prefixes.
+ * Marks a red the task added, right after its command: debts store the reason
+ * verbatim and the ledger clamps long prose, so the mark must sit where a clamp
+ * cannot part it from the command (health-repair.ts reads it back).
  */
-export const ADDED_SUFFIX = ' (added by this task, never ran before it)'
+export const ADDED_MARK = ' (added by this task)'
 
 function describeHealthRed(c: HealthCommandResult): string {
     if (c.outcome === 'fail') {
-        return `\`${c.cmd}\` exited ${c.exitCode}${reportedSuffix(c)}${c.added ? ADDED_SUFFIX : ''}`
+        return `\`${c.cmd}\`${c.added ? ADDED_MARK : ''} exited ${c.exitCode}${reportedSuffix(c)}`
     }
     return c.gap === 'part-empty-suite' ?
             `\`${c.cmd}\` found no tests in part of its suite`

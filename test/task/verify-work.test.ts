@@ -1,4 +1,4 @@
-import {ADDED_SUFFIX, type HealthCommandResult} from '../../src/task/repo-health-check.js'
+import {ADDED_MARK, type HealthCommandResult} from '../../src/task/repo-health-check.js'
 import type {EmittedNote} from '../../src/task/env-notes.js'
 import {describe, expect, test} from 'bun:test'
 import * as fs from 'node:fs'
@@ -1631,7 +1631,7 @@ test('a command added by this task fails as added, never as regressed', async ()
     if (out.ok) return
     expect(out.failClass).toBe('test-suite')
     expect(out.reason).toBe(
-        `test suite: \`bun run lint\` exited 2${ADDED_SUFFIX}; \`bun run test:ct\` exited 1${ADDED_SUFFIX}`
+        `test suite: \`bun run lint\`${ADDED_MARK} exited 2; \`bun run test:ct\`${ADDED_MARK} exited 1`
     )
     expect(out.health?.commands?.every(c => c.added === true)).toBe(true)
 })
@@ -1686,4 +1686,21 @@ describe('declared acceptance tests', () => {
         })
         expect(out.ok).toBe(true)
     })
+})
+
+// The missing-test FAIL returns before any model, but not before the
+// deterministic probes: an ACCEPT of it must still record a sibling's deletion.
+test('a missing declared test still carries the cross-task deletion findings', async () => {
+    const out = await runWorkVerification({
+        cwd: tmpDir('verify-binding-'),
+        spec: 'GOAL\nx\n\nACCEPTANCE\n- waits [test: ct/a.spec.tsx "waits"]\n',
+        probes: {
+            crossTaskDeletion: async () => [{path: 'playwright/index.ts', owner: 'TASK_0020'}]
+        },
+        runChild: async () => 'WORK-VERIFIED: PASS'
+    })
+    expect(out.ok).toBe(false)
+    if (out.ok) return
+    expect(out.failClass).toBe('unbound-criterion')
+    expect(out.crossTaskDeletions).toEqual([{path: 'playwright/index.ts', owner: 'TASK_0020'}])
 })

@@ -496,3 +496,32 @@ describe('addedSince', () => {
         expect(addedSince(LINT_GREEN, red('bun run lint', 'static'))).toBe(false)
     })
 })
+
+// A lazy baseline runs in a worktree without the tree's installed tools, so its
+// "command not found" is about the worktree. Read as "never ran", a task that
+// broke typecheck was excused as having added it.
+test('a lazy baseline cannot say a command was added', () => {
+    const lazy = outcome(true, [
+        {
+            cmd: 'bun run typecheck',
+            outcome: 'skip',
+            exitCode: null,
+            kind: 'static',
+            gap: 'command-not-found'
+        }
+    ])
+    const red: HealthCommandResult = {
+        cmd: 'bun run typecheck',
+        outcome: 'fail',
+        exitCode: 2,
+        kind: 'static'
+    }
+    expect(addedSince(lazy, red, true)).toBe(false)
+    expect(addedSince(lazy, red)).toBe(true)
+})
+
+test('the lazy mark survives the task-file round trip', () => {
+    const b: HealthBaseline = {at: 'T', treeHash: null, outcome: LINT_GREEN, lazy: true}
+    expect(parseHealthBaseline(formatHealthBaseline(b))?.lazy).toBe(true)
+    expect(parseHealthBaseline(formatHealthBaseline({...b, lazy: undefined}))?.lazy).toBeUndefined()
+})

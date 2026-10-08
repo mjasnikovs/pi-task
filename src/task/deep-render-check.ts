@@ -474,7 +474,7 @@ export function judgeDeepSession(f: DeepSessionFacts): DeepRenderOutcome {
         }
         const trail = f.postAuthTrail ?? []
         const where =
-            trail.some(step => step !== pathOf(f.urlAfter)) ?
+            trail.some(step => step !== routeOf(f.urlAfter)) ?
                 `it went ${trail.map(step => `\`${step}\``).join(' → ')} and ended on ${f.urlAfter}`
             :   `the page is still ${f.urlAfter}`
         // The cause named here seeds the fix child, so it is named only when the
@@ -1147,7 +1147,7 @@ export async function driveSession(
     const domJudgment = judgeRenderedDom(now?.html ?? '')
     const postAuthTrail = mainFrameNavs
         .filter(n => n.seq >= submitSeq)
-        .map(n => pathOf(n.url))
+        .map(n => routeOf(n.url))
         .filter((p, i, all) => i === 0 || p !== all[i - 1])
     const leftAuthWall = !(now?.hasPassword ?? false) || (now?.pathname ?? '') !== before.pathname
 
@@ -1180,6 +1180,16 @@ export async function driveSession(
             postAuthDomDetail: domJudgment.detail
         })
     )
+}
+
+/** The path a router acts on: a hash router keeps its route after the `#`. */
+function routeOf(url: string): string {
+    try {
+        const u = new URL(url)
+        return u.pathname + u.hash
+    } catch {
+        return url
+    }
 }
 
 function pathOf(url: string): string {

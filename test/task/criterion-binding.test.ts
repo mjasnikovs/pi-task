@@ -10,7 +10,9 @@ import * as path from 'node:path'
 import {tmpDir} from '../test-utils/tmp-dir.js'
 import {
     bindingOf,
+    declaredTestsOfReason,
     missingDeclaredTests,
+    missingTestsReason,
     unboundAcceptance
 } from '../../src/task/criterion-binding.js'
 
@@ -110,4 +112,45 @@ describe('missingDeclaredTests', () => {
         const s = spec('it builds [cmd: bun run build]', 'exists [static]', 'untagged')
         expect(missingDeclaredTests(s, repo())).toEqual([])
     })
+})
+
+// Shapes compose writes and source spells that a literal match missed: a quoted
+// path, a path with a space, and a title whose apostrophe the source escapes.
+// Each read as "no test" forever, and the task spent its autofix budget on it.
+describe('declared tests as written in real specs', () => {
+    test('a backticked path, with or without spaces, is the path', () => {
+        expect(bindingOf('x [test: `ct/a.spec.tsx` "t"]')).toEqual({
+            kind: 'test',
+            path: 'ct/a.spec.tsx',
+            title: 't'
+        })
+        expect(bindingOf('x [test: `ct/my dir/a.spec.tsx` "t"]')).toEqual({
+            kind: 'test',
+            path: 'ct/my dir/a.spec.tsx',
+            title: 't'
+        })
+    })
+
+    test("a title with an apostrophe matches the source's escaped spelling", () => {
+        const dir = tmpDir('criterion-binding-')
+        fs.mkdirSync(path.join(dir, 'test'))
+        fs.writeFileSync(
+            path.join(dir, 'test', 'b.test.ts'),
+            "test('a banned seller\\'s listings are hidden', () => {})\n"
+        )
+        const s = spec('hidden [test: test/b.test.ts "a banned seller\'s listings are hidden"]')
+        expect(missingDeclaredTests(s, dir)).toEqual([])
+    })
+})
+
+// The reason a missing test mints is the one the debt re-check reads back.
+test('a missing-test reason names every test, and reads back', () => {
+    const reason = missingTestsReason([
+        {bullet: 'b', path: 'ct/a.spec.tsx', title: 'waits', why: 'no file'},
+        {bullet: 'c', path: 'test/b.test.ts', title: 'redirects', why: 'no title'}
+    ])
+    expect(declaredTestsOfReason(`acceptance untested: ${reason}`)).toEqual([
+        {path: 'ct/a.spec.tsx', title: 'waits'},
+        {path: 'test/b.test.ts', title: 'redirects'}
+    ])
 })

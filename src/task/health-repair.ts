@@ -22,7 +22,7 @@
  * because its script is a placeholder `exit 1`, and no repair task can fix either.
  */
 import type {HealthSignal} from './health-baseline.js'
-import {ADDED_SUFFIX, isHealthRed, type HealthCommandResult} from './repo-health-check.js'
+import {ADDED_MARK, isHealthRed, type HealthCommandResult} from './repo-health-check.js'
 import {isQuietTestRow, reportedSuffix} from './command-run.js'
 import {parseRepairTitleFile} from './root-cause-repair.js'
 import {failClassOfReason, isHealthClass} from './verify-work.js'
@@ -141,15 +141,12 @@ function regressionsOf(red: HealthRed, openDebts: readonly OpenDebt[]): OpenDebt
             !FOUND_NOT_MADE.has(d.origin ?? '')
             && isHealthClass(failClassOfReason(d.reason))
             && d.reason.includes(said)
-            && !saysAdded(red, d)
     )
 }
 
 /** Does this debt record the command as added by its task (repo-health-check.ts)? */
 function saysAdded(red: HealthRed, d: OpenDebt): boolean {
-    const at = d.reason.indexOf(`\`${red.command}\` exited`)
-    if (at < 0) return false
-    return d.reason.slice(at).split('; ')[0].includes(ADDED_SUFFIX)
+    return d.reason.includes(`\`${red.command}\`${ADDED_MARK}`)
 }
 
 /**

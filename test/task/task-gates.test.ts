@@ -10,7 +10,7 @@ import {
 } from '../../src/task/task-gates.js'
 import {AUTOFIX_BUDGET} from '../../src/task/gate-resolution.js'
 import {ACCEPT_LABEL, parseResolutionVerdict} from '../../src/task/verify-resolution.js'
-import {ADDED_SUFFIX} from '../../src/task/repo-health-check.js'
+import {ADDED_MARK} from '../../src/task/repo-health-check.js'
 import {crossTaskDeletionReason, type DebtOrigin} from '../../src/task/accept-debt.js'
 import {getConfig} from '../../src/config/config.js'
 import {YOLO_STAMP} from '../../src/task/yolo.js'
@@ -966,7 +966,7 @@ test('a red the task ADDED gets no lint-fix and ACCEPT queues no repair (mx5-n 0
         handle.queueSelect(ACCEPT_LABEL)
         const trail: string[] = []
         let fixCalls = 0
-        const reason = `test suite: \`bun run lint\` exited 2${ADDED_SUFFIX}; \`bun run test:ct\` exited 1${ADDED_SUFFIX}`
+        const reason = `test suite: \`bun run lint\`${ADDED_MARK} exited 2; \`bun run test:ct\`${ADDED_MARK} exited 1`
         const deps = makeDeps({
             record: (_c, _i, line) => {
                 trail.push(line)

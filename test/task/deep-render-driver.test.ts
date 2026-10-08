@@ -279,6 +279,26 @@ describe('drive: the run-17 class', () => {
         expect((r as {detail: string}).detail).toContain('`/` → `/login`')
     })
 
+    testPosix("a hash router's bounce is in the trail", async () => {
+        let facts: DeepSessionFacts | null = null
+        const hashWall = {...wall('/'), url: `${BASE}/#/login`}
+        const r = await run(
+            fakeBrowser({
+                navigations: [landing],
+                onSubmit: [loginPost],
+                onSubmitFrames: [
+                    {url: `${BASE}/#/`, within: true},
+                    {url: `${BASE}/#/login`, within: true}
+                ],
+                inspect: [hashWall, hashWall]
+            }),
+            {onFacts: f => void (facts = f)}
+        )
+        expect(r.outcome).toBe('fail')
+        expect((facts as unknown as DeepSessionFacts).postAuthTrail).toEqual(['/#/', '/#/login'])
+        expect((r as {detail: string}).detail).toContain('`/#/` → `/#/login`')
+    })
+
     testPosix('an authenticated XHR answered by the SPA catch-all → fail', async () => {
         const r = await run(
             fakeBrowser({

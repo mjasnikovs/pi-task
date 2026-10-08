@@ -1260,3 +1260,23 @@ describe('closed debts (resolvedBy) — a repair closes what its check opened', 
         }
     })
 })
+
+// A test written after its task was accepted closes the debt: the check that
+// opened it is deterministic and cheap to run again.
+test('an untested-acceptance debt closes once its declared test exists', async () => {
+    const debt = {
+        taskId: 'TASK_0039',
+        reason: 'acceptance untested: `ct/main.spec.tsx` has no test "waits for the session" (no file) — write it',
+        origin: 'yolo-accepted' as const
+    }
+    const shut = await recheckAcceptDebts([debt], {
+        staticOk: false,
+        declaredTestPresent: (p, t) => p === 'ct/main.spec.tsx' && t === 'waits for the session'
+    })
+    expect(shut.resolved).toHaveLength(1)
+    const still = await recheckAcceptDebts([debt], {
+        staticOk: false,
+        declaredTestPresent: () => false
+    })
+    expect(still.open).toHaveLength(1)
+})
