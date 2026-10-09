@@ -581,7 +581,18 @@ export async function collectTaskTreeChanges(
     if (now.modified.length + now.deleted.length + now.added.length > 0) return now
     const last = await git(
         cwd,
-        ['diff', '--relative', '--name-status', 'HEAD~1..HEAD', '--', '.', EXCLUDE_TASKS_DIR],
+        [
+            // Spelled as statusFromCwd spells the uncommitted case.
+            '-c',
+            'core.quotePath=false',
+            'diff',
+            '--relative',
+            '--name-status',
+            'HEAD~1..HEAD',
+            '--',
+            '.',
+            EXCLUDE_TASKS_DIR
+        ],
         signal
     )
     return last.exitCode === 0 ? parseNameStatusChanges(last.stdout) : now

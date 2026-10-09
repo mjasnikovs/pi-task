@@ -25,7 +25,7 @@
 import * as fsp from 'node:fs/promises'
 import * as os from 'node:os'
 import * as path from 'node:path'
-import type {GitRunner} from '../shared/git-runner.js'
+import {revParsePrefix, type GitRunner} from '../shared/git-runner.js'
 import type {HealthCommandResult, HealthOutcome} from './repo-health-check.js'
 import {reportedSuffix} from './command-run.js'
 import {commitTreeHash} from './tree-hash.js'
@@ -277,7 +277,7 @@ export async function lazyHealthBaseline(deps: LazyCaptureDeps): Promise<HealthB
     if (added.exitCode !== 0) return null
     try {
         // The worktree checks out the whole repo; the task's project is cwd's part of it.
-        const prefix = (await deps.git(['rev-parse', '--show-prefix'])).stdout.trim()
+        const prefix = revParsePrefix((await deps.git(['rev-parse', '--show-prefix'])).stdout)
         const outcome = await deps.runHealthIn(path.join(dir, prefix))
         return {
             at: (deps.now?.() ?? new Date()).toISOString(),

@@ -105,7 +105,7 @@ test('runGatesForTask: clean verify ⇒ enforce EDIT mode; clean re-verify keeps
             },
             revert: () => {
                 reverted = true
-                return Promise.resolve()
+                return Promise.resolve(true)
             }
         })
         const r = await runGatesForTask(ctx, deps, baseParams({cwd: dir}))
@@ -187,7 +187,7 @@ test('runGatesForTask: enforce edits that REGRESS verify are reverted', async ()
             enforce: () => Promise.resolve({ok: true}),
             revert: () => {
                 reverted = true
-                return Promise.resolve()
+                return Promise.resolve(true)
             }
         })
         const r = await runGatesForTask(ctx, deps, baseParams({cwd: dir}))
@@ -608,7 +608,7 @@ test('record: enforce regression is recorded as re-verify FAILED → REVERTED', 
                 )
             },
             enforce: () => Promise.resolve({ok: true}),
-            revert: () => Promise.resolve()
+            revert: () => Promise.resolve(true)
         })
         const r = await runGatesForTask(ctx, deps, baseParams({cwd: dir}))
         expect(r.kind).toBe('done')
@@ -622,6 +622,36 @@ test('record: enforce regression is recorded as re-verify FAILED → REVERTED', 
                 )
             )
         ).toBe(true)
+    })
+})
+
+// A revert that did not happen must not be trailed as one.
+test('record: a failed revert of a regressed enforce commit is trailed as failed', async () => {
+    await withTmpTaskDir(async dir => {
+        const {ctx} = makeFakeCtx(dir)
+        const trail: string[] = []
+        let verifyCalls = 0
+        const deps = makeDeps({
+            record: (_cwd, _id, line) => {
+                trail.push(line)
+                return Promise.resolve()
+            },
+            verify: () => {
+                verifyCalls += 1
+                return Promise.resolve(
+                    verifyCalls === 1 ?
+                        {ok: true}
+                    :   {ok: false, failClass: 'model-verdict', reason: 'onClick handler gone'}
+                )
+            },
+            enforce: () => Promise.resolve({ok: true}),
+            revert: () => Promise.resolve(false)
+        })
+        const r = await runGatesForTask(ctx, deps, baseParams({cwd: dir}))
+        expect(r.kind).toBe('done')
+        const line = trail.find(l => l.startsWith('enforce: fixes committed but re-verify FAILED'))
+        expect(line).toContain('REVERT FAILED')
+        expect(line).not.toContain('— REVERTED')
     })
 })
 
@@ -650,7 +680,7 @@ test('record: enforce-revert FAIL is persisted as a durable defect for the final
             enforce: () => Promise.resolve({ok: true}),
             revert: c => {
                 reverted.push(c)
-                return Promise.resolve()
+                return Promise.resolve(true)
             },
             recordDebt: debtSinks({
                 'enforce-revert': (taskId, reason) => debts.push({taskId, reason})
@@ -710,7 +740,7 @@ function rootCauseDeps(over: Partial<GateDeps> = {}): {
         enforce: () => Promise.resolve({ok: true}),
         revert: c => {
             reverted.push(c)
-            return Promise.resolve()
+            return Promise.resolve(true)
         },
         recordDebt: debtSinks({
             'enforce-revert': (_id, reason) => revertDebts.push(reason),
@@ -832,7 +862,7 @@ function attributionDeps(over: Partial<GateDeps> = {}): {
         enforce: () => Promise.resolve({ok: true}),
         revert: c => {
             reverted.push(c)
-            return Promise.resolve()
+            return Promise.resolve(true)
         },
         recordDebt: debtSinks({
             'enforce-revert': (_id, reason) => revertDebts.push(reason),
@@ -1275,7 +1305,7 @@ test('enforce edits that REGRESS repo health (clean before → fail after) are d
             },
             revert: () => {
                 reverted++
-                return Promise.resolve()
+                return Promise.resolve(true)
             }
         })
         const r = await runGatesForTask(ctx, deps, baseParams({cwd: dir}))
@@ -1467,7 +1497,7 @@ test('enforce with no code edits skips the enforce commit AND the differential r
             dirty: () => Promise.resolve(false),
             revert: () => {
                 reverted++
-                return Promise.resolve()
+                return Promise.resolve(true)
             }
         })
         const r = await runGatesForTask(ctx, deps, baseParams({cwd: dir}))
@@ -1546,7 +1576,7 @@ test('enforce with real code edits still commits + differential-guards as before
             repoHealth: () => Promise.resolve({ok: true, reason: 'static checks passed'}),
             revert: () => {
                 reverted++
-                return Promise.resolve()
+                return Promise.resolve(true)
             }
         })
         const r = await runGatesForTask(ctx, deps, baseParams({cwd: dir}))

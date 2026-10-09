@@ -732,7 +732,7 @@ test('runAutoLoop: clean verify ⇒ enforce runs in EDIT mode; fixes that re-ver
             },
             revert: () => {
                 reverted = true
-                return Promise.resolve()
+                return Promise.resolve(true)
             }
         }
         await runAutoLoop(ctx, dir, 'TASK_AUTO_0001', d)
@@ -776,7 +776,7 @@ test('runAutoLoop: enforce edits that REGRESS the verify signal are reverted, no
             enforce: () => Promise.resolve({ok: true}),
             revert: () => {
                 reverted = true
-                return Promise.resolve()
+                return Promise.resolve(true)
             }
         }
         await runAutoLoop(ctx, dir, 'TASK_AUTO_0001', d)

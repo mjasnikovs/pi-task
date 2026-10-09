@@ -8,9 +8,11 @@
  * `{committed: false, reason: 'nothing to commit'}`. Nothing throws — the task
  * already succeeded, and a failed snapshot must not undo that.
  */
+import {existsSync} from 'node:fs'
 import * as fsp from 'node:fs/promises'
 import * as path from 'node:path'
 import {runChildDefault, type SpawnFn} from '../shared/child-process.js'
+import {revParsePrefix} from '../shared/git-runner.js'
 import {isDeletionExemptArtifact} from './regenerable-artifacts.js'
 
 /** The gate machinery's own state/forensic dir — the trail, debug logs, and per-run
@@ -136,7 +138,9 @@ export async function hasCommittableChanges(
         if (entry.length < 4) continue
         if (entry.slice(0, 2) !== '??') return true
         // Status names paths from the repo root; the artifact rule reads them from cwd.
-        prefix ??= (await git(cwd, ['rev-parse', '--show-prefix'], signal, spawnFn)).stdout.trim()
+        prefix ??= revParsePrefix(
+            (await git(cwd, ['rev-parse', '--show-prefix'], signal, spawnFn)).stdout
+        )
         const file = entry.slice(3)
         if (isDeletionExemptArtifact(file.startsWith(prefix) ? file.slice(prefix.length) : file))
             continue
@@ -244,13 +248,14 @@ export async function gitCommitAll(
     // 5. Commit. A failure here is usually missing user.name/user.email config —
     //    retry once with a self-supplied identity rather than losing the snapshot
     //    (and with it enforce + every differential guard) for the whole run.
-    const commit = await git(cwd, ['commit', '-m', message, '--', '.'], signal, spawnFn)
+    const only = (await concludingMerge(cwd, signal, spawnFn)) ? [] : ['--', '.']
+    const commit = await git(cwd, ['commit', '-m', message, ...only], signal, spawnFn)
     if (commit.aborted) return {committed: false, reason: 'cancelled'}
     if (commit.exitCode !== 0) {
         if (isIdentityFailure(commit.stderr || commit.stdout)) {
             const retry = await git(
                 cwd,
-                [...FALLBACK_IDENTITY_ARGS, 'commit', '-m', message, '--', '.'],
+                [...FALLBACK_IDENTITY_ARGS, 'commit', '-m', message, ...only],
                 signal,
                 spawnFn
             )
@@ -275,6 +280,26 @@ export async function gitCommitAll(
     return {committed: true, ...(excluded.length > 0 ? {excluded} : {})}
 }
 
+/** A merge or cherry-pick in progress: git refuses a commit limited to cwd then,
+ *  and concluding it takes the whole index anyway. */
+async function concludingMerge(
+    cwd: string,
+    signal?: AbortSignal,
+    spawnFn?: SpawnFn
+): Promise<boolean> {
+    const r = await git(
+        cwd,
+        ['rev-parse', '--git-path', 'MERGE_HEAD', '--git-path', 'CHERRY_PICK_HEAD'],
+        signal,
+        spawnFn
+    )
+    if (r.exitCode !== 0) return false
+    return r.stdout
+        .split('\n')
+        .filter(l => l.length > 0)
+        .some(l => existsSync(path.resolve(cwd, l)))
+}
+
 /**
  * Drop the last commit, restoring the files it changed to its parent — the
  * differential guard's "revert" when an `'edit'` enforcement pass regressed the
@@ -283,57 +308,39 @@ export async function gitCommitAll(
  * regression, this throws the enforce commit away and brings back the verified
  * task commit underneath it.
  *
- * Only the commit's own files move. A task commit holds only cwd, so a sibling
- * package's uncommitted edits are still in the worktree here, and a repo-wide
- * `reset --hard HEAD~1` destroyed them.
+ * Only cwd and the commit's own files move. A task commit holds only cwd, so a
+ * sibling package's uncommitted edits are still in the worktree here, and a
+ * repo-wide `reset --hard HEAD~1` destroyed them. `reset --keep` moves just the
+ * files the commit changed, in one step, and refuses rather than overwrite one
+ * that is dirty. What the re-verify wrote in cwd is discarded first, as the old
+ * `reset --hard` did, so its build output cannot block that.
  *
  * It must NOT rewind the forensic gate trail either. `.pi-tasks/` is frequently
  * TRACKED here — unlike the accept-debt ledger's writers, the per-task snapshot
  * stages it with no exclusion — so restoring it with the source ERASES every trail
  * line written after the snapshot. It is snapshotted first and written back after.
  *
- * Best-effort and never throws: a git failure is swallowed, since the caller has
- * already decided to keep the verified work and a failed revert only leaves the
- * enforce commit in place, which is surfaced as a warning. Called on a directory
- * that is not a repo at all, it returns without throwing.
+ * Never throws. Answers whether the commit was dropped, so the caller does not
+ * trail a revert that did not happen.
  */
 export async function gitDropLastCommit(
     cwd: string,
     signal?: AbortSignal,
     spawnFn?: SpawnFn
-): Promise<void> {
+): Promise<boolean> {
     const trail = await snapshotTrail(cwd)
-    const top = await git(cwd, ['rev-parse', '--show-toplevel'], signal, spawnFn)
-    const changed = await git(
+    const cleaned = await git(
         cwd,
-        ['diff', '--name-only', '-z', '--no-renames', 'HEAD~1', 'HEAD'],
+        ['restore', '--source=HEAD', '--staged', '--worktree', '--', '.'],
         signal,
         spawnFn
     )
-    if (top.exitCode !== 0 || changed.exitCode !== 0) return
-    if (changed.stdout.length > 0) {
-        const restored = await runChildDefault(
-            {
-                command: 'git',
-                args: [
-                    'restore',
-                    '--source=HEAD~1',
-                    '--staged',
-                    '--worktree',
-                    '--pathspec-from-file=-',
-                    '--pathspec-file-nul'
-                ],
-                stdin: changed.stdout
-            },
-            top.stdout.trim(),
-            signal,
-            {mode: 'text'},
-            spawnFn
-        )
-        if (restored.exitCode !== 0) return
-    }
-    await git(cwd, ['reset', '--soft', 'HEAD~1'], signal, spawnFn)
+    const dropped =
+        !cleaned.aborted
+        && cleaned.exitCode === 0
+        && (await git(cwd, ['reset', '--keep', 'HEAD~1'], signal, spawnFn)).exitCode === 0
     await restoreTrail(cwd, trail)
+    return dropped
 }
 
 /** Read every file under `.pi-tasks/` into memory (relative path → bytes). Best-effort:

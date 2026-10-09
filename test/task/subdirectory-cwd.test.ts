@@ -185,3 +185,99 @@ test('a frozen-path revert names the files it reverted from cwd', async () => {
     expect(await revertFrozenPaths(['a.ts'], makeGit(app))).toEqual(['a.ts'])
     expect(fs.readFileSync(path.join(app, 'a.ts'), 'utf8')).toBe('export const a = 1\n')
 })
+
+// A file name is a glob to a pathspec: `[pkg]/a.ts` also names `p/a.ts`.
+test('dropping the enforce commit keeps a sibling whose name its files match as a glob', async () => {
+    const {dir, app, g} = repo('[pkg]')
+    fs.mkdirSync(path.join(dir, 'p'))
+    fs.writeFileSync(path.join(dir, 'p', 'a.ts'), 'export const p = 1\n')
+    g('add', '-A')
+    g('commit', '-q', '-m', 'task')
+    fs.writeFileSync(path.join(app, 'a.ts'), 'export const a = 3\n')
+    await gitCommitAll(app, 'ENFORCE GUIDELINES')
+    fs.writeFileSync(path.join(dir, 'p', 'a.ts'), 'export const p = 2\n')
+    const dropped = await gitDropLastCommit(app)
+    expect(fs.readFileSync(path.join(app, 'a.ts'), 'utf8')).toBe('export const a = 1\n')
+    expect(fs.readFileSync(path.join(dir, 'p', 'a.ts'), 'utf8')).toBe('export const p = 2\n')
+    expect(dropped).toBe(true)
+})
+
+test('dropping the enforce commit works under a diff.relative config', async () => {
+    const {app, g} = repo()
+    g('config', 'diff.relative', 'true')
+    fs.writeFileSync(path.join(app, 'a.ts'), 'export const a = 3\n')
+    await gitCommitAll(app, 'ENFORCE GUIDELINES')
+    const dropped = await gitDropLastCommit(app)
+    expect(g('log', '-1', '--format=%s')).toBe('base')
+    expect(fs.readFileSync(path.join(app, 'a.ts'), 'utf8')).toBe('export const a = 1\n')
+    expect(dropped).toBe(true)
+})
+
+// The re-verify's build can rewrite a tracked file after the enforce commit.
+test('dropping the enforce commit discards what the re-verify wrote in cwd', async () => {
+    const {app, g} = repo()
+    fs.writeFileSync(path.join(app, 'a.ts'), 'export const a = 3\n')
+    await gitCommitAll(app, 'ENFORCE GUIDELINES')
+    fs.writeFileSync(path.join(app, 'a.ts'), 'export const a = 4\n')
+    fs.writeFileSync(path.join(app, '.gitignore'), 'built\n')
+    const dropped = await gitDropLastCommit(app)
+    expect(fs.readFileSync(path.join(app, 'a.ts'), 'utf8')).toBe('export const a = 1\n')
+    expect(fs.readFileSync(path.join(app, '.gitignore'), 'utf8')).toBe('.env\n')
+    expect(g('status', '--porcelain')).toBe('')
+    expect(dropped).toBe(true)
+})
+
+test('a drop that cannot happen says so', async () => {
+    const {app} = repo()
+    expect(await gitDropLastCommit(app)).toBe(false)
+})
+
+// git refuses a commit with a pathspec while a merge is in progress.
+test("a task's commit concludes a merge in progress", async () => {
+    const {app, g} = repo()
+    g('checkout', '-q', '-b', 'other')
+    fs.writeFileSync(path.join(app, 'a.ts'), 'export const a = 5\n')
+    g('commit', '-qam', 'other')
+    g('checkout', '-q', 'main')
+    fs.writeFileSync(path.join(app, 'a.ts'), 'export const a = 6\n')
+    g('commit', '-qam', 'main')
+    try {
+        g('merge', '-q', 'other')
+    } catch {
+        // the conflict is the point
+    }
+    fs.writeFileSync(path.join(app, 'a.ts'), 'export const a = 7\n')
+    g('add', 'app/a.ts')
+    expect(await gitCommitAll(app, 'task')).toEqual({committed: true})
+    expect(g('rev-list', '--parents', '-1', 'HEAD').split(' ')).toHaveLength(3)
+})
+
+// rev-parse prints the prefix as it is, and a directory name can begin with a space.
+test('the tree changes name a file in a package whose name starts with a space', async () => {
+    const {app} = repo(' app')
+    fs.writeFileSync(path.join(app, 'a.ts'), 'export const a = 2\n')
+    expect((await collectTreeChanges(app)).modified).toEqual(['a.ts'])
+})
+
+// Status names a non-ASCII path as it is; the committed fallback must match it.
+test('the committed fallback names a non-ASCII file as status does', async () => {
+    const {app, g} = repo()
+    fs.writeFileSync(path.join(app, 'ü.ts'), 'x\n')
+    expect((await collectTreeChanges(app)).added).toEqual(['ü.ts'])
+    g('add', '-A')
+    g('commit', '-q', '-m', 'work')
+    expect((await collectTaskTreeChanges(app)).added).toEqual(['ü.ts'])
+})
+
+// One untracked name in a checkout's pathspec fails the whole checkout.
+test('a frozen-path revert of an edit and a new file undoes both', async () => {
+    const {app} = repo()
+    fs.writeFileSync(path.join(app, 'a.ts'), 'export const a = 2\n')
+    fs.writeFileSync(path.join(app, 'new.ts'), 'x\n')
+    expect((await revertFrozenPaths(['a.ts', 'new.ts'], makeGit(app))).sort()).toEqual([
+        'a.ts',
+        'new.ts'
+    ])
+    expect(fs.readFileSync(path.join(app, 'a.ts'), 'utf8')).toBe('export const a = 1\n')
+    expect(fs.existsSync(path.join(app, 'new.ts'))).toBe(false)
+})

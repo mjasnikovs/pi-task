@@ -157,7 +157,7 @@ export interface GateDeps {
      * verified task commit (the differential guard's revert). Absent → the guard
      * skips the revert and warns.
      */
-    revert?: (cwd: string) => Promise<void>
+    revert?: (cwd: string) => Promise<boolean>
     /**
      * BOUNDED fix for a repo-health verify FAIL: a small read,edit,bash child fixes
      * exactly the static findings (revert-guarded — see lint-fix.ts), instead of the
@@ -387,6 +387,12 @@ export async function askVerifyResolution(
  * half. A suite regressed beside a lint still leaves the lint for it to fix; told
  * about the suite too, it would chase a red its static check cannot observe.
  */
+/** How a regressed enforce commit's revert went: `undefined` when there was none to call. */
+function revertNote(reverted: boolean | undefined): string {
+    if (reverted === undefined) return 'left in place (no revert available)'
+    return reverted ? 'REVERTED' : 'REVERT FAILED, left in place'
+}
+
 function staticFixReason(verified: VerifyOutcome, failClass: VerifyFailClass): string | null {
     if (failClass !== 'repo-health' && failClass !== 'test-suite') return null
     // A check the task added has nothing to fix yet: lint-fix greened mx5-n's empty
@@ -1053,9 +1059,9 @@ export async function runEnforcePass(
                         'warning'
                     )
                 } else if (!after.ok) {
-                    if (deps.revert) await deps.revert(p.cwd)
+                    const reverted = deps.revert ? await deps.revert(p.cwd) : undefined
                     await rec(
-                        `enforce: fixes committed but re-verify FAILED (${(after.reason ?? 'now fails').slice(0, 200)}) — ${deps.revert ? 'REVERTED' : 'left in place (no revert available)'}`
+                        `enforce: fixes committed but re-verify FAILED (${(after.reason ?? 'now fails').slice(0, 200)}) — ${revertNote(reverted)}`
                             // Why the attribution filter did NOT save the edits, so a
                             // revert is explainable from the trail alone.
                             + (attribution ?
@@ -1080,7 +1086,7 @@ export async function runEnforcePass(
                     )
                     notifyRun(
                         active,
-                        `${p.tag}: guideline fixes regressed verification on "${p.title}" (${(after.reason ?? 'now fails').slice(0, 120)}) — ${deps.revert ? 'reverted them, kept the verified work' : 'left in place (no revert available)'}.`,
+                        `${p.tag}: guideline fixes regressed verification on "${p.title}" (${(after.reason ?? 'now fails').slice(0, 120)}) — ${reverted === true ? 'reverted them, kept the verified work' : revertNote(reverted)}.`,
                         'warning'
                     )
                 } else {

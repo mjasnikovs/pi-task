@@ -66,7 +66,7 @@ export async function statusFromCwd(
 ): Promise<{stdout: string; exitCode: number}> {
     const r = await git(['-c', 'core.quotePath=false', 'status', '--porcelain', ...args])
     if (r.exitCode !== 0 || r.stdout.length === 0) return r
-    const prefix = (await git(['rev-parse', '--show-prefix'])).stdout.trim()
+    const prefix = revParsePrefix((await git(['rev-parse', '--show-prefix'])).stdout)
     if (prefix.length === 0) return r
     const quotedPrefix = cEscaped(prefix)
     const local = (p: string): string =>
@@ -77,6 +77,12 @@ export async function statusFromCwd(
             l.length < 4 ? l : l.slice(0, 3) + l.slice(3).split(' -> ').map(local).join(' -> ')
         )
     return {...r, stdout: lines.join('\n')}
+}
+
+/** `rev-parse --show-prefix` minus its newline. Not `trim()`: a directory name can
+ *  begin or end with a space. */
+export function revParsePrefix(stdout: string): string {
+    return stdout.replace(/\n$/, '')
 }
 
 /** `p` named from the repo root, renamed from `prefix`, keeping a directory's `/`. */
