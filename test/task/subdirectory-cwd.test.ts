@@ -248,7 +248,7 @@ test("a task's commit concludes a merge in progress", async () => {
     }
     fs.writeFileSync(path.join(app, 'a.ts'), 'export const a = 7\n')
     g('add', 'app/a.ts')
-    expect(await gitCommitAll(app, 'task')).toEqual({committed: true})
+    expect((await gitCommitAll(app, 'task')).committed).toBe(true)
     expect(g('rev-list', '--parents', '-1', 'HEAD').split(' ')).toHaveLength(3)
 })
 
