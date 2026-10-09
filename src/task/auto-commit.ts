@@ -89,7 +89,7 @@ export async function git(
  * its edits to it committed. Excluding by directory pathspec instead
  * (`:(exclude)coverage/`) would silently stop committing those.
  *
- * Best-effort: any git failure yields an empty list, i.e. a plain `git add -A`.
+ * Best-effort: any git failure yields an empty list, so nothing is excluded.
  */
 export async function untrackedArtifacts(
     cwd: string,
@@ -194,9 +194,10 @@ export async function gitStashRef(
 }
 
 /**
- * Stage everything (`git add -A`) and commit it with `message`. Honors
- * .gitignore via git itself. Never throws — failures surface as
- * `{committed: false, reason}` so the caller can warn and keep going.
+ * Stage and commit everything under cwd with `message`. A sibling package's edits,
+ * staged or not, stay out. Honors .gitignore via git itself. Never throws —
+ * failures surface as `{committed: false, reason}` so the caller can warn and keep
+ * going.
  */
 export async function gitCommitAll(
     cwd: string,
@@ -236,20 +237,20 @@ export async function gitCommitAll(
 
     // 4. Anything staged? `git diff --cached --quiet` exits 0 when the index
     //    matches HEAD (nothing to commit), 1 when there are staged changes.
-    const diff = await git(cwd, ['diff', '--cached', '--quiet'], signal, spawnFn)
+    const diff = await git(cwd, ['diff', '--cached', '--quiet', '--', '.'], signal, spawnFn)
     if (diff.aborted) return {committed: false, reason: 'cancelled'}
     if (diff.exitCode === 0) return {committed: false, reason: 'nothing to commit'}
 
     // 5. Commit. A failure here is usually missing user.name/user.email config —
     //    retry once with a self-supplied identity rather than losing the snapshot
     //    (and with it enforce + every differential guard) for the whole run.
-    const commit = await git(cwd, ['commit', '-m', message], signal, spawnFn)
+    const commit = await git(cwd, ['commit', '-m', message, '--', '.'], signal, spawnFn)
     if (commit.aborted) return {committed: false, reason: 'cancelled'}
     if (commit.exitCode !== 0) {
         if (isIdentityFailure(commit.stderr || commit.stdout)) {
             const retry = await git(
                 cwd,
-                [...FALLBACK_IDENTITY_ARGS, 'commit', '-m', message],
+                [...FALLBACK_IDENTITY_ARGS, 'commit', '-m', message, '--', '.'],
                 signal,
                 spawnFn
             )
@@ -275,26 +276,24 @@ export async function gitCommitAll(
 }
 
 /**
- * Drop the last commit, restoring the tree to its parent — the differential
- * guard's "revert" when an `'edit'` enforcement pass regressed the verified task
- * commit. The enforcement fixes are committed first (as `ENFORCE GUIDELINES`);
- * when re-running verification against that commit reports a regression, this
- * `git reset --hard HEAD~1` throws the enforce commit away and brings back the
- * verified task commit underneath it.
+ * Drop the last commit, restoring the files it changed to its parent — the
+ * differential guard's "revert" when an `'edit'` enforcement pass regressed the
+ * verified task commit. The enforcement fixes are committed first (as `ENFORCE
+ * GUIDELINES`); when re-running verification against that commit reports a
+ * regression, this throws the enforce commit away and brings back the verified
+ * task commit underneath it.
  *
- * `reset --hard` targets the enforce pass's in-place SOURCE edits. But it must NOT
- * rewind the forensic gate trail. `.pi-tasks/` is frequently TRACKED here — unlike
- * the accept-debt ledger's writers, the per-task snapshot stages it with a plain
- * `git add -A` and no exclusion — so a bare reset rewinds the task file along with
- * the source and ERASES every trail line written after the snapshot.
+ * Only the commit's own files move. A task commit holds only cwd, so a sibling
+ * package's uncommitted edits are still in the worktree here, and a repo-wide
+ * `reset --hard HEAD~1` destroyed them.
  *
- * Both halves were run on a real repo. A bare `reset --hard HEAD~1` restored the
- * source AND dropped the trail line added after the snapshot; calling this
- * function on the identical setup restored the source and kept that line. The
- * revert undoes code, the audit log survives.
+ * It must NOT rewind the forensic gate trail either. `.pi-tasks/` is frequently
+ * TRACKED here — unlike the accept-debt ledger's writers, the per-task snapshot
+ * stages it with no exclusion — so restoring it with the source ERASES every trail
+ * line written after the snapshot. It is snapshotted first and written back after.
  *
  * Best-effort and never throws: a git failure is swallowed, since the caller has
- * already decided to keep the verified work and a failed reset only leaves the
+ * already decided to keep the verified work and a failed revert only leaves the
  * enforce commit in place, which is surfaced as a warning. Called on a directory
  * that is not a repo at all, it returns without throwing.
  */
@@ -304,7 +303,36 @@ export async function gitDropLastCommit(
     spawnFn?: SpawnFn
 ): Promise<void> {
     const trail = await snapshotTrail(cwd)
-    await git(cwd, ['reset', '--hard', 'HEAD~1'], signal, spawnFn)
+    const top = await git(cwd, ['rev-parse', '--show-toplevel'], signal, spawnFn)
+    const changed = await git(
+        cwd,
+        ['diff', '--name-only', '-z', '--no-renames', 'HEAD~1', 'HEAD'],
+        signal,
+        spawnFn
+    )
+    if (top.exitCode !== 0 || changed.exitCode !== 0) return
+    if (changed.stdout.length > 0) {
+        const restored = await runChildDefault(
+            {
+                command: 'git',
+                args: [
+                    'restore',
+                    '--source=HEAD~1',
+                    '--staged',
+                    '--worktree',
+                    '--pathspec-from-file=-',
+                    '--pathspec-file-nul'
+                ],
+                stdin: changed.stdout
+            },
+            top.stdout.trim(),
+            signal,
+            {mode: 'text'},
+            spawnFn
+        )
+        if (restored.exitCode !== 0) return
+    }
+    await git(cwd, ['reset', '--soft', 'HEAD~1'], signal, spawnFn)
     await restoreTrail(cwd, trail)
 }
 

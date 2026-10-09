@@ -19,12 +19,13 @@ import {
 import {captureCommitDiff} from '../../src/task/enforce-guidelines.js'
 import {captureGitState, reconcileGitState} from '../../src/task/git-state-guard.js'
 import {lazyHealthBaseline} from '../../src/task/health-baseline.js'
-import {gitCommitAll} from '../../src/task/auto-commit.js'
+import {gitCommitAll, gitDropLastCommit} from '../../src/task/auto-commit.js'
+import {revertFrozenPaths} from '../../src/task/frozen-path-guard.js'
 
 // Real git subprocesses, several per test.
 setDefaultTimeout(30_000)
 
-function repo(): {dir: string; app: string; g: (...a: string[]) => string} {
+function repo(pkg = 'app'): {dir: string; app: string; g: (...a: string[]) => string} {
     const dir = tmpDir('pi-subdir-')
     const g = (...a: string[]): string =>
         execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', ...a], {
@@ -33,7 +34,7 @@ function repo(): {dir: string; app: string; g: (...a: string[]) => string} {
         }).trim()
     g('init', '-q', '-b', 'main')
     g('config', 'core.autocrlf', 'false')
-    const app = path.join(dir, 'app')
+    const app = path.join(dir, pkg)
     fs.mkdirSync(app)
     fs.writeFileSync(path.join(app, 'a.ts'), 'export const a = 1\n')
     fs.writeFileSync(path.join(app, '.gitignore'), '.env\n')
@@ -49,6 +50,22 @@ test('statusFromCwd names every path from cwd', async () => {
     fs.writeFileSync(path.join(app, 'my new.ts'), 'x\n')
     const r = await statusFromCwd(makeGit(app), ['--', '.'])
     expect(r.stdout.split('\n').filter(Boolean).sort()).toEqual([' M a.ts', '?? "my new.ts"'])
+})
+
+// Porcelain octal-escapes a non-ASCII path, and the raw prefix never matched it.
+test('statusFromCwd names a path in a non-ASCII package from cwd', async () => {
+    const {app} = repo('pkg-ü')
+    fs.writeFileSync(path.join(app, 'a.ts'), 'export const a = 2\n')
+    const r = await statusFromCwd(makeGit(app), ['--', '.'])
+    expect(r.stdout.trim()).toBe('M a.ts')
+})
+
+// A pathspec can reach outside cwd. Its root name read from cwd is another file.
+test('statusFromCwd names a path outside cwd as one cwd can open', async () => {
+    const {dir, app} = repo()
+    fs.writeFileSync(path.join(dir, 'sibling.ts'), 'export const s = 2\n')
+    const r = await statusFromCwd(makeGit(app), ['--', '../sibling.ts'])
+    expect(r.stdout.trim()).toBe('M ../sibling.ts')
 })
 
 test('the tree changes name the edited file from cwd', async () => {
@@ -123,4 +140,48 @@ test("a task's commit leaves a sibling package's edit alone", async () => {
     fs.writeFileSync(path.join(dir, 'sibling.ts'), 'export const s = 2\n')
     expect((await gitCommitAll(app, 'task')).committed).toBe(true)
     expect(g('show', '--name-only', '--format=', 'HEAD')).toBe('app/a.ts')
+})
+
+// `git add -- .` scoped the staging, but the commit took the whole index.
+test("a task's commit leaves out a sibling's staged edit", async () => {
+    const {dir, app, g} = repo()
+    fs.writeFileSync(path.join(dir, 'sibling.ts'), 'export const s = 2\n')
+    g('add', 'sibling.ts')
+    expect((await gitCommitAll(app, 'task')).reason).toBe('nothing to commit')
+    fs.writeFileSync(path.join(app, 'a.ts'), 'export const a = 2\n')
+    expect((await gitCommitAll(app, 'task')).committed).toBe(true)
+    expect(g('show', '--name-only', '--format=', 'HEAD')).toBe('app/a.ts')
+    expect(g('diff', '--cached', '--name-only')).toBe('sibling.ts')
+})
+
+test("a task's commit records a file it deleted", async () => {
+    const {app, g} = repo()
+    fs.rmSync(path.join(app, 'a.ts'))
+    expect((await gitCommitAll(app, 'task')).committed).toBe(true)
+    expect(g('show', '--name-status', '--format=', 'HEAD')).toBe('D\tapp/a.ts')
+})
+
+// The task commit no longer holds a sibling's edit, so a repo-wide reset of the
+// enforce commit threw it away.
+test("dropping the enforce commit keeps a sibling's uncommitted edit", async () => {
+    const {dir, app, g} = repo()
+    fs.writeFileSync(path.join(dir, 'sibling.ts'), 'export const s = 2\n')
+    fs.writeFileSync(path.join(app, 'a.ts'), 'export const a = 2\n')
+    await gitCommitAll(app, 'task')
+    fs.writeFileSync(path.join(app, 'a.ts'), 'export const a = 3\n')
+    fs.writeFileSync(path.join(app, 'added.ts'), 'x\n')
+    await gitCommitAll(app, 'ENFORCE GUIDELINES')
+    await gitDropLastCommit(app)
+    expect(g('log', '-1', '--format=%s')).toBe('task')
+    expect(fs.readFileSync(path.join(app, 'a.ts'), 'utf8')).toBe('export const a = 2\n')
+    expect(fs.existsSync(path.join(app, 'added.ts'))).toBe(false)
+    expect(fs.readFileSync(path.join(dir, 'sibling.ts'), 'utf8')).toBe('export const s = 2\n')
+    expect(g('status', '--porcelain')).toBe('M sibling.ts')
+})
+
+test('a frozen-path revert names the files it reverted from cwd', async () => {
+    const {app} = repo()
+    fs.writeFileSync(path.join(app, 'a.ts'), 'export const a = 2\n')
+    expect(await revertFrozenPaths(['a.ts'], makeGit(app))).toEqual(['a.ts'])
+    expect(fs.readFileSync(path.join(app, 'a.ts'), 'utf8')).toBe('export const a = 1\n')
 })

@@ -1180,11 +1180,11 @@ export async function driveSession(
 }
 
 /** The path a router acts on: a hash router keeps its route after the `#`, where
- *  a plain anchor (`/login#error`) is not a route. */
+ *  a plain anchor (`/login#error`) is not a route. A query is not a route either. */
 function routeOf(url: string): string {
     try {
         const u = new URL(url)
-        return u.pathname + (/^#!?\//.test(u.hash) ? u.hash : '')
+        return u.pathname + (/^#!?\//.test(u.hash) ? u.hash.replace(/\?.*$/, '') : '')
     } catch {
         return url
     }

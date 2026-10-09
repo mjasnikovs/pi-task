@@ -1753,19 +1753,22 @@ test('a missing declared test still carries the cross-task deletion findings', a
 })
 
 // The evidence probe runs the project's build, which the FAIL a file read already
-// decided cannot use. Each autofix round on a missing test paid for it.
-test('a missing declared test runs no probe but the cross-task deletion one', async () => {
+// decided cannot use. Each autofix round on a missing test paid for it. The other
+// probes are cheap, and the autofix re-run is told what they found.
+test('a missing declared test skips the build, not what the re-run is told', async () => {
     const ran: string[] = []
     const out = await runWorkVerification({
         cwd: tmpDir('verify-binding-'),
         spec: 'GOAL\nx\n\nACCEPTANCE\n- waits [test: ct/a.spec.tsx "waits"]\n',
         probes: {
             evidence: async () => (ran.push('evidence'), ['`bun run build` exited 0']),
-            substitution: async () => (ran.push('substitution'), []),
+            prohibition: async () => (ran.push('prohibition'), ['src/frozen.ts — modified']),
             crossTaskDeletion: async () => (ran.push('crossTaskDeletion'), [])
         },
         runChild: async () => 'WORK-VERIFIED: PASS'
     })
     expect(out.ok).toBe(false)
-    expect(ran).toEqual(['crossTaskDeletion'])
+    expect(ran).not.toContain('evidence')
+    expect(ran).toContain('crossTaskDeletion')
+    expect(out.ok ? undefined : out.probes?.prohibition).toEqual(['src/frozen.ts — modified'])
 })

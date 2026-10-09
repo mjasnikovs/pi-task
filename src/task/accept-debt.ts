@@ -33,7 +33,6 @@
  */
 import {existsSync} from 'node:fs'
 import * as path from 'node:path'
-import * as fsp from 'node:fs/promises'
 import {
     reportedSuffix,
     runVerifyCommandLine,
@@ -52,6 +51,7 @@ import {taskThatIntroduced} from './task-provenance.js'
 import {makeLedger} from './ledger.js'
 import {parseVerifyBlockStrict} from './spec-validation.js'
 import {taskFilePath} from './task-io.js'
+import {readTextFile} from '../shared/fs-text.js'
 import {isUnfailableCommand} from './unfailable-command.js'
 
 const ACCEPT_DEBT_FILE = 'accept-debt.md'
@@ -534,7 +534,7 @@ export async function classifyVerifyCommand(
     if (suite !== null) return suite
     if (taskId.trim().length === 0) return null
     try {
-        const spec = await fsp.readFile(taskFilePath(cwd, taskId.trim()), 'utf8')
+        const spec = await readTextFile(taskFilePath(cwd, taskId.trim()))
         const cmds = parseVerifyBlockStrict(spec)
         if (cmds === null || cmds.length === 0) return null
         const hit = verifyCommandFromReason(
@@ -863,7 +863,7 @@ async function rejudgeLegacyCommand(cwd: string, d: AcceptDebt): Promise<AcceptD
     if (failClassOfReason(d.reason) === 'test-suite') return d
     let lines: string[]
     try {
-        const spec = await fsp.readFile(taskFilePath(cwd, d.taskId.trim()), 'utf8')
+        const spec = await readTextFile(taskFilePath(cwd, d.taskId.trim()))
         lines = parseVerifyBlockStrict(spec)?.map(c => c.raw) ?? []
     } catch {
         return d
@@ -927,9 +927,7 @@ export async function deriveOpenDebts(
             suiteCommands: suiteManifest(cwd),
             // The spec, not the reason: the ledger clamps and folds the titles it names.
             declaredTestsWritten: async taskId => {
-                const raw = await fsp
-                    .readFile(taskFilePath(cwd, taskId.trim()), 'utf8')
-                    .catch(() => '')
+                const raw = await readTextFile(taskFilePath(cwd, taskId.trim())).catch(() => '')
                 const spec = extractSpecForVerification(raw)
                 return spec !== null && declaredTestsWritten(spec, cwd)
             }

@@ -319,6 +319,22 @@ describe('drive: the run-17 class', () => {
         }
     )
 
+    testPosix('a hash route that only gained a query is still the wall', async () => {
+        const r = await run(
+            fakeBrowser({
+                navigations: [landing],
+                onSubmit: [loginPost],
+                onSubmitFrames: [{url: `${BASE}/#/login?error=bad`, within: true}],
+                inspect: [
+                    {...wall('/'), url: `${BASE}/#/login`},
+                    {...wall('/'), url: `${BASE}/#/login?error=bad`}
+                ]
+            })
+        )
+        expect(r.outcome).toBe('fail')
+        expect((r as {detail: string}).detail).toContain('NEVER LEFT THE SIGN-IN WALL')
+    })
+
     testPosix('an in-page anchor on the sign-in page is still the wall', async () => {
         const r = await run(
             fakeBrowser({

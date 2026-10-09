@@ -89,20 +89,23 @@ describe('revertFrozenPaths (fake git)', () => {
         expect(await revertFrozenPaths(['src/server/index.ts'], git)).toEqual([])
         // Only the status probe ran: revertFrozenPaths returns before it reaches
         // checkout/clean when status names no changed file.
-        expect(calls).toEqual([['status', '--porcelain', '--', 'src/server/index.ts']])
+        expect(calls).toEqual([
+            ['-c', 'core.quotePath=false', 'status', '--porcelain', '--', 'src/server/index.ts']
+        ])
     })
 
     test('changed frozen path → checkout HEAD + clean, returns the file list', async () => {
         const calls: string[][] = []
         const git: FrozenGit = async args => {
             calls.push(args)
-            if (args[0] === 'status') return {stdout: ' M src/server/index.ts\n', exitCode: 0}
+            if (args.includes('status')) return {stdout: ' M src/server/index.ts\n', exitCode: 0}
             return {stdout: '', exitCode: 0}
         }
         const reverted = await revertFrozenPaths(['src/server/index.ts'], git)
         expect(reverted).toEqual(['src/server/index.ts'])
         expect(calls).toEqual([
-            ['status', '--porcelain', '--', 'src/server/index.ts'],
+            ['-c', 'core.quotePath=false', 'status', '--porcelain', '--', 'src/server/index.ts'],
+            ['rev-parse', '--show-prefix'],
             ['checkout', '-f', 'HEAD', '--', 'src/server/index.ts'],
             ['clean', '-fdq', '--', 'src/server/index.ts']
         ])

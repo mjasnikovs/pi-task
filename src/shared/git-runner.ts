@@ -29,6 +29,7 @@
  * own timeout and one its own maxBuffer, and accept-debt goes through the
  * bounded command runner instead.
  */
+import * as path from 'node:path'
 import {runChildDefault, type SpawnFn} from './child-process.js'
 
 export interface GitRunner {
@@ -63,19 +64,46 @@ export async function statusFromCwd(
     git: GitRunner,
     args: string[]
 ): Promise<{stdout: string; exitCode: number}> {
-    const r = await git(['status', '--porcelain', ...args])
+    const r = await git(['-c', 'core.quotePath=false', 'status', '--porcelain', ...args])
     if (r.exitCode !== 0 || r.stdout.length === 0) return r
     const prefix = (await git(['rev-parse', '--show-prefix'])).stdout.trim()
     if (prefix.length === 0) return r
-    const local = (p: string): string => {
-        const quote = p.startsWith('"') ? '"' : ''
-        const bare = p.slice(quote.length)
-        return bare.startsWith(prefix) ? quote + bare.slice(prefix.length) : p
-    }
+    const quotedPrefix = cEscaped(prefix)
+    const local = (p: string): string =>
+        p.startsWith('"') ? `"${fromPrefix(quotedPrefix, p.slice(1, -1))}"` : fromPrefix(prefix, p)
     const lines = r.stdout
         .split('\n')
         .map(l =>
             l.length < 4 ? l : l.slice(0, 3) + l.slice(3).split(' -> ').map(local).join(' -> ')
         )
     return {...r, stdout: lines.join('\n')}
+}
+
+/** `p` named from the repo root, renamed from `prefix`, keeping a directory's `/`. */
+function fromPrefix(prefix: string, p: string): string {
+    const rel = path.posix.relative(prefix, p) || '.'
+    return p.endsWith('/') ? `${rel}/` : rel
+}
+
+/** What porcelain escapes inside a quoted path when `core.quotePath` is off. */
+function cEscaped(p: string): string {
+    const named: Record<string, string> = {
+        '"': '"',
+        '\\': '\\',
+        '\x07': 'a',
+        '\b': 'b',
+        '\t': 't',
+        '\n': 'n',
+        '\v': 'v',
+        '\f': 'f',
+        '\r': 'r'
+    }
+    let out = ''
+    for (const c of p) {
+        const code = c.charCodeAt(0)
+        if (named[c] !== undefined) out += `\\${named[c]}`
+        else if (code < 0x20 || code === 0x7f) out += `\\${code.toString(8).padStart(3, '0')}`
+        else out += c
+    }
+    return out
 }

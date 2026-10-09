@@ -64,7 +64,7 @@ function fakeGit(script: Record<string, string[]>): {
         calls,
         git: args => {
             calls.push(args)
-            const key = args[0]
+            const key = args[0] === '-c' ? args[2] : args[0]
             const queue = script[key] ?? ['']
             const i = Math.min(counters[key] ?? 0, queue.length - 1)
             counters[key] = (counters[key] ?? 0) + 1
@@ -237,7 +237,7 @@ test('runBoundedLintFix: git status failing pre-child → frozen guard inconclus
     const git: LintFixDeps['git'] = args => {
         calls.push(args)
         if (args[0] === 'write-tree') return Promise.resolve({exitCode: 0, stdout: 'abc123'})
-        if (args[0] === 'status') return Promise.resolve({exitCode: 128, stdout: ''})
+        if (args.includes('status')) return Promise.resolve({exitCode: 128, stdout: ''})
         if (args[0] === 'diff') return Promise.resolve({exitCode: 0, stdout: 'src/feature.ts'})
         return Promise.resolve({exitCode: 0, stdout: ''})
     }
@@ -255,7 +255,7 @@ test('runBoundedLintFix: no frozenPaths → no status probes, prior behavior int
     })
     const r = await runBoundedLintFix(makeDeps({git}))
     expect(r.ok).toBe(true)
-    expect(calls.some(c => c[0] === 'status')).toBe(false)
+    expect(calls.some(c => c.includes('status'))).toBe(false)
 })
 
 test('runBoundedLintFix: child DELETING a sibling task deliverable → restored, not applied', async () => {
@@ -347,7 +347,7 @@ test('runBoundedLintFix: git status failing pre-child disarms the deletion guard
     const git: LintFixDeps['git'] = args => {
         calls.push(args)
         if (args[0] === 'write-tree') return Promise.resolve({exitCode: 0, stdout: 'abc123'})
-        if (args[0] === 'status') return Promise.resolve({exitCode: 128, stdout: ''})
+        if (args.includes('status')) return Promise.resolve({exitCode: 128, stdout: ''})
         if (args[0] === 'diff') return Promise.resolve({exitCode: 0, stdout: 'src/feature.ts'})
         return Promise.resolve({exitCode: 0, stdout: ''})
     }

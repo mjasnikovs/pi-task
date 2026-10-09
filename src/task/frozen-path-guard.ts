@@ -26,6 +26,7 @@
  * a library or a script collection exactly as for a web app.
  */
 import {extractProhibitions} from './prohibition-probe.js'
+import {statusFromCwd} from '../shared/git-runner.js'
 
 /** Run a git subcommand in the guard's cwd; only stdout + exit code are read. */
 export type FrozenGit = (args: string[]) => Promise<{stdout: string; exitCode: number}>
@@ -133,7 +134,7 @@ export function parseChangedFrozenFiles(porcelain: string): string[] {
  */
 export async function revertFrozenPaths(paths: string[], git: FrozenGit): Promise<string[]> {
     if (paths.length === 0) return []
-    const status = await git(['status', '--porcelain', '--', ...paths])
+    const status = await statusFromCwd(git, ['--', ...paths])
     if (status.exitCode !== 0) return []
     const changed = parseChangedFrozenFiles(status.stdout)
     if (changed.length === 0) return []

@@ -1344,12 +1344,10 @@ export async function runWorkVerification(deps: VerificationDeps): Promise<Verif
     // a throwing probe degrades to its empty value, so no probe can block the gate.
     // Before any model is asked: a test the spec bound an ACCEPTANCE line to and
     // nobody wrote leaves that line unobserved, whatever a verifier would say. That
-    // FAIL needs only the probe an ACCEPT records, not the build the evidence runs.
+    // FAIL has no use for the build the evidence runs.
     const missing = missingDeclaredTests(deps.spec, deps.cwd)
     const adapters =
-        missing.length > 0 ?
-            PROBE_ADAPTERS.filter(a => a.key === 'crossTaskDeletion')
-        :   PROBE_ADAPTERS
+        missing.length > 0 ? PROBE_ADAPTERS.filter(a => a.key !== 'evidence') : PROBE_ADAPTERS
     const findings: ProbeFindings = {}
     const rawResults = new Map<ProbeKey, unknown>()
     for (const adapter of adapters) {

@@ -1323,6 +1323,20 @@ describe('an untested-acceptance debt', () => {
         expect((await deriveOpenDebts(cwd, false)).openDebts).toEqual([])
     })
 
+    // An autocrlf checkout keeps `\r` on every line. Behind a VERIFY fence the spec
+    // parser then found no ACCEPTANCE.
+    test('closes when its task file has CRLF line endings', async () => {
+        const cwd = taskWith(titles)
+        const file = path.join(cwd, '.pi-tasks', 'TASK_0039.md')
+        const withVerify = fs
+            .readFileSync(file, 'utf8')
+            .replace('## gate trail', 'VERIFY\n```bash\nnpm test\n```\n## gate trail')
+        fs.writeFileSync(file, withVerify.replace(/\n/g, '\r\n'))
+        await recordDebt(cwd, 'TASK_0039', reasonFor(titles), 'yolo-accepted')
+        writeTests(cwd, titles)
+        expect((await deriveOpenDebts(cwd, false)).openDebts).toEqual([])
+    })
+
     test('stays open when its spec cannot be read', async () => {
         const cwd = makeCwd()
         await recordDebt(cwd, 'TASK_0039', reasonFor(titles), 'yolo-accepted')

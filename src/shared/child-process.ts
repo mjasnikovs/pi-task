@@ -785,7 +785,12 @@ export function runChild(
 // ─── Convenience: spawn with default node child_process ──────────────────────
 
 export function runChildDefault(
-    invocation: {command: string; args: ReadonlyArray<string>; env?: NodeJS.ProcessEnv},
+    invocation: {
+        command: string
+        args: ReadonlyArray<string>
+        stdin?: string
+        env?: NodeJS.ProcessEnv
+    },
     cwd: string,
     signal: AbortSignal | undefined,
     opts?: RunChildOptions,
