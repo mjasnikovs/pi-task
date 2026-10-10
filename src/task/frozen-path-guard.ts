@@ -26,7 +26,7 @@
  * a library or a script collection exactly as for a web app.
  */
 import {extractProhibitions} from './prohibition-probe.js'
-import {statusFromCwd} from '../shared/git-runner.js'
+import {statusEntriesFromCwd} from '../shared/git-runner.js'
 
 /** Run a git subcommand in the guard's cwd; only stdout + exit code are read. */
 export type FrozenGit = (args: string[]) => Promise<{stdout: string; exitCode: number}>
@@ -103,15 +103,8 @@ export function parseChangedFrozenFiles(porcelain: string): string[] {
     return out
 }
 
-/** The status lines that show HEAD holds the file. A file HEAD lacks is untracked, staged
- *  as added, renamed or copied, or added with intent (` A`). A file dropped from the
- *  index only shows twice, as `D ` and `??`, and HEAD holds it. */
-function heldByHeadLines(porcelain: string): string {
-    return porcelain
-        .split('\n')
-        .filter(l => !/^(\?\?|[ARC].|.A)/.test(l))
-        .join('\n')
-}
+/** Status codes of a conflicted file, which `checkout -f` skips. */
+const UNMERGED = /^(DD|AU|UD|UA|DU|AA|UU)$/
 
 /**
  * Restore the spec-frozen paths to their committed (HEAD) state, undoing any
@@ -122,21 +115,16 @@ function heldByHeadLines(porcelain: string): string {
  * the verified task's version of the frozen file and discards ONLY the gate
  * child's edit on top of it — the task's own frozen-path edits, if any, are a
  * separate concern the verify prohibition probe surfaces. `git checkout -f HEAD`
- * covers modified and deleted tracked files under each pathspec; `git clean -fdq`
- * removes untracked files the pass created under a frozen directory. Both are
- * scoped to the frozen pathspec.
+ * with `--no-overlay` restores every changed file git tracks and removes the ones
+ * HEAD lacks, staged or intent-to-add; `git clean -fdq` removes untracked files the
+ * pass created under a frozen directory. Both are scoped to the frozen pathspec.
  *
  * Run against a real repo with one frozen directory and one free one: a modified
  * file came back to its HEAD content, a deleted file came back, and two untracked
  * creations (one with a space in its name) were removed, while an edit to a file
  * OUTSIDE the pathspec survived untouched.
  *
- * ONE CASE IS NOT FULLY UNDONE: a rename already STAGED in the index. `git mv`
- * inside the frozen directory leaves `frozen/new.txt` present and staged after
- * both commands, because checkout cannot restore a path HEAD does not contain and
- * clean skips tracked files — while this function still reports it as reverted.
- * An ordinary edit-tool rename is a delete plus an untracked create, and that IS
- * fully undone; staging requires git, which the enforce child does not have.
+ * A conflicted file is left as it is and not reported reverted.
  *
  * Best-effort: an empty frozen list, a non-git tree, or any git error yields an
  * empty result — the guard must never break the gate on a project it cannot reason
@@ -144,19 +132,29 @@ function heldByHeadLines(porcelain: string): string {
  */
 export async function revertFrozenPaths(paths: string[], git: FrozenGit): Promise<string[]> {
     if (paths.length === 0) return []
-    const status = await statusFromCwd(git, ['--', ...paths])
-    if (status.exitCode !== 0) return []
-    const changed = parseChangedFrozenFiles(status.stdout)
-    if (changed.length === 0) return []
-    // Restore tracked modifications/deletions from HEAD, then remove any untracked
-    // additions — both confined to the frozen pathspec so the pass's legitimate
-    // edits to OTHER files survive untouched. One pathspec HEAD lacks fails the whole
-    // checkout, so it names only the changed files HEAD holds, never the frozen paths.
-    const held = new Set(parseChangedFrozenFiles(heldByHeadLines(status.stdout)))
-    const inHead = changed.filter(f => held.has(f))
+    const {entries, exitCode} = await statusEntriesFromCwd(git, ['--', ...paths])
+    if (exitCode !== 0 || entries.length === 0) return []
+    // A name git tracks in neither HEAD nor the index fails the whole checkout, and
+    // a name is a glob to a pathspec unless it is literal.
+    const tracked = new Set(
+        entries
+            .filter(e => e.code !== '??')
+            .flatMap(e => (e.from === undefined ? [e.path] : [e.path, e.from]))
+    )
     const restored =
-        inHead.length === 0
-        || (await git(['checkout', '-f', 'HEAD', '--', ...inHead])).exitCode === 0
+        tracked.size === 0
+        || (
+            await git([
+                '--literal-pathspecs',
+                'checkout',
+                '--no-overlay',
+                '-f',
+                'HEAD',
+                '--',
+                ...tracked
+            ])
+        ).exitCode === 0
     await git(['clean', '-fdq', '--', ...paths])
-    return restored ? changed : changed.filter(f => !held.has(f))
+    const reverted = entries.filter(e => (restored ? !UNMERGED.test(e.code) : !tracked.has(e.path)))
+    return [...new Set(reverted.map(e => e.path))]
 }

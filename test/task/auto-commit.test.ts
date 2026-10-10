@@ -44,6 +44,30 @@ test('gitCommitAll: stages, detects changes, and commits', async () => {
     expect(seen.some(a => a[0] === 'commit' && a.includes('task: A (TASK_0006)'))).toBe(true)
 })
 
+function commitArgs(showRef: number, mergeHead: number): Promise<string[] | undefined> {
+    let commit: string[] | undefined
+    const spawn = fakeSpawnByPrompt(args => {
+        if (args[0] === 'show-ref') return {stdout: '', exitCode: showRef}
+        if (args[0] === 'rev-parse' && args.includes('--verify')) {
+            return {stdout: '', exitCode: args.includes('MERGE_HEAD') ? mergeHead : 1}
+        }
+        if (args[0] === 'rev-parse') return INSIDE
+        if (args[0] === 'diff') return STAGED
+        if (args[0] === 'commit') commit = [...args]
+        return {stdout: '', exitCode: 0}
+    })
+    return gitCommitAll('/repo', 'task', undefined, spawn).then(() => commit)
+}
+
+test('gitCommitAll: no merge in progress → the commit is limited to cwd', async () => {
+    expect(await commitArgs(2, 0)).toEqual(['commit', '-m', 'task', '--', '.'])
+})
+
+test('gitCommitAll: git without show-ref --exists falls back to rev-parse', async () => {
+    expect(await commitArgs(129, 0)).toEqual(['commit', '-m', 'task'])
+    expect(await commitArgs(129, 1)).toEqual(['commit', '-m', 'task', '--', '.'])
+})
+
 test('gitCommitAll: not a git repository → reported, no commit attempted', async () => {
     let committed = false
     const spawn = fakeSpawnByPrompt(args => {

@@ -1074,11 +1074,11 @@ export async function runEnforcePass(
                             :   '')
                     )
                     // Persist the FAIL as a durable defect. A revert restores the
-                    // tree the ORIGINAL verify already blessed, so this re-verify
-                    // caught something that verify's earlier PASS missed — erasing it
-                    // along with the enforce edits would bury a real fault. The final
-                    // gate re-checks and surfaces it (static-class auto-closes if a
-                    // later task fixed the statics; otherwise it stays open).
+                    // tree the ORIGINAL verify already blessed, so erasing the FAIL
+                    // with the enforce edits would bury a fault that verify missed;
+                    // a failed revert leaves the edits that may have caused it. The
+                    // final gate re-checks and surfaces it (static-class auto-closes
+                    // if a later task fixed the statics; otherwise it stays open).
                     await deps.recordDebt?.(
                         p.cwd,
                         p.taskId,

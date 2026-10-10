@@ -79,6 +79,46 @@ export async function statusFromCwd(
     return {...r, stdout: lines.join('\n')}
 }
 
+/** One `git status --porcelain` entry named from the cwd. `from` is a rename or copy's source. */
+export interface StatusEntry {
+    code: string
+    path: string
+    from?: string
+}
+
+/**
+ * statusFromCwd read from `-z` output, so every name arrives as git holds it: no
+ * C-quoting to undo and no ` -> ` to split.
+ */
+export async function statusEntriesFromCwd(
+    git: GitRunner,
+    args: string[]
+): Promise<{entries: StatusEntry[]; exitCode: number}> {
+    const r = await git(['status', '--porcelain', '-z', ...args])
+    if (r.exitCode !== 0) return {entries: [], exitCode: r.exitCode}
+    const fields = r.stdout.split('\0')
+    const entries: StatusEntry[] = []
+    for (let i = 0; i < fields.length; i++) {
+        const field = fields[i] ?? ''
+        if (field.length < 4) continue
+        const code = field.slice(0, 2)
+        entries.push({
+            code,
+            path: field.slice(3),
+            ...(/[RC]/.test(code) ? {from: fields[++i] ?? ''} : {})
+        })
+    }
+    if (entries.length === 0) return {entries, exitCode: 0}
+    const prefix = revParsePrefix((await git(['rev-parse', '--show-prefix'])).stdout)
+    if (prefix.length === 0) return {entries, exitCode: 0}
+    const local = (e: StatusEntry): StatusEntry => ({
+        ...e,
+        path: fromPrefix(prefix, e.path),
+        ...(e.from === undefined ? {} : {from: fromPrefix(prefix, e.from)})
+    })
+    return {entries: entries.map(local), exitCode: 0}
+}
+
 /** `rev-parse --show-prefix` minus its newline. Not `trim()`: a directory name can
  *  begin or end with a space. */
 export function revParsePrefix(stdout: string): string {

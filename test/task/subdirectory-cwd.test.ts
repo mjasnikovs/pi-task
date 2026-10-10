@@ -326,8 +326,10 @@ test('a frozen-path revert undoes an edit beside an intent-to-add file', async (
     fs.writeFileSync(path.join(app, 'a.ts'), 'export const a = 2\n')
     fs.writeFileSync(path.join(app, 'x.ts'), 'x\n')
     g('add', '-N', 'app/x.ts')
-    expect(await revertFrozenPaths(['a.ts', 'x.ts'], makeGit(app))).toContain('a.ts')
+    expect(await revertFrozenPaths(['a.ts', 'x.ts'], makeGit(app))).toEqual(['a.ts', 'x.ts'])
     expect(fs.readFileSync(path.join(app, 'a.ts'), 'utf8')).toBe('export const a = 1\n')
+    expect(fs.existsSync(path.join(app, 'x.ts'))).toBe(false)
+    expect(g('status', '--porcelain')).toBe('')
 })
 
 test('a frozen-path revert brings back a file removed from the index only', async () => {
@@ -337,3 +339,128 @@ test('a frozen-path revert brings back a file removed from the index only', asyn
     expect(fs.readFileSync(path.join(app, 'a.ts'), 'utf8')).toBe('export const a = 1\n')
     expect(g('status', '--porcelain')).toBe('')
 })
+
+test('a frozen-path revert undoes a staged rename', async () => {
+    const {app, g} = repo()
+    g('mv', 'app/a.ts', 'app/b.ts')
+    expect(await revertFrozenPaths(['a.ts', 'b.ts'], makeGit(app))).toEqual(['b.ts'])
+    expect(fs.readFileSync(path.join(app, 'a.ts'), 'utf8')).toBe('export const a = 1\n')
+    expect(fs.existsSync(path.join(app, 'b.ts'))).toBe(false)
+    expect(g('status', '--porcelain')).toBe('')
+})
+
+test('a frozen-path revert undoes a staged new file', async () => {
+    const {app, g} = repo()
+    fs.writeFileSync(path.join(app, 'y.ts'), 'y\n')
+    g('add', 'app/y.ts')
+    expect(await revertFrozenPaths(['y.ts'], makeGit(app))).toEqual(['y.ts'])
+    expect(g('status', '--porcelain')).toBe('')
+})
+
+// Porcelain C-quotes a tab, and the unquoted name is a glob that matches nothing.
+test.skipIf(process.platform === 'win32')(
+    'a frozen-path revert restores a file whose name holds a tab',
+    async () => {
+        const {app, g} = repo()
+        fs.writeFileSync(path.join(app, 'a\tb.ts'), 'tab\n')
+        g('add', '-A')
+        g('commit', '-q', '-m', 'tab')
+        fs.writeFileSync(path.join(app, 'a\tb.ts'), 'edited\n')
+        fs.writeFileSync(path.join(app, 'a.ts'), 'export const a = 2\n')
+        expect((await revertFrozenPaths(['.'], makeGit(app))).sort()).toEqual(
+            ['a.ts', 'a\tb.ts'].sort()
+        )
+        expect(fs.readFileSync(path.join(app, 'a.ts'), 'utf8')).toBe('export const a = 1\n')
+        expect(fs.readFileSync(path.join(app, 'a\tb.ts'), 'utf8')).toBe('tab\n')
+    }
+)
+
+// A file HEAD deleted while the merged branch edited it: the index holds it, HEAD does not.
+test('a frozen-path revert restores an edit beside a conflicted file HEAD lacks', async () => {
+    const {app, g} = repo()
+    fs.writeFileSync(path.join(app, 'c.ts'), 'c\n')
+    g('add', '-A')
+    g('commit', '-q', '-m', 'c')
+    g('checkout', '-q', '-b', 'other')
+    fs.writeFileSync(path.join(app, 'c.ts'), 'c2\n')
+    g('commit', '-qam', 'other')
+    g('checkout', '-q', 'main')
+    g('rm', '-q', 'app/c.ts')
+    g('commit', '-q', '-m', 'drop c')
+    try {
+        g('merge', '-q', 'other')
+    } catch {
+        // the conflict is the point
+    }
+    fs.writeFileSync(path.join(app, 'a.ts'), 'export const a = 2\n')
+    expect(await revertFrozenPaths(['a.ts', 'c.ts'], makeGit(app))).toEqual(['a.ts'])
+    expect(fs.readFileSync(path.join(app, 'a.ts'), 'utf8')).toBe('export const a = 1\n')
+})
+
+// Its first parent is not the tree before it: dropping it would end the merge.
+test('a drop refuses an enforce commit that concluded a merge', async () => {
+    const {app, g} = repo()
+    g('checkout', '-q', '-b', 'other')
+    fs.writeFileSync(path.join(app, 'a.ts'), 'export const a = 5\n')
+    g('commit', '-qam', 'other')
+    g('checkout', '-q', 'main')
+    g('merge', '-q', '--no-ff', '--no-commit', 'other')
+    expect((await gitCommitAll(app, 'ENFORCE GUIDELINES')).committed).toBe(true)
+    const head = g('rev-parse', 'HEAD')
+    expect(await gitDropLastCommit(app)).toBe(false)
+    expect(g('rev-parse', 'HEAD')).toBe(head)
+})
+
+// rev-parse resolves a branch named MERGE_HEAD when no merge is in progress.
+test("a task's commit leaves out a sibling's staged edit beside a branch named MERGE_HEAD", async () => {
+    const {dir, app, g} = repo()
+    g('branch', 'MERGE_HEAD')
+    fs.writeFileSync(path.join(dir, 'sibling.ts'), 'export const s = 2\n')
+    g('add', 'sibling.ts')
+    fs.writeFileSync(path.join(app, 'a.ts'), 'export const a = 2\n')
+    expect((await gitCommitAll(app, 'task')).committed).toBe(true)
+    expect(g('show', '--name-only', '--format=', 'HEAD')).toBe('app/a.ts')
+})
+
+function reftableRepo(): {app: string; g: (...a: string[]) => string} | null {
+    const dir = tmpDir('pi-reftable-')
+    const g = (...a: string[]): string =>
+        execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', ...a], {
+            cwd: dir,
+            encoding: 'utf8'
+        }).trim()
+    try {
+        g('init', '-q', '-b', 'main', '--ref-format=reftable')
+    } catch {
+        return null
+    }
+    const app = path.join(dir, 'app')
+    fs.mkdirSync(app)
+    fs.writeFileSync(path.join(app, 'a.ts'), 'export const a = 1\n')
+    g('add', '-A')
+    g('commit', '-q', '-m', 'base')
+    return {app, g}
+}
+
+// Reftable keeps CHERRY_PICK_HEAD in the ref store, not in a file.
+test.skipIf(reftableRepo() === null)(
+    "a task's commit concludes a cherry-pick in a reftable repo",
+    async () => {
+        const {app, g} = reftableRepo()!
+        g('checkout', '-q', '-b', 'other')
+        fs.writeFileSync(path.join(app, 'a.ts'), 'export const a = 5\n')
+        g('commit', '-qam', 'other')
+        g('checkout', '-q', 'main')
+        fs.writeFileSync(path.join(app, 'a.ts'), 'export const a = 6\n')
+        g('commit', '-qam', 'main')
+        try {
+            g('cherry-pick', 'other')
+        } catch {
+            // the conflict is the point
+        }
+        fs.writeFileSync(path.join(app, 'a.ts'), 'export const a = 7\n')
+        g('add', 'app/a.ts')
+        expect((await gitCommitAll(app, 'task')).committed).toBe(true)
+        expect(g('status', '--porcelain')).toBe('')
+    }
+)

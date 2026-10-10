@@ -288,8 +288,12 @@ async function concludingMerge(
     spawnFn?: SpawnFn
 ): Promise<boolean> {
     for (const head of ['MERGE_HEAD', 'CHERRY_PICK_HEAD']) {
-        const r = await git(cwd, ['rev-parse', '-q', '--verify', head], signal, spawnFn)
-        if (r.exitCode === 0) return true
+        const exact = await git(cwd, ['show-ref', '-q', '--exists', head], signal, spawnFn)
+        if (exact.exitCode === 0) return true
+        if (exact.exitCode === 2) continue
+        // Git before 2.43 has no `--exists`. rev-parse also resolves a branch of that name.
+        const loose = await git(cwd, ['rev-parse', '-q', '--verify', head], signal, spawnFn)
+        if (loose.exitCode === 0) return true
     }
     return false
 }
@@ -302,12 +306,11 @@ async function concludingMerge(
  * regression, this throws the enforce commit away and brings back the verified
  * task commit underneath it.
  *
- * Only cwd and the commit's own files move. An enforce commit holds only cwd, so a
- * sibling package's uncommitted edits are still in the worktree here, and a
- * repo-wide `reset --hard HEAD~1` destroyed them. `reset --keep` moves just the
- * files the commit changed, in one step, and refuses rather than overwrite one
- * that is dirty. What the re-verify wrote in cwd is discarded first, as the old
- * `reset --hard` did, so its build output cannot block that.
+ * Only cwd moves. An enforce commit holds only cwd, so a sibling package's
+ * uncommitted edits are still in the worktree here, and a repo-wide `reset --hard
+ * HEAD~1` destroyed them. cwd is restored to the parent, which also discards what
+ * the re-verify wrote there, and then HEAD alone steps back. A commit that
+ * concluded a merge is refused: its first parent is not the tree before it.
  *
  * It must NOT rewind the forensic gate trail either. `.pi-tasks/` is frequently
  * TRACKED here — unlike the accept-debt ledger's writers, the per-task snapshot
@@ -322,50 +325,21 @@ export async function gitDropLastCommit(
     signal?: AbortSignal,
     spawnFn?: SpawnFn
 ): Promise<boolean> {
-    const parent = await git(cwd, ['rev-parse', '-q', '--verify', 'HEAD~1'], signal, spawnFn)
-    if (parent.exitCode !== 0) return false
+    const parents = await git(cwd, ['rev-list', '--parents', '-n', '1', 'HEAD'], signal, spawnFn)
+    if (parents.exitCode !== 0 || parents.stdout.trim().split(' ').length !== 2) return false
     const trail = await snapshotTrail(cwd)
-    const cleaned = await git(
+    const restored = await git(
         cwd,
-        ['restore', '--source=HEAD', '--staged', '--worktree', '--', '.'],
+        ['restore', '--source=HEAD~1', '--staged', '--worktree', '--', '.'],
         signal,
         spawnFn
     )
     const dropped =
-        !cleaned.aborted
-        && cleaned.exitCode === 0
-        && (await clearReturningFiles(cwd, signal, spawnFn))
-        && (await git(cwd, ['reset', '--keep', 'HEAD~1'], signal, spawnFn)).exitCode === 0
+        !restored.aborted
+        && restored.exitCode === 0
+        && (await git(cwd, ['reset', '-q', '--soft', 'HEAD~1'], signal, spawnFn)).exitCode === 0
     await restoreTrail(cwd, trail)
     return dropped
-}
-
-/** Remove what the re-verify wrote where the commit deleted a file in cwd: `reset
- *  --keep` will not overwrite an untracked file, and the parent's version replaces it. */
-async function clearReturningFiles(
-    cwd: string,
-    signal?: AbortSignal,
-    spawnFn?: SpawnFn
-): Promise<boolean> {
-    const back = await git(
-        cwd,
-        [
-            'diff',
-            '--relative',
-            '--name-only',
-            '-z',
-            '--no-renames',
-            '--diff-filter=A',
-            'HEAD',
-            'HEAD~1'
-        ],
-        signal,
-        spawnFn
-    )
-    if (back.exitCode !== 0) return false
-    const files = back.stdout.split('\0').filter(f => f.length > 0)
-    await Promise.all(files.map(f => fsp.rm(path.join(cwd, f), {force: true}).catch(() => {})))
-    return true
 }
 
 /** Read every file under `.pi-tasks/` into memory (relative path → bytes). Best-effort:

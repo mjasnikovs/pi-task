@@ -116,7 +116,7 @@ test('runBoundedLintFix: fix child reverting the work trips the guard and restor
     expect(r.reason).toContain('revert-guard')
     expect(r.reason).toContain('src/test/request.ts')
     // The snapshot restore ran: checkout <tree> … then reset.
-    expect(calls.some(c => c[0] === 'checkout' && c[1] === 'abc123')).toBe(true)
+    expect(calls.some(c => c.includes('checkout') && c[1] === 'abc123')).toBe(true)
 })
 
 test('runBoundedLintFix: deleted pre-existing untracked file trips the guard', async () => {
@@ -162,7 +162,7 @@ test('runBoundedLintFix: git failing AFTER the fix → guard inconclusive, conve
     expect(r.ok).toBe(true)
     expect(r.reason).toContain('inconclusive')
     // No rollback: the snapshot restore must NOT have run.
-    expect(calls.some(c => c[0] === 'checkout')).toBe(false)
+    expect(calls.some(c => c.includes('checkout'))).toBe(false)
 })
 
 test('runBoundedLintFix: untracked probe git error → file not flagged as discarded', async () => {
@@ -183,7 +183,7 @@ test('runBoundedLintFix: untracked probe git error → file not flagged as disca
     const r = await runBoundedLintFix(makeDeps({git}))
     expect(r.ok).toBe(true)
     expect(r.reason).toContain('inconclusive')
-    expect(calls.some(c => c[0] === 'checkout')).toBe(false)
+    expect(calls.some(c => c.includes('checkout'))).toBe(false)
 })
 
 test('runBoundedLintFix: child edit to a clean frozen path → reverted, not applied', async () => {
@@ -194,7 +194,7 @@ test('runBoundedLintFix: child edit to a clean frozen path → reverted, not app
         diff: ['src/feature.ts', 'src/feature.ts'],
         'ls-files': ['', ''],
         'write-tree': ['abc123'],
-        status: ['', ' M tsconfig.json', ' M tsconfig.json']
+        status: ['', ' M tsconfig.json', ' M tsconfig.json\0']
     })
     let prompt = ''
     const r = await runBoundedLintFix(
@@ -213,7 +213,7 @@ test('runBoundedLintFix: child edit to a clean frozen path → reverted, not app
     expect(r.class).toBe('frozen-path')
     expect(r.contradiction?.frozenPath).toBe('tsconfig.json')
     expect(r.reason).toContain('tsconfig.json')
-    expect(calls.some(c => c[0] === 'checkout' && c.includes('HEAD'))).toBe(true)
+    expect(calls.some(c => c.includes('checkout') && c.includes('HEAD'))).toBe(true)
     expect(calls.some(c => c[0] === 'clean')).toBe(true)
 })
 
@@ -229,7 +229,7 @@ test('runBoundedLintFix: frozen path ALREADY dirty pre-child → never reverted,
     })
     const r = await runBoundedLintFix(makeDeps({git, frozenPaths: ['tsconfig.json']}))
     expect(r.ok).toBe(true)
-    expect(calls.some(c => c[0] === 'checkout')).toBe(false)
+    expect(calls.some(c => c.includes('checkout'))).toBe(false)
 })
 
 test('runBoundedLintFix: git status failing pre-child → frozen guard inconclusive, no revert', async () => {
@@ -244,7 +244,7 @@ test('runBoundedLintFix: git status failing pre-child → frozen guard inconclus
     const r = await runBoundedLintFix(makeDeps({git, frozenPaths: ['tsconfig.json']}))
     // Inconclusive is not license to revert — the converge check decides alone.
     expect(r.ok).toBe(true)
-    expect(calls.some(c => c[0] === 'checkout')).toBe(false)
+    expect(calls.some(c => c.includes('checkout'))).toBe(false)
 })
 
 test('runBoundedLintFix: no frozenPaths → no status probes, prior behavior intact', async () => {
@@ -283,7 +283,7 @@ test('runBoundedLintFix: child DELETING a sibling task deliverable → restored,
     // The deleted paths were restored from HEAD (they were clean — no work lost).
     expect(
         calls.some(
-            c => c[0] === 'checkout' && c.includes('HEAD') && c.includes('playwright/index.ts')
+            c => c.includes('checkout') && c.includes('HEAD') && c.includes('playwright/index.ts')
         )
     ).toBe(true)
 })
@@ -303,7 +303,7 @@ test("runBoundedLintFix: child deleting the CURRENT task's own file → not flag
         })
     )
     expect(r.ok).toBe(true)
-    expect(calls.some(c => c[0] === 'checkout')).toBe(false)
+    expect(calls.some(c => c.includes('checkout'))).toBe(false)
 })
 
 test("runBoundedLintFix: deletion already present PRE-child (task work) → not the child's, applied", async () => {
@@ -321,7 +321,7 @@ test("runBoundedLintFix: deletion already present PRE-child (task work) → not 
         })
     )
     expect(r.ok).toBe(true)
-    expect(calls.some(c => c[0] === 'checkout')).toBe(false)
+    expect(calls.some(c => c.includes('checkout'))).toBe(false)
 })
 
 test('runBoundedLintFix: unknown provenance steps aside (inconclusive ≠ evidence)', async () => {
@@ -339,7 +339,7 @@ test('runBoundedLintFix: unknown provenance steps aside (inconclusive ≠ eviden
         })
     )
     expect(r.ok).toBe(true)
-    expect(calls.some(c => c[0] === 'checkout')).toBe(false)
+    expect(calls.some(c => c.includes('checkout'))).toBe(false)
 })
 
 test('runBoundedLintFix: git status failing pre-child disarms the deletion guard', async () => {
@@ -359,7 +359,7 @@ test('runBoundedLintFix: git status failing pre-child disarms the deletion guard
         })
     )
     expect(r.ok).toBe(true)
-    expect(calls.some(c => c[0] === 'checkout')).toBe(false)
+    expect(calls.some(c => c.includes('checkout'))).toBe(false)
 })
 
 test('runBoundedLintFix: health still failing → not applied (no guard trip)', async () => {
@@ -427,7 +427,7 @@ test('runBoundedLintFix: non-convergence whose output names a frozen path → fr
     expect(r.reason).toContain('tsconfig.json')
     expect(r.reason).toContain('did not converge')
     // No guard trip: nothing was reverted (the child made no frozen edit).
-    expect(calls.some(c => c[0] === 'checkout')).toBe(false)
+    expect(calls.some(c => c.includes('checkout'))).toBe(false)
 })
 
 test('runBoundedLintFix: non-convergence NOT naming a frozen path → plain did-not-converge', async () => {
