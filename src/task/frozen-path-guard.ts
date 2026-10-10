@@ -103,11 +103,13 @@ export function parseChangedFrozenFiles(porcelain: string): string[] {
     return out
 }
 
-/** The status lines of files HEAD does not hold: untracked or newly staged. */
-function newFileLines(porcelain: string): string {
+/** The status lines that show HEAD holds the file. A file HEAD lacks is untracked, staged
+ *  as added, renamed or copied, or added with intent (` A`). A file dropped from the
+ *  index only shows twice, as `D ` and `??`, and HEAD holds it. */
+function heldByHeadLines(porcelain: string): string {
     return porcelain
         .split('\n')
-        .filter(l => l.startsWith('??') || l.startsWith('A'))
+        .filter(l => !/^(\?\?|[ARC].|.A)/.test(l))
         .join('\n')
 }
 
@@ -148,13 +150,13 @@ export async function revertFrozenPaths(paths: string[], git: FrozenGit): Promis
     if (changed.length === 0) return []
     // Restore tracked modifications/deletions from HEAD, then remove any untracked
     // additions — both confined to the frozen pathspec so the pass's legitimate
-    // edits to OTHER files survive untouched. A path HEAD lacks fails the whole
-    // checkout, so a new file named on its own goes only to clean.
-    const created = new Set(parseChangedFrozenFiles(newFileLines(status.stdout)))
-    const inHead = paths.filter(p => !created.has(p))
+    // edits to OTHER files survive untouched. One pathspec HEAD lacks fails the whole
+    // checkout, so it names only the changed files HEAD holds, never the frozen paths.
+    const held = new Set(parseChangedFrozenFiles(heldByHeadLines(status.stdout)))
+    const inHead = changed.filter(f => held.has(f))
     const restored =
         inHead.length === 0
         || (await git(['checkout', '-f', 'HEAD', '--', ...inHead])).exitCode === 0
     await git(['clean', '-fdq', '--', ...paths])
-    return restored ? changed : changed.filter(f => created.has(f))
+    return restored ? changed : changed.filter(f => !held.has(f))
 }

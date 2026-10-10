@@ -8,7 +8,6 @@
  * `{committed: false, reason: 'nothing to commit'}`. Nothing throws — the task
  * already succeeded, and a failed snapshot must not undo that.
  */
-import {existsSync} from 'node:fs'
 import * as fsp from 'node:fs/promises'
 import * as path from 'node:path'
 import {runChildDefault, type SpawnFn} from '../shared/child-process.js'
@@ -199,7 +198,8 @@ export async function gitStashRef(
 
 /**
  * Stage and commit everything under cwd with `message`. A sibling package's edits,
- * staged or not, stay out. Honors .gitignore via git itself. Never throws —
+ * staged or not, stay out, except while a merge or cherry-pick is concluded: git
+ * commits its whole index then. Honors .gitignore via git itself. Never throws —
  * failures surface as `{committed: false, reason}` so the caller can warn and keep
  * going.
  */
@@ -287,17 +287,11 @@ async function concludingMerge(
     signal?: AbortSignal,
     spawnFn?: SpawnFn
 ): Promise<boolean> {
-    const r = await git(
-        cwd,
-        ['rev-parse', '--git-path', 'MERGE_HEAD', '--git-path', 'CHERRY_PICK_HEAD'],
-        signal,
-        spawnFn
-    )
-    if (r.exitCode !== 0) return false
-    return r.stdout
-        .split('\n')
-        .filter(l => l.length > 0)
-        .some(l => existsSync(path.resolve(cwd, l)))
+    for (const head of ['MERGE_HEAD', 'CHERRY_PICK_HEAD']) {
+        const r = await git(cwd, ['rev-parse', '-q', '--verify', head], signal, spawnFn)
+        if (r.exitCode === 0) return true
+    }
+    return false
 }
 
 /**
@@ -308,7 +302,7 @@ async function concludingMerge(
  * regression, this throws the enforce commit away and brings back the verified
  * task commit underneath it.
  *
- * Only cwd and the commit's own files move. A task commit holds only cwd, so a
+ * Only cwd and the commit's own files move. An enforce commit holds only cwd, so a
  * sibling package's uncommitted edits are still in the worktree here, and a
  * repo-wide `reset --hard HEAD~1` destroyed them. `reset --keep` moves just the
  * files the commit changed, in one step, and refuses rather than overwrite one
@@ -328,6 +322,8 @@ export async function gitDropLastCommit(
     signal?: AbortSignal,
     spawnFn?: SpawnFn
 ): Promise<boolean> {
+    const parent = await git(cwd, ['rev-parse', '-q', '--verify', 'HEAD~1'], signal, spawnFn)
+    if (parent.exitCode !== 0) return false
     const trail = await snapshotTrail(cwd)
     const cleaned = await git(
         cwd,
@@ -338,9 +334,38 @@ export async function gitDropLastCommit(
     const dropped =
         !cleaned.aborted
         && cleaned.exitCode === 0
+        && (await clearReturningFiles(cwd, signal, spawnFn))
         && (await git(cwd, ['reset', '--keep', 'HEAD~1'], signal, spawnFn)).exitCode === 0
     await restoreTrail(cwd, trail)
     return dropped
+}
+
+/** Remove what the re-verify wrote where the commit deleted a file in cwd: `reset
+ *  --keep` will not overwrite an untracked file, and the parent's version replaces it. */
+async function clearReturningFiles(
+    cwd: string,
+    signal?: AbortSignal,
+    spawnFn?: SpawnFn
+): Promise<boolean> {
+    const back = await git(
+        cwd,
+        [
+            'diff',
+            '--relative',
+            '--name-only',
+            '-z',
+            '--no-renames',
+            '--diff-filter=A',
+            'HEAD',
+            'HEAD~1'
+        ],
+        signal,
+        spawnFn
+    )
+    if (back.exitCode !== 0) return false
+    const files = back.stdout.split('\0').filter(f => f.length > 0)
+    await Promise.all(files.map(f => fsp.rm(path.join(cwd, f), {force: true}).catch(() => {})))
+    return true
 }
 
 /** Read every file under `.pi-tasks/` into memory (relative path → bytes). Best-effort:

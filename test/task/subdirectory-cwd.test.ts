@@ -232,6 +232,25 @@ test('a drop that cannot happen says so', async () => {
     expect(await gitDropLastCommit(app)).toBe(false)
 })
 
+test('a drop that cannot happen leaves cwd as it was', async () => {
+    const {app} = repo()
+    fs.writeFileSync(path.join(app, 'a.ts'), 'export const a = 2\n')
+    expect(await gitDropLastCommit(app)).toBe(false)
+    expect(fs.readFileSync(path.join(app, 'a.ts'), 'utf8')).toBe('export const a = 2\n')
+})
+
+// The enforce commit deleted a file, and the re-verify's build wrote it back untracked.
+test('dropping the enforce commit restores a deleted file the re-verify wrote back', async () => {
+    const {app, g} = repo()
+    fs.rmSync(path.join(app, 'a.ts'))
+    await gitCommitAll(app, 'ENFORCE GUIDELINES')
+    fs.writeFileSync(path.join(app, 'a.ts'), 'built\n')
+    const dropped = await gitDropLastCommit(app)
+    expect(dropped).toBe(true)
+    expect(g('log', '-1', '--format=%s')).toBe('base')
+    expect(fs.readFileSync(path.join(app, 'a.ts'), 'utf8')).toBe('export const a = 1\n')
+})
+
 // git refuses a commit with a pathspec while a merge is in progress.
 test("a task's commit concludes a merge in progress", async () => {
     const {app, g} = repo()
@@ -280,4 +299,41 @@ test('a frozen-path revert of an edit and a new file undoes both', async () => {
     ])
     expect(fs.readFileSync(path.join(app, 'a.ts'), 'utf8')).toBe('export const a = 1\n')
     expect(fs.existsSync(path.join(app, 'new.ts'))).toBe(false)
+})
+
+test('a frozen-path revert undoes an edit beside a frozen path that does not exist', async () => {
+    const {app} = repo()
+    fs.writeFileSync(path.join(app, 'a.ts'), 'export const a = 2\n')
+    expect(await revertFrozenPaths(['a.ts', 'never.md'], makeGit(app))).toEqual(['a.ts'])
+    expect(fs.readFileSync(path.join(app, 'a.ts'), 'utf8')).toBe('export const a = 1\n')
+})
+
+test('a frozen-path revert undoes an edit beside a wholly new frozen directory', async () => {
+    const {app} = repo()
+    fs.writeFileSync(path.join(app, 'a.ts'), 'export const a = 2\n')
+    fs.mkdirSync(path.join(app, 'fresh'))
+    fs.writeFileSync(path.join(app, 'fresh', 'f.ts'), 'x\n')
+    expect((await revertFrozenPaths(['a.ts', 'fresh'], makeGit(app))).sort()).toEqual([
+        'a.ts',
+        'fresh/'
+    ])
+    expect(fs.readFileSync(path.join(app, 'a.ts'), 'utf8')).toBe('export const a = 1\n')
+    expect(fs.existsSync(path.join(app, 'fresh'))).toBe(false)
+})
+
+test('a frozen-path revert undoes an edit beside an intent-to-add file', async () => {
+    const {app, g} = repo()
+    fs.writeFileSync(path.join(app, 'a.ts'), 'export const a = 2\n')
+    fs.writeFileSync(path.join(app, 'x.ts'), 'x\n')
+    g('add', '-N', 'app/x.ts')
+    expect(await revertFrozenPaths(['a.ts', 'x.ts'], makeGit(app))).toContain('a.ts')
+    expect(fs.readFileSync(path.join(app, 'a.ts'), 'utf8')).toBe('export const a = 1\n')
+})
+
+test('a frozen-path revert brings back a file removed from the index only', async () => {
+    const {app, g} = repo()
+    g('rm', '-q', '--cached', 'app/a.ts')
+    expect(await revertFrozenPaths(['a.ts'], makeGit(app))).toEqual(['a.ts'])
+    expect(fs.readFileSync(path.join(app, 'a.ts'), 'utf8')).toBe('export const a = 1\n')
+    expect(g('status', '--porcelain')).toBe('')
 })

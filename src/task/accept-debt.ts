@@ -73,6 +73,8 @@ const FIELD_SEP = '\t'
  *     reverted, but the FAIL indicted the ORIGINAL work, so the terminal defect
  *     was FOUND and then erased by the very mechanism that found it. Persisted here so
  *     the final gate re-checks and surfaces it instead of letting it die with the revert.
+ *   - 'enforce-unreverted' — the same enforce re-verify FAIL, but the revert did not
+ *     happen, so the edits that may have caused it are still in the tree.
  *   - 'enforce-kept'   — the same enforce re-verify FAIL, but the failing check named
  *     only files the ENFORCE COMMIT does not touch, so reverting that commit could not
  *     possibly repair it — reverting a change in one file over a failure in a file
@@ -132,6 +134,7 @@ const FIELD_SEP = '\t'
 export type DebtOrigin =
     | 'accepted'
     | 'enforce-revert'
+    | 'enforce-unreverted'
     | 'enforce-kept'
     | 'frozen-blocked'
     | 'spec-contradiction'
@@ -156,6 +159,8 @@ const DEBT_LABELS: Record<DebtOrigin, string> = {
     accepted: 'accepted despite verify-FAIL',
     'enforce-revert':
         'enforce re-verify FAILED then the edits were reverted (defect indicts the ORIGINAL work, still shipped)',
+    'enforce-unreverted':
+        'enforce re-verify FAILED and the revert did not happen — the guideline edits that may have caused it are still in the tree',
     'enforce-kept':
         'enforce re-verify FAILED on a check the enforce diff cannot reach — the guideline edits were KEPT (reverting them could not fix it) and the defect indicts the ORIGINAL work, still shipped',
     'frozen-blocked':

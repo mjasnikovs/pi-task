@@ -1105,7 +1105,7 @@ export function buildGateDeps(params: {
         // file's `## gates` section so gate behavior is auditable from artifacts.
         record: (cwd2, taskId, line) => appendGateRecord(cwd2, taskId, line),
         // Durable defect ledger under `.pi-tasks/` (survives discardEdits): every
-        // recorded class — accepted, yolo-accepted, enforce-revert, enforce-kept,
+        // recorded class — accepted, yolo-accepted, enforce-revert, enforce-unreverted, enforce-kept,
         // frozen-blocked, cross-task-deletion, root-cause — lands here with its
         // origin, and the final integration gate re-checks each one at run end.
         recordDebt,

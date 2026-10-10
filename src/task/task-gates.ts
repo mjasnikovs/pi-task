@@ -229,7 +229,8 @@ export interface GateDeps {
      * the ones still open, so a defect the gate found is never lost by whatever the
      * loop then did with the WORK — accepted by a human ('accepted'), dismissed at
      * the picker ('dismissed'), accepted unattended by yolo mode ('yolo-accepted'),
-     * reverted with the enforce commit ('enforce-revert'), kept because the enforce
+     * reverted with the enforce commit ('enforce-revert'), left in the tree by a failed
+     * revert ('enforce-unreverted'), kept because the enforce
      * diff could not have caused it ('enforce-kept'), unreachable under the task's
      * own spec ('spec-contradiction'), a sibling's deliverable deleted and accepted
      * ('cross-task-deletion'), or another task's pre-existing bug this one merely
@@ -382,17 +383,17 @@ export async function askVerifyResolution(
     return classifyResolutionAnswer(answer)
 }
 
-/**
- * The reason the bounded lint fix is handed, or null when the FAIL has no static
- * half. A suite regressed beside a lint still leaves the lint for it to fix; told
- * about the suite too, it would chase a red its static check cannot observe.
- */
 /** How a regressed enforce commit's revert went: `undefined` when there was none to call. */
 function revertNote(reverted: boolean | undefined): string {
     if (reverted === undefined) return 'left in place (no revert available)'
     return reverted ? 'REVERTED' : 'REVERT FAILED, left in place'
 }
 
+/**
+ * The reason the bounded lint fix is handed, or null when the FAIL has no static
+ * half. A suite regressed beside a lint still leaves the lint for it to fix; told
+ * about the suite too, it would chase a red its static check cannot observe.
+ */
 function staticFixReason(verified: VerifyOutcome, failClass: VerifyFailClass): string | null {
     if (failClass !== 'repo-health' && failClass !== 'test-suite') return null
     // A check the task added has nothing to fix yet: lint-fix greened mx5-n's empty
@@ -1072,7 +1073,7 @@ export async function runEnforcePass(
                                 }]`
                             :   '')
                     )
-                    // Persist the FAIL as a durable defect. The revert restores the
+                    // Persist the FAIL as a durable defect. A revert restores the
                     // tree the ORIGINAL verify already blessed, so this re-verify
                     // caught something that verify's earlier PASS missed — erasing it
                     // along with the enforce edits would bury a real fault. The final
@@ -1082,7 +1083,7 @@ export async function runEnforcePass(
                         p.cwd,
                         p.taskId,
                         after.reason ?? 'enforce re-verify failed',
-                        'enforce-revert'
+                        reverted === true ? 'enforce-revert' : 'enforce-unreverted'
                     )
                     notifyRun(
                         active,

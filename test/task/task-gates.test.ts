@@ -655,6 +655,34 @@ test('record: a failed revert of a regressed enforce commit is trailed as failed
     })
 })
 
+// The regressed enforce edits are still in the tree, so the defect does not indict the original work.
+test('record: a failed revert is not recorded as a reverted enforce pass', async () => {
+    await withTmpTaskDir(async dir => {
+        const {ctx} = makeFakeCtx(dir)
+        const origins: string[] = []
+        let verifyCalls = 0
+        const deps = makeDeps({
+            record: () => Promise.resolve(),
+            verify: () => {
+                verifyCalls += 1
+                return Promise.resolve(
+                    verifyCalls === 1 ?
+                        {ok: true}
+                    :   {ok: false, failClass: 'model-verdict', reason: 'onClick handler gone'}
+                )
+            },
+            enforce: () => Promise.resolve({ok: true}),
+            revert: () => Promise.resolve(false),
+            recordDebt: (_cwd, _id, _reason, origin) => {
+                origins.push(origin)
+                return Promise.resolve()
+            }
+        })
+        await runGatesForTask(ctx, deps, baseParams({cwd: dir}))
+        expect(origins).toEqual(['enforce-unreverted'])
+    })
+})
+
 // The re-verify FAIL diagnosis must ALSO be persisted as a durable defect. The
 // per-task trail line is not enough: the final gate reads `openDebts`, never the
 // trail.
